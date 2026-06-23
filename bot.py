@@ -30,37 +30,5 @@ pairs = [
 
 timeframes = ["1m", "2m", "3m", "4m", "5m"]
 
-def send_signal():
-pair = random.choice(pairs)
-direction = random.choice([“BUY”, “SELL”])
-timeframe = random.choice(timeframes)
-
-message = f"""
-
-📊 SIGNAL ALERT
-
-Pair: {pair}
-
-Direction: {direction}
-
-Timeframe: {timeframe}
-
-⏰ Entry Time: {time.strftime(’%H:%M’)}
-
-⚠️ Test Signal
-“””
-
-url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-requests.post(
-    url,
-    data={
-        "chat_id": CHAT_ID,
-        "text": message
-    }
-)
-
-while True:
-send_signal()
-print(“Signal sent”)
-time.sleep(60)
+def Update signal format
 
