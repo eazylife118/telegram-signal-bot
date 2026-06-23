@@ -1,18 +1,18 @@
-import os
 import requests
-import time
+import os
 
-BOT_TOKEN = os.getenv("8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc")
-CHAT_ID = "6280535707"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 def send_message(text):
-url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-requests.post(url, data={
-"chat_id": CHAT_ID,
-"text": text
-})
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-send_message("✅ Signal Bot Started Successfully!")
+    requests.post(
+        url,
+        data={
+            "chat_id": CHAT_ID,
+            "text": text
+        }
+    )
 
-while True:
-time.sleep(60)
+send_message("✅ Bot is working!")
