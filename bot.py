@@ -1,24 +1,36 @@
 import requests
-import os
 import time
+import random
 
-BOT_TOKEN = os.getenv("8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc")
-CHAT_ID = "6280535707"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
 
-def send_message(text):
+pairs = ["GBPUSD", "EURUSD", "USDJPY", "USDCAD"]
+
+def send_signal():
+    pair = random.choice(pairs)
+    direction = random.choice(["BUY", "SELL"])
+
+    message = f"""
+📊 SIGNAL ALERT
+
+Pair: {pair}
+
+Direction: {direction}
+
+Timeframe: 1m
+
+⚠️ Test Signal
+"""
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    r = requests.post(
-        url,
-        data={
-            "chat_id": CHAT_ID,
-            "text": text
-        }
-    )
-
-    print(r.text)
-
-send_message("✅ Bot is working!")
+    requests.post(url, data={
+        "chat_id": CHAT_ID,
+        "text": message
+    })
 
 while True:
-    time.sleep(60)
+    send_signal()
+    print("Signal sent")
+    time.sleep(60)  # 1 minute
