@@ -44,9 +44,11 @@ Direction: {direction}
 
 Timeframe: {timeframe}
 
-⏰ Entry Time: 1 minute from now
+⏰ Signal Time: {time.strftime('%H:%M')}
 
-⚠️ Test Signal
+🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 60))}
+
+⚠️ Prepare to enter in 1 minute
 """
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
