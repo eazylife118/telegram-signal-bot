@@ -1,6 +1,6 @@
 import requests
 import time
-BOT_TOKEN = "8612354100:AAEuBmuJGHvf9Lw05cC7VafVs0OMXtDIAGs"
+BOT_TOKEN = "8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc"
 CHAT_ID = "6280535707"
 
 while True:
