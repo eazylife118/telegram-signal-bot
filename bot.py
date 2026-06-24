@@ -101,4 +101,4 @@ while True:
     pair = random.choice(pairs)
     send_signal(pairs)
     print("Signal sent")
-    time.sleep(60)
+    time.sleep(120)
