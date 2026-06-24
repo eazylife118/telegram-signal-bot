@@ -1,6 +1,7 @@
 import requests
 import random
 import time
+import pandas as pd
 
 TWELVE_API_KEY = "90ab0986c80046bbb59e117779ffdd18"
 
