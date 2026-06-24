@@ -1,7 +1,21 @@
+from flask import Flask
+from threading import Thread
+import os
 import requests
 import random
 import time
 import pandas as pd
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot Running"
+
+def run_web():
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000))
+    )
 
 TWELVE_API_KEY = "90ab0986c80046bbb59e117779ffdd18"
 
