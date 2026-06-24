@@ -42,10 +42,13 @@ def get_market_signal():
     bearish = 0
 
     for _, candle in candles.iterrows():
-        if candle["Close"] > candle["Open"]:
-            bullish += 1
-        else:
-            bearish += 1
+    close_price = float(candle["Close"])
+    open_price = float(candle["Open"])
+
+    if close_price > open_price:
+        bullish += 1
+    else:
+        bearish += 1
 
     if bullish > bearish:
         direction = "BUY"
