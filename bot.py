@@ -32,26 +32,28 @@ timeframes = ["1m", "2m", "3m", "4m", "5m"]
 
 def send_signal():
 pair = random.choice(pairs)
-direction = random.choice([“BUY”, “SELL”])
-expiry = random.choice([“1”, “2”, “3”, “5”])
+direction = random.choice(["BUY", "SELL"])
+expiry = random.choice(["1", "2", "3", "5"])
 strength = random.randint(75, 95)
 
 current_time = time.time()
 entry_time = time.strftime("%H:%M", time.localtime(current_time))
 trade_time = time.strftime("%H:%M", time.localtime(current_time + 60))
-message = f"""
 
+message = f"""
 🚨 SIGNAL ALERT
 
 Pair: {pair}
 Direction: {direction}
 
-Entry Time: {entry_time}
-Trade Time: {trade_time}
-Expiry: {expiry} Min
+Entry Time: {time.strftime('%H:%M')}
 
-Strength: {strength}% 🔥
-“””
+Trade Time: {time.strftime('%H:%M', time.localtime(time.time() + 60))}
+
+Expiry: {random.choice(['1', '2', '3', '5'])} Min
+
+Strength: {random.randint(75, 95)}% 🔥
+"""
 
 url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 requests.post(
@@ -63,6 +65,18 @@ requests.post(
 )
 
 while True:
+
+
+
+
 send_signal()
-print(“Signal sent”)
+
+
+
+
+print("Signal sent")
+
+
+
+
 time.sleep(60)
