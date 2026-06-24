@@ -31,8 +31,8 @@ pairs = [
 
 timeframes = ["1m", "2m", "3m", "4m", "5m"]
 def get_market_signal():
-try:
-data = yf.download("EURUSD=X", period="1d", interval="1m")
+    try:
+    data = yf.download("EURUSD=X", period="1d", interval="1m")
 
     closes = data["Close"].tail(20)
     bullish = 0
