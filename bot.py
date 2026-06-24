@@ -1,7 +1,7 @@
 import requests
 import random
 import time
-import yfinance as yf
+TWELVE_API_KEY = "90ab0986c80046bbb59e117779ffdd18"
 
 BOT_TOKEN = "8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc"
 CHAT_ID = "6280535707"
