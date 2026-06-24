@@ -41,7 +41,7 @@ def get_market_signal():
     bullish = 0
     bearish = 0
 
-    for _, candle in candles.iterrows():
+for _, candle in candles.iterrows():
     close_price = float(candle["Close"])
     open_price = float(candle["Open"])
 
