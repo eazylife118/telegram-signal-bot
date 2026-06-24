@@ -45,7 +45,7 @@ Direction: {direction}
 
 ⏰ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
 
-🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 36120))}
+🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3660))}
 
 Expiry: {expiry} Min
 
