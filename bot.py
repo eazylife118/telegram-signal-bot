@@ -30,7 +30,7 @@ pairs = [
 ]
 
 timeframes = ["1m", "2m", "3m", "4m", "5m"]
-def get_market_signal():
+def get_market_signal(pair):
     try:
         symbol = pair
 
