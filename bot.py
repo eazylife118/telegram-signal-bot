@@ -60,6 +60,6 @@ Strength: {strength}% 🔥
 
 
 while True:
-send_signal()
-print(“Signal sent”)
-time.sleep(60)
+    send_signal()
+    print("Signal sent")
+    time.sleep(60)
