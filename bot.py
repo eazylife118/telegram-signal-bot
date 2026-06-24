@@ -32,9 +32,9 @@ timeframes = ["1m", "2m", "3m", "4m", "5m"]
 
 def send_signal():
 pair = random.choice(pairs)
-direction = random.choice([“BUY”,“SELL”])
-expiry = random.choice([“1”,“2”,“3”,“5”])
-strength = random.randint(75,95)
+direction = random.choice(["BUY", "SELL"])
+expiry = random.choice(["1", "2", "3", "5"])
+strength = random.randint(75, 95)
 
 current_time = time.time()
 message = f"""
