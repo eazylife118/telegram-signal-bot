@@ -31,7 +31,38 @@ pairs = [
 
 timeframes = ["1m", "2m", "3m", "4m", "5m"]
 def get_market_signal():
-    return "BUY", 80
+    try:
+        symbol = "EUR/USD"
+
+        url = (
+            f"https://api.twelvedata.com/time_series"
+            f"?symbol={symbol}"
+            f"&interval=1min"
+            f"&outputsize=20"
+            f"&apikey={TWELVE_API_KEY}"
+        )
+
+        response = requests.get(url).json()
+
+        closes = [float(candle["close"]) for candle in response["values"]]
+
+        bullish = 0
+        bearish = 0
+
+        for i in range(1, len(closes)):
+            if closes[i] > closes[i - 1]:
+                bullish += 1
+            else:
+                bearish += 1
+
+        if bullish > bearish:
+            return "BUY", int((bullish / 19) * 100)
+        else:
+            return "SELL", int((bearish / 19) * 100)
+
+    except Exception as e:
+        print(e)
+        return "BUY", 75
 
 def send_signal():
     pair = random.choice(pairs)
