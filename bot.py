@@ -43,9 +43,9 @@ def send_signal():
 Pair: {pair}
 Direction: {direction}
 
-⏰ Signal Time: {time.strftime('%H:%M')}
+⏰ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
 
-🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 60))}
+🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3660))}
 
 Expiry: {expiry} Min
 
