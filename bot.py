@@ -111,6 +111,7 @@ Strength: {strength}% 🔥
         }
     )
 
+Thread(target=run_web).start()
 
 while True:
     pair = random.choice(pairs)
