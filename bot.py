@@ -69,7 +69,7 @@ Direction: {direction}
 
 ⏰ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
 
-🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3660))}
+🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
 
 Expiry: {expiry} Min
 
@@ -90,4 +90,4 @@ Strength: {strength}% 🔥
 while True:
     send_signal()
     print("Signal sent")
-    time.sleep(60)
+    time.sleep(120)
