@@ -98,6 +98,7 @@ Strength: {strength}% 🔥
 
 
 while True:
-    send_signal()
+    pair = random.choice(pairs)
+    send_signal(pairs)
     print("Signal sent")
     time.sleep(60)
