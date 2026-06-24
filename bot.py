@@ -100,4 +100,4 @@ Strength: {strength}% 🔥
 while True:
     send_signal()
     print("Signal sent")
-    time.sleep(120)
+    time.sleep(60)
