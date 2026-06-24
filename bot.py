@@ -31,33 +31,24 @@ pairs = [
 
 timeframes = ["1m", "2m", "3m", "4m", "5m"]
 def get_market_signal():
-    data = yf.download("EURUSD=X", period="1d", interval="1m")
+try:
+data = yf.download(“EURUSD=X”, period=“1d”, interval=“1m”)
 
-    if len(data) < 20:
-        return "BUY", 75
-
-    candles = data.tail(20)
-
+    closes = data["Close"].tail(20)
     bullish = 0
     bearish = 0
-
-    for _, candle in candles.iterrows():  
-       close_price = float(candle["Close"])
-       open_price = float(candle["Open"])
-
-       if close_price > open_price:
-           bullish += 1
-       else:
-           bearish += 1
-
+    for i in range(1, len(closes)):
+        if closes.iloc[i] > closes.iloc[i - 1]:
+            bullish += 1
+        else:
+            bearish += 1
     if bullish > bearish:
-        direction = "BUY"
-        strength = int((bullish / 20) * 100)
+        return "BUY", int((bullish / 19) * 100)
     else:
-        direction = "SELL"
-        strength = int((bearish / 20) * 100)
-
-    return direction, strength
+        return "SELL", int((bearish / 19) * 100)
+except Exception as e:
+    print(e)
+    return "BUY", 75
 
 def send_signal():
     pair = random.choice(pairs)
