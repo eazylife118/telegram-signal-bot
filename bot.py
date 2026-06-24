@@ -115,6 +115,6 @@ Thread(target=run_web).start()
 
 while True:
     pair = random.choice(pairs)
-    send_signal(pairs)
+    send_signal(pair)
     print("Signal sent")
     time.sleep(120)
