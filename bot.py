@@ -45,9 +45,9 @@ def get_market_signal():
        close_price = float(candle["Close"])
        open_price = float(candle["Open"])
 
-    if close_price > open_price:
+       if close_price > open_price:
         bullish += 1
-    else:
+       else:
         bearish += 1
 
     if bullish > bearish:
