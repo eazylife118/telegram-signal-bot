@@ -1,6 +1,7 @@
 import requests
-import time
 import random
+import time
+import yfinance as yf
 
 BOT_TOKEN = "8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc"
 CHAT_ID = "6280535707"
