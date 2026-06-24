@@ -60,22 +60,9 @@ requests.post(
         "chat_id": CHAT_ID,
         "text": message
     }
-
-    
+)
 
 while True:
-
-
-
-
 send_signal()
-
-
-
-
-print("Signal sent")
-
-
-
-
+print(“Signal sent”)
 time.sleep(60)
