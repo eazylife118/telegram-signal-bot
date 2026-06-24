@@ -32,7 +32,7 @@ pairs = [
 timeframes = ["1m", "2m", "3m", "4m", "5m"]
 def get_market_signal():
     try:
-        symbol = "EUR/USD"
+        symbol = pair
 
         url = (
             f"https://api.twelvedata.com/time_series"
@@ -64,9 +64,9 @@ def get_market_signal():
         print(e)
         return "BUY", 75
 
-def send_signal():
+def send_signal(pair):
     pair = random.choice(pairs)
-    direction, strength = get_market_signal()
+    direction, strength = get_market_signal(pair)
     expiry = random.choice(["1", "2", "3", "5"])
     
     current_time = time.time()
