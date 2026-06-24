@@ -31,37 +31,38 @@ pairs = [
 timeframes = ["1m", "2m", "3m", "4m", "5m"]
 
 def send_signal():
-    pair = random.choice(pairs)
-    direction = random.choice(["BUY", "SELL"])
-    timeframe = random.choice(timeframes)
+pair = random.choice(pairs)
+direction = random.choice([“BUY”, “SELL”])
+expiry = random.choice([“1”, “2”, “3”, “5”])
+strength = random.randint(75, 95)
 
-    message = f"""
-📊 SIGNAL ALERT
+current_time = time.time()
+entry_time = time.strftime("%H:%M", time.localtime(current_time))
+trade_time = time.strftime("%H:%M", time.localtime(current_time + 60))
+message = f"""
+
+🚨 SIGNAL ALERT
 
 Pair: {pair}
-
 Direction: {direction}
 
-Timeframe: {timeframe}
+Entry Time: {entry_time}
+Trade Time: {trade_time}
+Expiry: {expiry} Min
 
-⏰ Signal Time: {time.strftime('%H:%M')}
+Strength: {strength}% 🔥
+“””
 
-🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 60))}
-
-⚠️ Prepare to enter in 1 minute
-"""
-
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
-    requests.post(
-        url,
-        data={
-            "chat_id": CHAT_ID,
-            "text": message
-        }
-    )
+url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+requests.post(
+    url,
+    data={
+        "chat_id": CHAT_ID,
+        "text": message
+    }
+)
 
 while True:
-    send_signal()
-    print("Signal sent")
-    time.sleep(60)
+send_signal()
+print(“Signal sent”)
+time.sleep(60)
