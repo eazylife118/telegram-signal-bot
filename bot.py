@@ -46,9 +46,9 @@ def get_market_signal():
        open_price = float(candle["Open"])
 
        if close_price > open_price:
-        bullish += 1
+           bullish += 1
        else:
-        bearish += 1
+           bearish += 1
 
     if bullish > bearish:
         direction = "BUY"
