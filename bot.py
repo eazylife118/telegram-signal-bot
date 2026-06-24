@@ -7,26 +7,25 @@ BOT_TOKEN = "8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc"
 CHAT_ID = "6280535707"
 
 pairs = [
-    "EURUSD",
-    "GBPUSD",
-    "USDJPY",
-    "USDCHF",
-    "USDCAD",
-    "AUDUSD",
-    "NZDUSD",
-    "EURGBP",
-    "EURJPY",
-    "GBPJPY",
-    "AUDJPY",
-    "CHFJPY",
-    "EURCHF",
-    "GBPCAD",
-    "GBPCHF",
-    "EURAUD",
-    "AUDCAD",
-    "AUDCHF",
-    "CADJPY",
-    "NZDJPY"
+    "EUR/USD",
+    "GBP/USD",
+    "USD/JPY",
+    "AUD/USD",
+    "USD/CAD",
+    "USD/CHF",
+    "EUR/JPY",
+    "GBP/JPY",
+    "AUD/JPY",
+    "CAD/JPY",
+    "EUR/GBP",
+    "EUR/AUD",
+    "EUR/CAD",
+    "EUR/CHF",
+    "GBP/AUD",
+    "GBP/CAD",
+    "GBP/CHF",
+    "AUD/CHF",
+    "CAD/CHF"
 ]
 
 timeframes = ["1m", "2m", "3m", "4m", "5m"]
