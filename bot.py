@@ -84,20 +84,20 @@ def get_market_signal(pair):
                 bearish += 1
 
         strength = max(
-    int((bullish / 19) * 100),
-    int((bearish / 19) * 100)
-)
+            int((bullish / 19) * 100),
+            int((bearish / 19) * 100)
+        )
 
-if abs(bullish - bearish) < 3:
-    return "WAIT", 0
+        if abs(bullish - bearish) < 3:
+           return "WAIT", 0
 
-if strength < 65:
-    return "WAIT", strength
+        if strength < 65:
+           return "WAIT", strength
 
-if bullish > bearish:
-    return "BUY", strength
-else:
-    return "SELL", strength
+        if bullish > bearish:
+           return "BUY", strength
+        else:
+           return "SELL", strength
 
     except Exception as e:
         print(e)
