@@ -112,8 +112,6 @@ Strength: {strength}% 🔥
     timeout=30
 )
 
-print(response.text)
-
 Thread(target=run_web).start()
 
 while True:
