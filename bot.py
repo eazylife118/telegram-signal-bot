@@ -122,14 +122,14 @@ def send_signal(pair, direction, strength):
     current_time = time.time()
 
     message = f"""
-⚠️ SIGNAL ALERT
+SIGNAL 
 
 Pair: {pair}
 Direction: {direction}
 
-♻️ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
+Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
 
-🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
+Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
 
 Expiry: {expiry} Min
 
