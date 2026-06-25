@@ -83,10 +83,21 @@ def get_market_signal(pair):
             else:
                 bearish += 1
 
-        if bullish > bearish:
-            return "BUY", int((bullish / 19) * 100)
-        else:
-            return "SELL", int((bearish / 19) * 100)
+        strength = max(
+    int((bullish / 19) * 100),
+    int((bearish / 19) * 100)
+)
+
+if abs(bullish - bearish) < 3:
+    return "WAIT", 0
+
+if strength < 65:
+    return "WAIT", strength
+
+if bullish > bearish:
+    return "BUY", strength
+else:
+    return "SELL", strength
 
     except Exception as e:
         print(e)
@@ -132,11 +143,23 @@ Thread(target=run_web).start()
 while True:
     try:
         pair = random.choice(pairs)
+
         print("Starting signal...")
-        send_signal(pair)
-        print("Signal sent successfully")
+
+        direction, strength = get_market_signal(pair)
+
+        if direction == "WAIT":
+            print(f"Weak signal skipped ({strength}%)")
+        else:
+            send_signal(pair)
+            print("Signal sent successfully")
+
         time.sleep(120)
 
     except Exception as e:
         print(f"ERROR: {e}")
         time.sleep(30)
+
+    
+        
+
