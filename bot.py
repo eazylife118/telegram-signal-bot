@@ -68,7 +68,7 @@ def get_market_signal(pair):
             timeout=(1, 1)
             )
 
-print("After requests.get")
+            print("After requests.get")
             print("After requests.get")
 
             print("Request completed")
