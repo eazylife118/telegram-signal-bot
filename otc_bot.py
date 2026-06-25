@@ -30,6 +30,9 @@ def send_signal():
 Pair: {pair}
 
 Direction: {direction}
+⏰ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
+
+🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
 
 Strength: {strength}% 🔥
 
@@ -49,4 +52,4 @@ Expiry: 1 Min
 while True:
     send_signal()
     print("OTC signal sent")
-    time.sleep(300)
+    time.sleep(60)
