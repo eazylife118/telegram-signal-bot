@@ -81,7 +81,9 @@ def get_market_signal(pair):
 
 def send_signal(pair):
     pair = random.choice(pairs)
+    print("Getting market signal...")
     direction, strength = get_market_signal(pair)
+    print("Market signal received")
     expiry = random.choice(["1", "2", "3", "5"])
     
     current_time = time.time()
