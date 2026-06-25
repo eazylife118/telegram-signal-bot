@@ -65,8 +65,10 @@ def get_market_signal(pair):
 
             response = requests.get(
             url,
-            timeout=1
+            timeout=(1, 1)
             )
+
+print("After requests.get")
             print("After requests.get")
 
             print("Request completed")
