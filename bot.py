@@ -117,6 +117,7 @@ Thread(target=run_web).start()
 while True:
     try:
         pair = random.choice(pairs)
+        print("Starting signal...")
         send_signal(pair)
         print("Signal sent successfully")
         time.sleep(120)
