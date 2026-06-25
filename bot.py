@@ -122,7 +122,7 @@ def send_signal(pair, direction, strength):
     current_time = time.time()
 
     message = f"""
-SIGNAL 
+MARKET SIGNAL 
 
 Pair: {pair}
 Direction: {direction}
@@ -133,7 +133,7 @@ Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
 
 Expiry: {expiry} Min
 
-Strength: {strength}% 🔥
+Strength: {strength}% ✅
 """
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
