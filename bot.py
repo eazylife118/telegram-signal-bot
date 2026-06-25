@@ -107,11 +107,8 @@ def get_market_signal(pair):
         print(e)
         return "BUY", 75
 
-def send_signal(pair):
-    pair = random.choice(pairs)
-    print("Getting market signal...")
-    direction, strength = get_market_signal(pair)
-    print("Market signal received")
+def send_signal(pair, direction, strength):
+    
     expiry = random.choice(["1", "2", "3", "5"])
     
     current_time = time.time()
@@ -155,7 +152,7 @@ while True:
         if direction == "WAIT":
             print(f"Weak signal skipped ({strength}%)")
         else:
-            send_signal(pair)
+            send_signal(pair, direction, strength)
             print("Signal sent successfully")
 
         time.sleep(120)
