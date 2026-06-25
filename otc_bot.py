@@ -2,8 +2,8 @@ import random
 import time
 import requests
 
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-CHAT_ID = "YOUR_CHAT_ID"
+BOT_TOKEN = "8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc"
+CHAT_ID = "6280535707"
 
 pairs = [
     "EUR/USD OTC",
