@@ -63,7 +63,10 @@ def get_market_signal(pair):
         try:
             print("Sending request to TwelveData...")
 
-            response = requests.get(url, timeout=3)
+            response = requests.get(
+            url,
+            timeout=(3, 3)
+            )
             print("After requests.get")
 
             print("Request completed")
