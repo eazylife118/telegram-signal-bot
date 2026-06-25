@@ -57,6 +57,7 @@ def get_market_signal(pair):
             f"&apikey={TWELVE_API_KEY}"
         )
 
+        print("About to request TwelveData")
         response = requests.get(url, timeout=15)
         print("Data received from TwelveData")
         response = response.json()
