@@ -107,13 +107,13 @@ def get_market_signal(pair):
            return "WAIT", strength
 
         if bullish > bearish:
-           return "BUY", strength
+           return "🟩⬆️BUY", strength
         else:
-           return "SELL", strength
+           return "🟥⬇️SELL", strength
 
     except Exception as e:
         print(e)
-        return "BUY", 75
+        return "🟩⬆️BUY", 75
 
 def send_signal(pair, direction, strength):
     
@@ -122,12 +122,12 @@ def send_signal(pair, direction, strength):
     current_time = time.time()
 
     message = f"""
-🚨 SIGNAL ALERT
+⚠️ SIGNAL ALERT
 
 Pair: {pair}
 Direction: {direction}
 
-⏰ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
+♻️ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
 
 🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
 
