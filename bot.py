@@ -103,18 +103,26 @@ Strength: {strength}% 🔥
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-    requests.post(
-        url,
-        data={
-            "chat_id": CHAT_ID,
-            "text": message
-        }
-    )
+    response = requests.post(
+    url,
+    data={
+        "chat_id": CHAT_ID,
+        "text": message
+    },
+    timeout=30
+)
+
+print(response.text)
 
 Thread(target=run_web).start()
 
 while True:
-    pair = random.choice(pairs)
-    send_signal(pair)
-    print("Signal sent")
-    time.sleep(120)
+    try:
+        pair = random.choice(pairs)
+        send_signal(pair)
+        print("Signal sent successfully")
+        time.sleep(120)
+
+    except Exception as e:
+        print(f"ERROR: {e}")
+        time.sleep(30)
