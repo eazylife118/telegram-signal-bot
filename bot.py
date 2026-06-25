@@ -71,6 +71,8 @@ def get_market_signal(pair):
             print("Response Text:", response.text[:300])
 
             response = response.json()
+            print("JSON received")
+            print(response)
 
         except Exception as e:
             print("TWELVEDATA ERROR:", e)
