@@ -14,7 +14,7 @@ pairs = [
 ]
 
 def generate_signal():
-    direction = random.choice(["BUY", "SELL"])
+    direction = random.choice(["🟢BUY", "🔴SELL"])
     strength = random.randint(65, 90)
 
     return direction, strength
@@ -25,11 +25,12 @@ def send_signal():
     direction, strength = generate_signal()
 
     message = f"""
-🚨 OTC SIGNAL
+📊 OTC SIGNAL
+
 Pair: {pair}
 Direction: {direction}
 ⏰ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
-🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
+➡️ Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
 Strength: {strength}% 🔥
 Expiry: 1 Min
 """
