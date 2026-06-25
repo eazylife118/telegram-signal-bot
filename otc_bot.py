@@ -14,7 +14,7 @@ pairs = [
 ]
 
 def generate_signal():
-    direction = random.choice(["🟢BUY", "🔴SELL"])
+    direction = random.choice(["🟢⬆️BUY", "🔴⬇️SELL"])
     strength = random.randint(65, 90)
 
     return direction, strength
