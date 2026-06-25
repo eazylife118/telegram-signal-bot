@@ -57,7 +57,9 @@ def get_market_signal(pair):
             f"&apikey={TWELVE_API_KEY}"
         )
 
-        response = requests.get(url).json()
+        response = requests.get(url, timeout=15)
+        print("Data received from TwelveData")
+        response = response.json()
 
         closes = [float(candle["close"]) for candle in response["values"]]
 
