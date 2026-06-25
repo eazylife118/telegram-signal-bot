@@ -65,6 +65,6 @@ while True:
     print("OTC signal sent")
     time.sleep(60)
     
- except Exception as e:
+except Exception as e:
     print(f"ERROR: {e}")
     time.sleep(30)
