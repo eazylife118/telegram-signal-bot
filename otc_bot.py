@@ -1,6 +1,21 @@
+from flask import Flask
+from threading import Thread
+import os
 import random
 import time
 import requests
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot Running"
+
+def run_web():
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000))
+    )
+
 
 BOT_TOKEN = "8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc"
 CHAT_ID = "6280535707"
@@ -43,8 +58,13 @@ Expiry: 1 Min
             "text": message
         }
     )
+Thread(target=run_web).start()
 
 while True:
     send_signal()
     print("OTC signal sent")
     time.sleep(60)
+    
+ except Exception as e:
+    print(f"ERROR: {e}")
+    time.sleep(30)
