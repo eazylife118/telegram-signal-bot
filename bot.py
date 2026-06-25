@@ -95,7 +95,7 @@ def get_market_signal(pair):
         if abs(bullish - bearish) < 3:
            return "WAIT", 0
 
-        if strength < 60:
+        if strength < 65:
            return "WAIT", strength
 
         if bullish > bearish:
