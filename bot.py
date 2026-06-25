@@ -58,9 +58,17 @@ def get_market_signal(pair):
         )
 
         print("About to request TwelveData")
+        try:
         response = requests.get(url, timeout=15)
-        print("Data received from TwelveData")
+
+        print("Status Code:", response.status_code)
+        print("Response Text:", response.text[:300])
+
         response = response.json()
+
+        except Exception as e:
+        print("TWELVEDATA ERROR:", e)
+        return "BUY", 75
 
         closes = [float(candle["close"]) for candle in response["values"]]
 
