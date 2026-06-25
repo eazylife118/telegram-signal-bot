@@ -61,10 +61,11 @@ Expiry: 1 Min
 Thread(target=run_web).start()
 
 while True:
-    send_signal()
-    print("OTC signal sent")
-    time.sleep(60)
-    
-except Exception as e:
-    print(f"ERROR: {e}")
-    time.sleep(30)
+    try:
+        send_signal()
+        print("OTC signal sent")
+        time.sleep(60)
+
+    except Exception as e:
+        print(f"ERROR: {e}")
+        time.sleep(30)
