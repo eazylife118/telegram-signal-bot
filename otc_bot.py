@@ -27,7 +27,6 @@ def send_signal():
     message = f"""
 📊 OTC
 Pair: {pair}
-
 Direction: {direction}
 ⏰ Signal: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
 ⚡ Entry : {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
