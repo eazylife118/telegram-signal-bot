@@ -25,8 +25,7 @@ def send_signal():
     direction, strength = generate_signal()
 
     message = f"""
-📊 OTC SIGNAL
-
+📊 OTC
 Pair: {pair}
 
 Direction: {direction}
