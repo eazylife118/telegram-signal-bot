@@ -7,12 +7,16 @@ from threading import Thread
 
 app = Flask(__name__)
 
-# ===== CONFIGURATION =====
+# ==========================================
+# CONFIGURATION – ADD YOUR KEYS HERE
+# ==========================================
 TWELVE_API_KEY = "90ab0986c80046bbb59e117779ffdd18"
 BOT_TOKEN = "8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc"
 CHAT_ID = "6280535707"
 
-# ===== POCKET OPTIONS OTC PAIRS =====
+# ==========================================
+# ALL OTC PAIRS TRACKED BY TWELVE DATA
+# ==========================================
 pairs = [
     "EURUSD-OTC",
     "GBPUSD-OTC",
@@ -32,44 +36,60 @@ pairs = [
     "GBPCAD-OTC",
     "GBPCHF-OTC",
     "AUDCHF-OTC",
-    "CADCHF-OTC"
+    "CADCHF-OTC",
+    "NZDUSD-OTC",
+    "EURTRY-OTC",
+    "USDMXN-OTC",
+    "USDCLP-OTC",
+    "USDPKR-OTC",
+    "USDIDR-OTC"
 ]
 
-# ===== ROUND NUMBER LEVELS =====
+# ==========================================
+# ROUND NUMBER LEVELS (UPDATED FROM SCREENSHOTS)
+# ==========================================
 ROUND_LEVELS = {
-    "EURUSD-OTC": 1.10000,
-    "GBPUSD-OTC": 1.30000,
-    "USDJPY-OTC": 150.000,
-    "AUDUSD-OTC": 0.67000,
-    "USDCAD-OTC": 1.36000,
-    "USDCHF-OTC": 0.89000,
-    "EURJPY-OTC": 165.000,
-    "GBPJPY-OTC": 195.000,
-    "AUDJPY-OTC": 100.000,
-    "CADJPY-OTC": 110.000,
-    "EURGBP-OTC": 0.85000,
+    "EURUSD-OTC": 1.15600,
+    "GBPUSD-OTC": 1.24800,
+    "USDJPY-OTC": 162.800,
+    "AUDUSD-OTC": 0.72100,
+    "USDCAD-OTC": 1.39500,
+    "USDCHF-OTC": 0.79400,
+    "EURJPY-OTC": 183.800,
+    "GBPJPY-OTC": 215.600,
+    "AUDJPY-OTC": 108.400,
+    "CADJPY-OTC": 120.800,
+    "EURGBP-OTC": 0.85800,
     "EURAUD-OTC": 1.64000,
     "EURCAD-OTC": 1.50000,
-    "EURCHF-OTC": 0.98000,
-    "GBPAUD-OTC": 1.94000,
+    "EURCHF-OTC": 1.02000,
+    "GBPAUD-OTC": 1.92000,
     "GBPCAD-OTC": 1.72000,
     "GBPCHF-OTC": 1.16000,
     "AUDCHF-OTC": 0.60000,
-    "CADCHF-OTC": 0.65000
+    "CADCHF-OTC": 0.58600,
+    "NZDUSD-OTC": 0.59000,
+    "EURTRY-OTC": 53.01600,
+    "USDMXN-OTC": 17.7000,
+    "USDCLP-OTC": 866.8000,
+    "USDPKR-OTC": 277.400,
+    "USDIDR-OTC": 16670.0
 }
 
 previous_prices = {}
 rejection_count = {}
 last_signal_time = {}
 
-# ===== FETCH ALL PAIRS IN ONE API CALL (BATCH) =====
+# ==========================================
+# FETCH ALL PAIRS IN ONE BATCH REQUEST
+# ==========================================
 def get_all_prices():
     try:
         symbols = ",".join([p.replace("-OTC", "") for p in pairs])
         url = f"https://api.twelvedata.com/price?symbol={symbols}&apikey={TWELVE_API_KEY}"
         response = requests.get(url, timeout=10)
         data = response.json()
-        
+
         prices = {}
         if "price" in data:
             return {pairs[0]: float(data["price"])}
@@ -87,7 +107,9 @@ def get_all_prices():
         print(f"⚠️ Batch price error: {e}")
         return {}
 
-# ===== GET REAL MARKET STRENGTH =====
+# ==========================================
+# GET REAL MARKET STRENGTH
+# ==========================================
 def get_market_strength(pair):
     try:
         symbol = pair.replace("-OTC", "")
@@ -118,7 +140,9 @@ def get_market_strength(pair):
         print(f"⚠️ Strength error for {pair}: {e}")
         return None, None
 
-# ===== ROUND NUMBER REJECTION LOGIC =====
+# ==========================================
+# ROUND NUMBER REJECTION LOGIC
+# ==========================================
 def check_rejection(pair, current_price):
     global previous_prices, rejection_count, last_signal_time
 
@@ -162,7 +186,9 @@ def check_rejection(pair, current_price):
     previous_prices[pair] = current_price
     return None
 
-# ===== SEND SIGNAL WITH GREEN/RED COLOR =====
+# ==========================================
+# SEND SIGNAL WITH GREEN/RED COLOR
+# ==========================================
 def send_signal(pair, direction=None, rejection_target=None):
     real_direction, strength = get_market_strength(pair)
     if real_direction is None or strength is None:
@@ -177,7 +203,7 @@ def send_signal(pair, direction=None, rejection_target=None):
     signal_time = time.strftime('%H:%M', time.localtime(now))
     entry_time = time.strftime('%H:%M', time.localtime(now + 120))
 
-    # === COLOR CODING ===
+    # Color coding
     if direction == "BUY":
         dir_display = "🟢 BUY"
     else:
@@ -185,7 +211,7 @@ def send_signal(pair, direction=None, rejection_target=None):
 
     if rejection_target is not None:
         message = f"""
-📊 REJECTION SIGNAL
+🚨 REJECTION SIGNAL
 
 OTC Pair: {pair}
 Direction: {dir_display}
@@ -217,11 +243,13 @@ Strength: {strength}% 🔥
     except Exception as e:
         print(f"❌ Send error: {e}")
 
-# ===== MAIN BOT LOOP =====
+# ==========================================
+# MAIN BOT LOOP (3-SECOND CHECKS)
+# ==========================================
 def run_bot():
     CHECK_INTERVAL = 3
     print(f"🤖 Bot started. Checking every {CHECK_INTERVAL} seconds. Instant signal on 2nd rejection.")
-    
+
     while True:
         try:
             all_prices = get_all_prices()
@@ -236,7 +264,9 @@ def run_bot():
             print(f"❌ Main loop error: {e}")
             time.sleep(CHECK_INTERVAL)
 
-# ===== FLASK KEEP‑ALIVE =====
+# ==========================================
+# FLASK KEEP-ALIVE FOR RENDER
+# ==========================================
 @app.route('/')
 def home():
     return "✅ OTC Instant Rejection Bot is running!"
@@ -245,7 +275,9 @@ def home():
 def ping():
     return "pong", 200
 
-# ===== START =====
+# ==========================================
+# START BOT IN BACKGROUND
+# ==========================================
 Thread(target=run_bot, daemon=True).start()
 
 if __name__ == "__main__":
