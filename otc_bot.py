@@ -35,7 +35,7 @@ pairs = [
     "CADCHF-OTC"
 ]
 
-# ===== ROUND NUMBER LEVELS FOR EACH OTC PAIR =====
+# ===== ROUND NUMBER LEVELS =====
 ROUND_LEVELS = {
     "EURUSD-OTC": 1.10000,
     "GBPUSD-OTC": 1.30000,
@@ -60,6 +60,32 @@ ROUND_LEVELS = {
 
 previous_prices = {}
 rejection_count = {}
+last_signal_time = {}
+
+# ===== FETCH ALL PAIRS IN ONE API CALL (BATCH) =====
+def get_all_prices():
+    try:
+        symbols = ",".join([p.replace("-OTC", "") for p in pairs])
+        url = f"https://api.twelvedata.com/price?symbol={symbols}&apikey={TWELVE_API_KEY}"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        prices = {}
+        if "price" in data:
+            return {pairs[0]: float(data["price"])}
+        else:
+            for item in data:
+                symbol = item.get("symbol")
+                price = item.get("price")
+                if symbol and price:
+                    for pair in pairs:
+                        if pair.replace("-OTC", "") == symbol:
+                            prices[pair] = float(price)
+                            break
+            return prices
+    except Exception as e:
+        print(f"⚠️ Batch price error: {e}")
+        return {}
 
 # ===== GET REAL MARKET STRENGTH =====
 def get_market_strength(pair):
@@ -93,12 +119,17 @@ def get_market_strength(pair):
         return None, None
 
 # ===== ROUND NUMBER REJECTION LOGIC =====
-def get_rejection_signal(pair, current_price):
-    global previous_prices, rejection_count
+def check_rejection(pair, current_price):
+    global previous_prices, rejection_count, last_signal_time
 
     if pair not in previous_prices:
         previous_prices[pair] = current_price
         rejection_count[pair] = 0
+        last_signal_time[pair] = 0
+        return None
+
+    # 2-MINUTE COOLDOWN
+    if time.time() - last_signal_time.get(pair, 0) < 120:
         return None
 
     prev_price = previous_prices[pair]
@@ -115,6 +146,7 @@ def get_rejection_signal(pair, current_price):
         if rejection_count[pair] >= 2:
             rejection_count[pair] = 0
             previous_prices[pair] = current_price
+            last_signal_time[pair] = time.time()
             return "SELL", target
 
     elif prev_price > target >= current_price:
@@ -122,6 +154,7 @@ def get_rejection_signal(pair, current_price):
         if rejection_count[pair] >= 2:
             rejection_count[pair] = 0
             previous_prices[pair] = current_price
+            last_signal_time[pair] = time.time()
             return "BUY", target
     else:
         rejection_count[pair] = 0
@@ -129,72 +162,49 @@ def get_rejection_signal(pair, current_price):
     previous_prices[pair] = current_price
     return None
 
-# ===== FETCH CURRENT PRICE =====
-def get_current_price(pair):
-    try:
-        symbol = pair.replace("-OTC", "")
-        url = f"https://api.twelvedata.com/price?symbol={symbol}&apikey={TWELVE_API_KEY}"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if "price" in data:
-            return float(data["price"])
-        return None
-    except Exception as e:
-        print(f"⚠️ Price fetch error for {pair}: {e}")
-        return None
-
-# ===== SEND SIGNAL (WITH REAL STRENGTH) =====
+# ===== SEND SIGNAL WITH GREEN/RED COLOR =====
 def send_signal(pair, direction=None, rejection_target=None):
-    # Get real strength for this pair
     real_direction, strength = get_market_strength(pair)
-
-    # If market strength fetch failed, skip this signal
     if real_direction is None or strength is None:
-        print(f"⏭️ Skipping {pair} — strength data unavailable")
+        print(f"⏭️ Skipping {pair} — strength unavailable")
         return
 
-    # Use the passed direction (rejection) or fallback to real direction
     if direction is None:
         direction = real_direction
 
     expiry = random.choice(["1", "2", "3", "5"])
+    now = time.time()
+    signal_time = time.strftime('%H:%M', time.localtime(now))
+    entry_time = time.strftime('%H:%M', time.localtime(now + 120))
+
+    # === COLOR CODING ===
+    if direction == "BUY":
+        dir_display = "🟢 BUY"
+    else:
+        dir_display = "🔴 SELL"
 
     if rejection_target is not None:
-        if direction == "SELL":
-            signal_type = "🔴 SELL (Rejection)"
-            target = rejection_target - 0.0020
-            stop = rejection_target + 0.0010
-        else:
-            signal_type = "🟢 BUY (Bounce)"
-            target = rejection_target + 0.0020
-            stop = rejection_target - 0.0010
-
         message = f"""
-🚨 REJECTION SIGNAL ({time.strftime('%H:%M')})
+📊 REJECTION SIGNAL
 
 OTC Pair: {pair}
-Direction: {signal_type}
+Direction: {dir_display}
 
-Rejection Level: {rejection_target:.5f}
-🎯 Target: {target:.5f}
-🛑 Stop: {stop:.5f}
-
-⏰ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
-🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
+⏰ Signal Time: {signal_time}
+🎯 Entry Time: {entry_time}
 Expiry: {expiry} Min
 
 Strength: {strength}% 🔥
-💡 Strategy: Round Number Rejection (65% accuracy)
 """
     else:
         message = f"""
-📊 SIGNAL ALERT
+🚨 SIGNAL ALERT
 
 OTC Pair: {pair}
-Direction: {direction}
+Direction: {dir_display}
 
-⏰ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
-⚡ Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
+⏰ Signal Time: {signal_time}
+🎯 Entry Time: {entry_time}
 Expiry: {expiry} Min
 
 Strength: {strength}% 🔥
@@ -203,49 +213,40 @@ Strength: {strength}% 🔥
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
         requests.post(url, data={"chat_id": CHAT_ID, "text": message})
-        print(f"✅ Signal sent for {pair} at {time.strftime('%H:%M')} (Strength: {strength}%)")
+        print(f"✅ {direction} signal sent for {pair} at {signal_time}")
     except Exception as e:
         print(f"❌ Send error: {e}")
 
-# ===== MAIN BOT LOOP (30 MINUTES) =====
+# ===== MAIN BOT LOOP =====
 def run_bot():
+    CHECK_INTERVAL = 3
+    print(f"🤖 Bot started. Checking every {CHECK_INTERVAL} seconds. Instant signal on 2nd rejection.")
+    
     while True:
         try:
-            rejection_signals = []
-            for pair in pairs:
-                price = get_current_price(pair)
-                if price is not None:
-                    signal = get_rejection_signal(pair, price)
-                    if signal is not None:
-                        direction, target = signal
-                        rejection_signals.append((pair, direction, target))
-
-            if rejection_signals:
-                for pair, direction, target in rejection_signals:
+            all_prices = get_all_prices()
+            for pair, price in all_prices.items():
+                signal = check_rejection(pair, price)
+                if signal is not None:
+                    direction, target = signal
                     send_signal(pair, direction, rejection_target=target)
-            else:
-                pair = random.choice(pairs)
-                send_signal(pair)  # direction=None → uses real market strength
-
-            print(f"✅ Loop completed. Next run in 30 minutes. ({time.strftime('%H:%M')})")
-            time.sleep(1800)
+            time.sleep(CHECK_INTERVAL)
 
         except Exception as e:
             print(f"❌ Main loop error: {e}")
-            time.sleep(1800)
+            time.sleep(CHECK_INTERVAL)
 
 # ===== FLASK KEEP‑ALIVE =====
 @app.route('/')
 def home():
-    return "✅ OTC Rejection Bot is running!"
+    return "✅ OTC Instant Rejection Bot is running!"
 
 @app.route('/ping')
 def ping():
     return "pong", 200
 
-# ===== START BOT IN BACKGROUND =====
+# ===== START =====
 Thread(target=run_bot, daemon=True).start()
 
-# ===== RUN FLASK =====
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
