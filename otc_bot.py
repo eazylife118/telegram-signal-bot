@@ -2,6 +2,7 @@ import requests
 import random
 import time
 import pandas as pd
+import numpy as np
 from flask import Flask
 from threading import Thread
 
@@ -46,7 +47,7 @@ pairs = [
 ]
 
 # ==========================================
-# ROUND NUMBER LEVELS (UPDATED FROM SCREENSHOTS)
+# ROUND NUMBER LEVELS (UPDATED)
 # ==========================================
 ROUND_LEVELS = {
     "EURUSD-OTC": 1.15600,
@@ -62,12 +63,12 @@ ROUND_LEVELS = {
     "EURGBP-OTC": 0.85800,
     "EURAUD-OTC": 1.64000,
     "EURCAD-OTC": 1.50000,
-    "EURCHF-OTC": 1.02000,
-    "GBPAUD-OTC": 1.92000,
+    "EURCHF-OTC": 1.02459,
+    "GBPAUD-OTC": 1.92135,
     "GBPCAD-OTC": 1.72000,
     "GBPCHF-OTC": 1.16000,
-    "AUDCHF-OTC": 0.60000,
-    "CADCHF-OTC": 0.58600,
+    "AUDCHF-OTC": 0.60884,
+    "CADCHF-OTC": 0.58832,
     "NZDUSD-OTC": 0.59000,
     "EURTRY-OTC": 53.01600,
     "USDMXN-OTC": 17.7000,
@@ -108,7 +109,314 @@ def get_all_prices():
         return {}
 
 # ==========================================
-# GET REAL MARKET STRENGTH
+# GET OHLC DATA FOR TECHNICAL INDICATORS
+# ==========================================
+def get_ohlc(pair, interval="1min", outputsize=50):
+    try:
+        symbol = pair.replace("-OTC", "")
+        url = (
+            f"https://api.twelvedata.com/time_series"
+            f"?symbol={symbol}"
+            f"&interval={interval}"
+            f"&outputsize={outputsize}"
+            f"&apikey={TWELVE_API_KEY}"
+        )
+        response = requests.get(url).json()
+        if "values" in response:
+            closes = [float(candle["close"]) for candle in response["values"]]
+            highs = [float(candle["high"]) for candle in response["values"]]
+            lows = [float(candle["low"]) for candle in response["values"]]
+            return closes, highs, lows
+        return None, None, None
+    except Exception as e:
+        print(f"⚠️ OHLC error for {pair}: {e}")
+        return None, None, None
+
+# ==========================================
+# STRATEGY 1: ROUND NUMBER REJECTION
+# ==========================================
+def check_rejection(pair, current_price):
+    global previous_prices, rejection_count, last_signal_time
+
+    if pair not in previous_prices:
+        previous_prices[pair] = current_price
+        rejection_count[pair] = 0
+        last_signal_time[pair] = 0
+        return None
+
+    if time.time() - last_signal_time.get(pair, 0) < 120:
+        return None
+
+    prev_price = previous_prices[pair]
+    target = ROUND_LEVELS.get(pair)
+    if target is None:
+        return None
+
+    if abs(current_price - target) > 0.0010:
+        previous_prices[pair] = current_price
+        return None
+
+    if prev_price < target <= current_price:
+        rejection_count[pair] += 1
+        if rejection_count[pair] >= 2:
+            rejection_count[pair] = 0
+            previous_prices[pair] = current_price
+            last_signal_time[pair] = time.time()
+            return "SELL", f"Rejection at {target:.5f}"
+
+    elif prev_price > target >= current_price:
+        rejection_count[pair] += 1
+        if rejection_count[pair] >= 2:
+            rejection_count[pair] = 0
+            previous_prices[pair] = current_price
+            last_signal_time[pair] = time.time()
+            return "BUY", f"Bounce from {target:.5f}"
+    else:
+        rejection_count[pair] = 0
+
+    previous_prices[pair] = current_price
+    return None
+
+# ==========================================
+# STRATEGY 2: SUPPORT/RESISTANCE BREAKOUT
+# ==========================================
+def check_breakout(closes, highs, lows):
+    if len(closes) < 20:
+        return None, None
+    
+    resistance = max(highs[1:10])
+    support = min(lows[1:10])
+    current = closes[0]
+    
+    if current > resistance * 1.0005:  # 0.05% breakout confirmation
+        return "BUY", f"Breakout above {resistance:.5f}"
+    elif current < support * 0.9995:  # 0.05% breakdown confirmation
+        return "SELL", f"Breakdown below {support:.5f}"
+    return None, None
+
+# ==========================================
+# STRATEGY 3: RSI DIVERGENCE
+# ==========================================
+def calculate_rsi(closes, period=14):
+    if len(closes) < period + 1:
+        return None
+    gains = 0
+    losses = 0
+    for i in range(1, period + 1):
+        diff = closes[i - 1] - closes[i]
+        if diff > 0:
+            gains += diff
+        else:
+            losses -= diff
+    avg_gain = gains / period
+    avg_loss = losses / period
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def check_rsi_divergence(closes, highs, lows):
+    if len(closes) < 30:
+        return None, None
+    
+    # Calculate RSI for last 20 candles
+    rsi_values = []
+    for i in range(20, len(closes)):
+        rsi = calculate_rsi(closes[i-14:i+1])
+        if rsi is not None:
+            rsi_values.append(rsi)
+    
+    if len(rsi_values) < 20:
+        return None, None
+    
+    # Check for bullish divergence (price lower low, RSI higher low)
+    price_low = min(closes[:10])
+    price_low2 = min(closes[10:20])
+    rsi_low = min(rsi_values[:10])
+    rsi_low2 = min(rsi_values[10:20])
+    
+    if price_low2 < price_low and rsi_low2 > rsi_low:
+        return "BUY", "RSI Bullish Divergence"
+    
+    # Check for bearish divergence (price higher high, RSI lower high)
+    price_high = max(closes[:10])
+    price_high2 = max(closes[10:20])
+    rsi_high = max(rsi_values[:10])
+    rsi_high2 = max(rsi_values[10:20])
+    
+    if price_high2 > price_high and rsi_high2 < rsi_high:
+        return "SELL", "RSI Bearish Divergence"
+    
+    return None, None
+
+# ==========================================
+# STRATEGY 4: MOVING AVERAGE CROSSOVER
+# ==========================================
+def check_ma_crossover(closes):
+    if len(closes) < 20:
+        return None, None
+    
+    ma5 = sum(closes[:5]) / 5
+    ma20 = sum(closes[:20]) / 20
+    prev_ma5 = sum(closes[1:6]) / 5
+    prev_ma20 = sum(closes[1:21]) / 20
+    
+    if prev_ma5 <= prev_ma20 and ma5 > ma20:
+        return "BUY", f"MA5 ({ma5:.5f}) crossed above MA20 ({ma20:.5f})"
+    elif prev_ma5 >= prev_ma20 and ma5 < ma20:
+        return "SELL", f"MA5 ({ma5:.5f}) crossed below MA20 ({ma20:.5f})"
+    return None, None
+
+# ==========================================
+# STRATEGY 5: BOLLINGER BANDS SQUEEZE
+# ==========================================
+def check_bollinger_breakout(closes):
+    if len(closes) < 20:
+        return None, None
+    
+    ma = sum(closes[:20]) / 20
+    variance = sum([(x - ma) ** 2 for x in closes[:20]]) / 20
+    std_dev = variance ** 0.5
+    
+    upper = ma + (2 * std_dev)
+    lower = ma - (2 * std_dev)
+    current = closes[0]
+    
+    if current > upper:
+        return "BUY", f"Price broke above upper Bollinger Band ({upper:.5f})"
+    elif current < lower:
+        return "SELL", f"Price broke below lower Bollinger Band ({lower:.5f})"
+    return None, None
+
+# ==========================================
+# STRATEGY 6: FIBONACCI RETRACEMENT
+# ==========================================
+def check_fibonacci_retracement(closes, highs, lows):
+    if len(closes) < 30:
+        return None, None
+    
+    # Find swing high and low
+    swing_high = max(closes[:20])
+    swing_low = min(closes[:20])
+    
+    # Calculate Fibonacci levels
+    diff = swing_high - swing_low
+    fib_618 = swing_high - (diff * 0.618)
+    fib_500 = swing_high - (diff * 0.500)
+    fib_382 = swing_high - (diff * 0.382)
+    
+    current = closes[0]
+    
+    # Check if price is near Fibonacci levels
+    if abs(current - fib_618) / current < 0.001:
+        return "BUY" if current > closes[1] else "SELL", f"Price at 61.8% Fib ({fib_618:.5f})"
+    elif abs(current - fib_500) / current < 0.001:
+        return "BUY" if current > closes[1] else "SELL", f"Price at 50% Fib ({fib_500:.5f})"
+    elif abs(current - fib_382) / current < 0.001:
+        return "BUY" if current > closes[1] else "SELL", f"Price at 38.2% Fib ({fib_382:.5f})"
+    
+    return None, None
+
+# ==========================================
+# COMBINED SIGNAL GENERATOR (PRIORITY LOGIC)
+# ==========================================
+def get_combined_signal(pair, current_price):
+    signals = []
+    
+    # Get OHLC data
+    closes, highs, lows = get_ohlc(pair)
+    if closes is None:
+        return None, None
+    
+    # Strategy 1: Round Number Rejection (Priority 1)
+    rejection = check_rejection(pair, current_price)
+    if rejection is not None:
+        direction, reason = rejection
+        return direction, f"🔴 REJECTION: {reason}" if direction == "SELL" else f"🟢 REJECTION: {reason}"
+    
+    # Strategy 2: Breakout (Priority 2)
+    breakout_dir, breakout_reason = check_breakout(closes, highs, lows)
+    if breakout_dir is not None:
+        signals.append((breakout_dir, f"🚀 BREAKOUT: {breakout_reason}", 2))
+    
+    # Strategy 3: RSI Divergence (Priority 3)
+    rsi_dir, rsi_reason = check_rsi_divergence(closes, highs, lows)
+    if rsi_dir is not None:
+        signals.append((rsi_dir, f"📊 RSI: {rsi_reason}", 3))
+    
+    # Strategy 4: MA Crossover (Priority 4)
+    ma_dir, ma_reason = check_ma_crossover(closes)
+    if ma_dir is not None:
+        signals.append((ma_dir, f"📈 MA: {ma_reason}", 4))
+    
+    # Strategy 5: Bollinger Breakout (Priority 5)
+    bb_dir, bb_reason = check_bollinger_breakout(closes)
+    if bb_dir is not None:
+        signals.append((bb_dir, f"📉 BB: {bb_reason}", 5))
+    
+    # Strategy 6: Fibonacci (Priority 6)
+    fib_dir, fib_reason = check_fibonacci_retracement(closes, highs, lows)
+    if fib_dir is not None:
+        signals.append((fib_dir, f"🌀 FIB: {fib_reason}", 6))
+    
+    # If multiple signals agree, send the one with highest priority
+    if signals:
+        # Check if all signals agree
+        directions = [s[0] for s in signals]
+        if len(set(directions)) == 1:
+            # All agree → high confidence
+            return directions[0], f"✅ CONFIRMED: {signals[0][1]}"
+        else:
+            # Return the highest priority signal
+            signals.sort(key=lambda x: x[2])  # Sort by priority
+            return signals[0][0], signals[0][1]
+    
+    return None, None
+
+# ==========================================
+# SEND SIGNAL WITH GREEN/RED COLOR
+# ==========================================
+def send_signal(pair, direction, reason):
+    # Get real strength
+    real_direction, strength = get_market_strength(pair)
+    if real_direction is None or strength is None:
+        print(f"⏭️ Skipping {pair} — strength unavailable")
+        return
+
+    expiry = random.choice(["1", "2", "3", "5"])
+    now = time.time()
+    signal_time = time.strftime('%H:%M', time.localtime(now))
+    entry_time = time.strftime('%H:%M', time.localtime(now + 120))
+
+    # Color coding
+    if direction == "BUY":
+        dir_display = "🟢 BUY"
+    else:
+        dir_display = "🔴 SELL"
+
+    message = f"""
+🚨 SIGNAL ALERT
+
+OTC Pair: {pair}
+Direction: {dir_display}
+
+⏰ Signal Time: {signal_time}
+🎯 Entry Time: {entry_time}
+Expiry: {expiry} Min
+
+Strength: {strength}% 🔥
+Strategy: {reason}
+"""
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    try:
+        requests.post(url, data={"chat_id": CHAT_ID, "text": message})
+        print(f"✅ {direction} signal sent for {pair} at {signal_time}")
+    except Exception as e:
+        print(f"❌ Send error: {e}")
+
+# ==========================================
+# GET MARKET STRENGTH
 # ==========================================
 def get_market_strength(pair):
     try:
@@ -141,123 +449,22 @@ def get_market_strength(pair):
         return None, None
 
 # ==========================================
-# ROUND NUMBER REJECTION LOGIC
-# ==========================================
-def check_rejection(pair, current_price):
-    global previous_prices, rejection_count, last_signal_time
-
-    if pair not in previous_prices:
-        previous_prices[pair] = current_price
-        rejection_count[pair] = 0
-        last_signal_time[pair] = 0
-        return None
-
-    # 2-MINUTE COOLDOWN
-    if time.time() - last_signal_time.get(pair, 0) < 120:
-        return None
-
-    prev_price = previous_prices[pair]
-    target = ROUND_LEVELS.get(pair)
-    if target is None:
-        return None
-
-    if abs(current_price - target) > 0.0010:
-        previous_prices[pair] = current_price
-        return None
-
-    if prev_price < target <= current_price:
-        rejection_count[pair] += 1
-        if rejection_count[pair] >= 2:
-            rejection_count[pair] = 0
-            previous_prices[pair] = current_price
-            last_signal_time[pair] = time.time()
-            return "SELL", target
-
-    elif prev_price > target >= current_price:
-        rejection_count[pair] += 1
-        if rejection_count[pair] >= 2:
-            rejection_count[pair] = 0
-            previous_prices[pair] = current_price
-            last_signal_time[pair] = time.time()
-            return "BUY", target
-    else:
-        rejection_count[pair] = 0
-
-    previous_prices[pair] = current_price
-    return None
-
-# ==========================================
-# SEND SIGNAL WITH GREEN/RED COLOR
-# ==========================================
-def send_signal(pair, direction=None, rejection_target=None):
-    real_direction, strength = get_market_strength(pair)
-    if real_direction is None or strength is None:
-        print(f"⏭️ Skipping {pair} — strength unavailable")
-        return
-
-    if direction is None:
-        direction = real_direction
-
-    expiry = random.choice(["1", "2", "3", "5"])
-    now = time.time()
-    signal_time = time.strftime('%H:%M', time.localtime(now))
-    entry_time = time.strftime('%H:%M', time.localtime(now + 120))
-
-    # Color coding
-    if direction == "BUY":
-        dir_display = "🟢 BUY"
-    else:
-        dir_display = "🔴 SELL"
-
-    if rejection_target is not None:
-        message = f"""
-🚨 REJECTION SIGNAL
-
-OTC Pair: {pair}
-Direction: {dir_display}
-
-⏰ Signal Time: {signal_time}
-🎯 Entry Time: {entry_time}
-Expiry: {expiry} Min
-
-Strength: {strength}% 🔥
-"""
-    else:
-        message = f"""
-🚨 SIGNAL ALERT
-
-OTC Pair: {pair}
-Direction: {dir_display}
-
-⏰ Signal Time: {signal_time}
-🎯 Entry Time: {entry_time}
-Expiry: {expiry} Min
-
-Strength: {strength}% 🔥
-"""
-
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": message})
-        print(f"✅ {direction} signal sent for {pair} at {signal_time}")
-    except Exception as e:
-        print(f"❌ Send error: {e}")
-
-# ==========================================
-# MAIN BOT LOOP (3-SECOND CHECKS)
+# MAIN BOT LOOP (4-SECOND CHECKS)
 # ==========================================
 def run_bot():
-    CHECK_INTERVAL = 3
-    print(f"🤖 Bot started. Checking every {CHECK_INTERVAL} seconds. Instant signal on 2nd rejection.")
+    CHECK_INTERVAL = 4
+    print(f"🤖 Bot started. Checking every {CHECK_INTERVAL} seconds. Multiple strategies active.")
 
     while True:
         try:
             all_prices = get_all_prices()
             for pair, price in all_prices.items():
-                signal = check_rejection(pair, price)
-                if signal is not None:
-                    direction, target = signal
-                    send_signal(pair, direction, rejection_target=target)
+                # Get combined signal from all strategies
+                direction, reason = get_combined_signal(pair, price)
+                if direction is not None and reason is not None:
+                    send_signal(pair, direction, reason)
+                    time.sleep(2)  # Small pause after sending
+            
             time.sleep(CHECK_INTERVAL)
 
         except Exception as e:
@@ -269,7 +476,7 @@ def run_bot():
 # ==========================================
 @app.route('/')
 def home():
-    return "✅ OTC Instant Rejection Bot is running!"
+    return "✅ OTC Multi-Strategy Bot is running!"
 
 @app.route('/ping')
 def ping():
