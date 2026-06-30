@@ -456,6 +456,11 @@ def run_bot():
     print(f"🤖 Bot started. Checking every {CHECK_INTERVAL} seconds. Multiple strategies active.")
 
     while True:
+        # === FAKE/TEST SIGNAL: Sends every 60 seconds ===
+        if int(time.time()) % 60 == 0:
+            send_signal("EURUSD-OTC", "BUY", "🧪 TEST SIGNAL - IGNORE")
+            time.sleep(2)
+        # === END TEST ===
         try:
             all_prices = get_all_prices()
             for pair, price in all_prices.items():
