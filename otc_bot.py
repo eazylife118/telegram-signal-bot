@@ -61,8 +61,8 @@ ROUND_LEVELS = {
 previous_prices = {}
 rejection_count = {}
 
-# ===== GET MARKET SIGNAL =====
-def get_market_signal(pair):
+# ===== GET REAL MARKET STRENGTH =====
+def get_market_strength(pair):
     try:
         symbol = pair.replace("-OTC", "")
         url = (
@@ -81,13 +81,16 @@ def get_market_signal(pair):
                 bullish += 1
             else:
                 bearish += 1
+        total = bullish + bearish
+        if total == 0:
+            return "NEUTRAL", 0
         if bullish > bearish:
-            return "BUY", int((bullish / 19) * 100)
+            return "BUY", int((bullish / total) * 100)
         else:
-            return "SELL", int((bearish / 19) * 100)
+            return "SELL", int((bearish / total) * 100)
     except Exception as e:
-        print(f"⚠️ Market signal error for {pair}: {e}")
-        return "BUY", 75
+        print(f"⚠️ Strength error for {pair}: {e}")
+        return None, None
 
 # ===== ROUND NUMBER REJECTION LOGIC =====
 def get_rejection_signal(pair, current_price):
@@ -140,10 +143,19 @@ def get_current_price(pair):
         print(f"⚠️ Price fetch error for {pair}: {e}")
         return None
 
-# ===== SEND SIGNAL (TIME LOGIC UNTOUCHED) =====
-def send_signal(pair, direction=None, strength=None, rejection_target=None):
+# ===== SEND SIGNAL (WITH REAL STRENGTH) =====
+def send_signal(pair, direction=None, rejection_target=None):
+    # Get real strength for this pair
+    real_direction, strength = get_market_strength(pair)
+
+    # If market strength fetch failed, skip this signal
+    if real_direction is None or strength is None:
+        print(f"⏭️ Skipping {pair} — strength data unavailable")
+        return
+
+    # Use the passed direction (rejection) or fallback to real direction
     if direction is None:
-        direction, strength = get_market_signal(pair)
+        direction = real_direction
 
     expiry = random.choice(["1", "2", "3", "5"])
 
@@ -171,25 +183,27 @@ Rejection Level: {rejection_target:.5f}
 🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
 Expiry: {expiry} Min
 
+Strength: {strength}% 🔥
 💡 Strategy: Round Number Rejection (65% accuracy)
 """
     else:
         message = f"""
-🚨 SIGNAL ALERT
+📊 SIGNAL ALERT
 
 OTC Pair: {pair}
 Direction: {direction}
 
 ⏰ Signal Time: {time.strftime('%H:%M', time.localtime(time.time() + 3600))}
-🎯 Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
+⚡ Entry Time: {time.strftime('%H:%M', time.localtime(time.time() + 3720))}
 Expiry: {expiry} Min
+
 Strength: {strength}% 🔥
 """
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
         requests.post(url, data={"chat_id": CHAT_ID, "text": message})
-        print(f"✅ Signal sent for {pair} at {time.strftime('%H:%M')}")
+        print(f"✅ Signal sent for {pair} at {time.strftime('%H:%M')} (Strength: {strength}%)")
     except Exception as e:
         print(f"❌ Send error: {e}")
 
@@ -211,8 +225,7 @@ def run_bot():
                     send_signal(pair, direction, rejection_target=target)
             else:
                 pair = random.choice(pairs)
-                direction, strength = get_market_signal(pair)
-                send_signal(pair, direction, strength)
+                send_signal(pair)  # direction=None → uses real market strength
 
             print(f"✅ Loop completed. Next run in 30 minutes. ({time.strftime('%H:%M')})")
             time.sleep(1800)
@@ -221,7 +234,7 @@ def run_bot():
             print(f"❌ Main loop error: {e}")
             time.sleep(1800)
 
-# ===== FLASK KEEP‑ALIVE SERVER (FOR RENDER) =====
+# ===== FLASK KEEP‑ALIVE =====
 @app.route('/')
 def home():
     return "✅ OTC Rejection Bot is running!"
