@@ -456,11 +456,16 @@ def run_bot():
     print(f"🤖 Bot started. Checking every {CHECK_INTERVAL} seconds. Multiple strategies active.")
 
     while True:
-        # === FAKE/TEST SIGNAL: Sends every 60 seconds ===
-        if int(time.time()) % 60 == 0:
-            send_signal("EURUSD-OTC", "BUY", "🧪 TEST SIGNAL - IGNORE")
-            time.sleep(2)
-        # === END TEST ===
+    # === DIRECT TELEGRAM TEST (NO API) ===
+    if int(time.time()) % 30 == 0:
+        try:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            requests.post(url, data={"chat_id": CHAT_ID, "text": "✅ BOT IS ALIVE — DIRECT TEST"})
+            print("✅ Direct Telegram test sent")
+        except Exception as e:
+            print(f"❌ Direct test failed: {e}")
+        time.sleep(2)
+    # === END TEST ===
         try:
             all_prices = get_all_prices()
             for pair, price in all_prices.items():
