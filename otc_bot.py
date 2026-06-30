@@ -456,24 +456,24 @@ def run_bot():
     print(f"🤖 Bot started. Checking every {CHECK_INTERVAL} seconds. Multiple strategies active.")
 
     while True:
-    # === DIRECT TELEGRAM TEST (NO API) ===
-    if int(time.time()) % 30 == 0:
-        try:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            requests.post(url, data={"chat_id": CHAT_ID, "text": "✅ BOT IS ALIVE — DIRECT TEST"})
-            print("✅ Direct Telegram test sent")
-        except Exception as e:
-            print(f"❌ Direct test failed: {e}")
-        time.sleep(2)
-    # === END TEST ===
+        # === DIRECT TELEGRAM TEST (NO API) ===
+        if int(time.time()) % 30 == 0:
+            try:
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                requests.post(url, data={"chat_id": CHAT_ID, "text": "✅ BOT IS ALIVE — DIRECT TEST"})
+                print("✅ Direct Telegram test sent")
+            except Exception as e:
+                print(f"❌ Direct test failed: {e}")
+            time.sleep(2)
+        # === END TEST ===
+
         try:
             all_prices = get_all_prices()
             for pair, price in all_prices.items():
-                # Get combined signal from all strategies
                 direction, reason = get_combined_signal(pair, price)
                 if direction is not None and reason is not None:
                     send_signal(pair, direction, reason)
-                    time.sleep(2)  # Small pause after sending
+                    time.sleep(2)
             
             time.sleep(CHECK_INTERVAL)
 
