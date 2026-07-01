@@ -194,8 +194,8 @@ class PocketOptionWebSocket:
             print("Error processing message:", e)
 
     def on_error(self, ws, error):
-        print("WebSocket error:", error)
-        self.connected = False
+        print("❌ WebSocket ERROR:", error)
+        send_telegram(f"❌ WebSocket ERROR: {error}")
 
     def on_close(self, ws, close_status_code, close_msg):
         print("WebSocket closed - Reconnecting in 5 seconds...")
@@ -205,7 +205,8 @@ class PocketOptionWebSocket:
 
     def on_open(self, ws):
         print("✅ WebSocket connected")
-        ws.send(self.generate_auth_payload())
+        auth_payload = self.generate_auth_payload()
+        ws.send(auth_payload)
         print("🔐 Authentication sent...")
         for pair in OTC_PAIRS:
             ws.send(json.dumps({"event": "subscribe", "pair": pair}))
