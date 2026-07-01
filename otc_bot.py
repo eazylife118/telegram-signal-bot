@@ -6,9 +6,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
-# ==========================================
-# TELEGRAM CREDENTIALS
-# ==========================================
 TELEGRAM_TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
 TELEGRAM_CHAT_ID = "6280535707"
 
@@ -21,13 +18,10 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 # ==========================================
-# STARTUP MESSAGE
+# SEND "BOT IS ALIVE" MESSAGE ONLY ONCE
 # ==========================================
-send_telegram("✅ Bot is LIVE — scanning for real OTC price movements...")
+send_telegram("✅ BOT IS ALIVE — Connected and scanning for OTC signals!")
 
-# ==========================================
-# BROWSER SETUP
-# ==========================================
 options = Options()
 options.add_argument("--headless")
 options.add_argument("--no-sandbox")
@@ -43,9 +37,6 @@ time.sleep(10)
 
 send_telegram("✅ Connected to Pocket Option — watching for live price changes...")
 
-# ==========================================
-# REAL SIGNAL LOOP (PRICE CHANGE TRIGGER)
-# ==========================================
 last_prices = {}
 
 while True:
@@ -63,7 +54,7 @@ while True:
                         send_telegram(f"📈 LIVE OTC SIGNAL: {name} - Price: {price}")
                 except:
                     pass
-        time.sleep(3)
+        time.sleep(2)
     except Exception as e:
         print("Error:", e)
         time.sleep(5)
