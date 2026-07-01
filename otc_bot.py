@@ -1,8 +1,6 @@
 import requests
 import random
 import time
-import pandas as pd
-import numpy as np
 import json
 import threading
 from flask import Flask
