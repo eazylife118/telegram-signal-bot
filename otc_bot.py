@@ -450,22 +450,31 @@ Strategy: {reason}
 # ==========================================
 def run_bot():
     CHECK_INTERVAL = 4
-    print(f"🤖 Bot started. Checking every {CHECK_INTERVAL} seconds. All 7 strategies active.")
+    print(f"🤖 Bot started. TEST MODE — Sending test signals every 30 seconds.")
     
     while True:
         try:
-            all_prices = get_all_prices()
-            if not all_prices:
-                print("⏳ Waiting for price data...")
-                time.sleep(CHECK_INTERVAL)
-                continue
-                
-            for pair, price in all_prices.items():
-                direction, reason = get_combined_signal(pair, price)
-                if direction is not None and reason is not None:
-                    send_signal(pair, direction, reason)
-                    time.sleep(2)
+            # === FORCE TEST SIGNAL EVERY 30 SECONDS ===
+            if int(time.time()) % 30 == 0:
+                # Send a test signal using a dummy pair
+                send_signal("EURUSD-OTC", "BUY", "🧪 TEST SIGNAL - IGNORE")
+                print("✅ Test signal sent to Telegram")
+                time.sleep(2)
+            # === END TEST ===
             
+            # Still try to get real prices and signals
+            all_prices = get_all_prices()
+            if all_prices:
+                for pair, price in all_prices.items():
+                    direction, reason = get_combined_signal(pair, price)
+                    if direction is not None and reason is not None:
+                        send_signal(pair, direction, reason)
+                        time.sleep(2)
+            
+            time.sleep(CHECK_INTERVAL)
+
+        except Exception as e:
+            print(f"❌ Main loop error: {e}")
             time.sleep(CHECK_INTERVAL)
 
         except Exception as e:
