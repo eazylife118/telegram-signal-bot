@@ -97,12 +97,10 @@ def check_strategies(pair, candle1, candle2, candle3, candle4, candle5, ema_20):
         (candle1['high'] - candle1['close']) > (candle1['close'] - candle1['low'])):
         signals.append(f"📈 BUY {pair} - Reversal Pattern (2 min)")
 
-    # Strategy 2: 3-Candle Momentum (1 min)
-    if (candle1['close'] > candle1['open'] and
-        candle2['close'] > candle2['open'] and
-        candle3['close'] > candle3['open']):
-        signals.append(f"📈 BUY {pair} - 3-Candle Momentum (1 min)")
-
+    # Strategy 2: LIVE OTC SIGNAL (EXTREMELY LOOSE FOR CONFIRMATION)
+    if (candle1['close'] != candle1['open']):
+        signals.append(f"📈 LIVE OTC SIGNAL {pair} - Price moved (1 min)")
+    
     # Strategy 3: 2-Minute Reset (2 min)
     if (candle1['close'] < candle1['open'] and
         candle2['close'] < candle2['open'] and
