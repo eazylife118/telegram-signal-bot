@@ -3,26 +3,26 @@ import random
 import time
 import json
 import threading
+import websocket
 from flask import Flask
 from threading import Thread
-from pocketoption import PocketOption
 
 app = Flask(__name__)
 
 # ==========================================
 # CONFIGURATION
 # ==========================================
-BOT_TOKEN = "8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc"
-CHAT_ID = "6280535707"
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+CHAT_ID = "YOUR_CHAT_ID_HERE"
 
-# === YOUR POCKET OPTIONS SESSION CREDENTIALS (HARDCODED) ===
+# === YOUR POCKET OPTIONS SESSION CREDENTIALS ===
 PO_SESSION = "deemw95tVnMPCTT7FTQ9imj7YkrhKqGCbT1FInXfxmKUmHAau4BpVYxCAamInBFx"
 PO_UID = "131437859"
 
 # ==========================================
 # ALL OTC PAIRS (ORIGINAL FULL LIST)
 # ==========================================
-pairs = [
+PAIRS = [
     "EURUSD-OTC",
     "GBPUSD-OTC",
     "USDJPY-OTC",
@@ -51,7 +51,7 @@ pairs = [
 ]
 
 # ==========================================
-# ROUND NUMBER LEVELS (ORIGINAL)
+# ROUND NUMBER LEVELS
 # ==========================================
 ROUND_LEVELS = {
     "EURUSD-OTC": 1.15600,
@@ -87,31 +87,48 @@ rejection_count = {}
 last_signal_time = {}
 latest_prices = {}
 price_lock = threading.Lock()
+bounce_memory = {}
 
 # ==========================================
 # POCKET OPTIONS WEBSOCKET CONNECTION
 # ==========================================
-def on_price_update(symbol, price):
+def on_message(ws, message):
     global latest_prices
-    with price_lock:
-        latest_prices[symbol] = price
-
-def connect_pocket_options():
     try:
-        client = PocketOption(
-            session=PO_SESSION,
-            uid=PO_UID,
-            on_price_update=on_price_update
-        )
-        
-        for pair in pairs:
-            client.subscribe(pair)
-            print(f"📡 Subscribed to {pair}")
-            time.sleep(0.1)
-        
-        client.start()
+        data = json.loads(message)
+        if "price" in data:
+            symbol = data.get("symbol") or data.get("asset")
+            price = float(data["price"])
+            if symbol:
+                with price_lock:
+                    latest_prices[symbol] = price
     except Exception as e:
-        print(f"❌ Pocket Options connection error: {e}")
+        pass
+
+def on_error(ws, error):
+    print(f"⚠️ WebSocket error: {error}")
+
+def on_close(ws, close_status_code, close_msg):
+    print("🔌 WebSocket closed. Reconnecting in 5 seconds...")
+    time.sleep(5)
+    connect_websocket()
+
+def on_open(ws):
+    print("✅ WebSocket connected to Pocket Options")
+    for pair in PAIRS:
+        subscribe_msg = {"action": "subscribe", "symbol": pair}
+        ws.send(json.dumps(subscribe_msg))
+        print(f"📡 Subscribed to {pair}")
+        time.sleep(0.1)
+
+def connect_websocket():
+    ws_url = f"wss://demo-api-eu.po.market?token={PO_SESSION}"
+    ws = websocket.WebSocketApp(ws_url,
+                                on_open=on_open,
+                                on_message=on_message,
+                                on_error=on_error,
+                                on_close=on_close)
+    ws.run_forever()
 
 def get_all_prices():
     global latest_prices
@@ -119,13 +136,12 @@ def get_all_prices():
         return latest_prices.copy()
 
 # ==========================================
-# GET OHLC DATA FOR TECHNICAL INDICATORS
+# GET OHLC DATA (SYNTHETIC FOR STRATEGIES)
 # ==========================================
 def get_ohlc(pair, interval="1min", outputsize=50):
     prices = get_all_prices()
     if pair in prices:
         current = prices[pair]
-        # Create synthetic OHLC data for strategies to work
         return [current] * 50, [current] * 50, [current] * 50
     return None, None, None
 
@@ -175,9 +191,8 @@ def check_rejection(pair, current_price):
     return None
 
 # ==========================================
-# STRATEGY 2: PRICE BOUNCE (NEW - ADDED)
+# STRATEGY 2: PRICE BOUNCE
 # ==========================================
-bounce_memory = {}
 def check_price_bounce(pair, current_price):
     global bounce_memory
     if pair not in bounce_memory:
@@ -188,14 +203,12 @@ def check_price_bounce(pair, current_price):
         bounce_memory[pair].pop(0)
     
     if len(bounce_memory[pair]) >= 5:
-        # Look for a sharp drop of 0.05% or more followed by a quick recovery
         for i in range(2, len(bounce_memory[pair]) - 1):
             drop = bounce_memory[pair][i-1] - bounce_memory[pair][i]
-            if drop > bounce_memory[pair][i-1] * 0.0005:  # 0.05% drop
+            if drop > bounce_memory[pair][i-1] * 0.0005:
                 recovery = bounce_memory[pair][i+1] - bounce_memory[pair][i]
-                if recovery > drop * 0.5:  # Recovered at least 50% of the drop
+                if recovery > drop * 0.5:
                     return "BUY", f"Price Bounce at {current_price:.5f}"
-    
     return None, None
 
 # ==========================================
@@ -346,7 +359,7 @@ def get_combined_signal(pair, current_price):
         direction, reason = rejection
         return direction, f"🔴 REJECTION: {reason}" if direction == "SELL" else f"🟢 REJECTION: {reason}"
     
-    # Strategy 2: Price Bounce (NEW)
+    # Strategy 2: Price Bounce
     bounce_dir, bounce_reason = check_price_bounce(pair, current_price)
     if bounce_dir is not None:
         return bounce_dir, f"📈 BOUNCE: {bounce_reason}"
@@ -384,7 +397,6 @@ def get_combined_signal(pair, current_price):
 def get_market_strength(pair):
     prices = get_all_prices()
     if pair in prices:
-        # Simulate strength since we have live data
         return "BUY", random.randint(65, 85)
     return None, None
 
@@ -474,7 +486,7 @@ def ping():
 # ==========================================
 # START BOT
 # ==========================================
-Thread(target=connect_pocket_options, daemon=True).start()
+Thread(target=connect_websocket, daemon=True).start()
 Thread(target=run_bot, daemon=True).start()
 
 if __name__ == "__main__":
