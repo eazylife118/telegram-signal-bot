@@ -12,8 +12,8 @@ app = Flask(__name__)
 # ==========================================
 # CONFIGURATION
 # ==========================================
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-CHAT_ID = "YOUR_CHAT_ID_HERE"
+BOT_TOKEN = "8612354100:AAFUTlaSiq19yycQWpO70J4d6DEbgF4Kicc"
+CHAT_ID = "6280535707"
 
 # === YOUR POCKET OPTIONS SESSION CREDENTIALS ===
 PO_SESSION = "deemw95tVnMPCTT7FTQ9imj7YkrhKqGCbT1FInXfxmKUmHAau4BpVYxCAamInBFx"
