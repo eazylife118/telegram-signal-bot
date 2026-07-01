@@ -32,7 +32,46 @@ OTC_PAIRS = [
     "USDCAD-OTC",
     "NZDUSD-OTC",
     "EURJPY-OTC",
-    "GBPJPY-OTC"
+    "GBPJPY-OTC",
+    "EURGBP-OTC",
+    "EURAUD-OTC",
+    "EURCAD-OTC",
+    "EURCHF-OTC",
+    "GBPAUD-OTC",
+    "GBPCAD-OTC",
+    "GBPCHF-OTC",
+    "AUDCAD-OTC",
+    "AUDCHF-OTC",
+    "AUDJPY-OTC",
+    "CADCHF-OTC",
+    "CADJPY-OTC",
+    "CHFJPY-OTC",
+    "NZDJPY-OTC",
+    "NZDCAD-OTC",
+    "NZDCHF-OTC",
+    "USDCHF-OTC",
+    "USDMXN-OTC",
+    "USDZAR-OTC",
+    "USDSEK-OTC",
+    "USDNOK-OTC",
+    "USDDKK-OTC",
+    "USDPLN-OTC",
+    "USDHKD-OTC",
+    "USDSGD-OTC",
+    "USDTHB-OTC",
+    "USDCNH-OTC",
+    "USDKRW-OTC",
+    "USDTRY-OTC",
+    "USDRUB-OTC",
+    "USDINR-OTC",
+    "USDBRL-OTC",
+    "USDZAR-OTC",
+    "XAUUSD-OTC",
+    "XAGUSD-OTC",
+    "BTCUSD-OTC",
+    "ETHUSD-OTC",
+    "LTCUSD-OTC",
+    "XRPUSD-OTC",
 ]
 
 # ========== TELEGRAM SENDER ==========
@@ -110,7 +149,7 @@ class PocketOptionWebSocket:
         self.uid = PO_UID
         self.connected = False
         self.last_signal_time = 0
-        self.signal_cooldown = 60
+        self.signal_cooldown = 4
 
     def generate_auth_payload(self):
         return json.dumps({"event": "auth", "session": self.session, "uid": self.uid})
