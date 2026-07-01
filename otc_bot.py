@@ -3,12 +3,23 @@ import json
 import requests
 import time
 import threading
+from flask import Flask
 
-# ========== YOUR CREDENTIALS (PASTE HERE) ==========
-TELEGRAM_TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"        
-TELEGRAM_CHAT_ID = "6280535707"       
+# ========== FLASK WEB SERVER (KEEPS RENDER ALIVE) ==========
+app = Flask(__name__)
 
-# Pocket Option credentials (already have these)
+@app.route('/')
+def home():
+    return "✅ OTC Signal Bot is running!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=10000)
+
+# ========== TELEGRAM CREDENTIALS ==========
+TELEGRAM_TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"   
+TELEGRAM_CHAT_ID = "6280535707"     
+
+# ========== POCKET OPTION CREDENTIALS ==========
 PO_SESSION = "deemw95tVnMPCTT7FTQ9imj7YkrhKqGCbT1FInXfxmKUmHAau4BpVYxCAamInBFx"
 PO_UID = "131437859"
 
@@ -30,8 +41,12 @@ def send_telegram(message):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
         requests.post(url, data=payload)
+        print(f"📨 Sent to Telegram: {message}")
     except Exception as e:
         print("Telegram error:", e)
+
+# ========== TEST SIGNAL (REMOVE AFTER CONFIRMATION) ==========
+send_telegram("🔔 BOT IS ALIVE! Waiting for live OTC signals...")
 
 # ========== STRATEGY ENGINE (10 STRATEGIES) ==========
 def check_strategies(pair, candle1, candle2, candle3, candle4, candle5, ema_20):
@@ -81,6 +96,7 @@ def check_strategies(pair, candle1, candle2, candle3, candle4, candle5, ema_20):
     if (candle1['close'] - candle1['open']) > (candle2['close'] - candle2['open']) * 1.5:
         signals.append(f"📈 BUY {pair} - Scalp (1 min)")
 
+    # Strategy 10: No-Trade Rule (not sent to Telegram)
     return signals
 
 # ========== POCKET OPTION WEBSOCKET ==========
@@ -88,27 +104,20 @@ class PocketOptionWebSocket:
     def __init__(self):
         self.url = "wss://ws.pocketoption.com/websocket"
         self.ws = None
-        self.candles = {}  # Store candles for each pair
-        self.ema_20 = {}   # Store EMA for each pair
+        self.candles = {}
+        self.ema_20 = {}
         self.session = PO_SESSION
         self.uid = PO_UID
         self.connected = False
         self.last_signal_time = 0
-        self.signal_cooldown = 60  # Seconds between signals
+        self.signal_cooldown = 60
 
     def generate_auth_payload(self):
-        payload = {
-            "event": "auth",
-            "session": self.session,
-            "uid": self.uid
-        }
-        return json.dumps(payload)
+        return json.dumps({"event": "auth", "session": self.session, "uid": self.uid})
 
     def on_message(self, ws, message):
         try:
             data = json.loads(message)
-            
-            # Check if it's a candle update
             if 'candle' in data and 'pair' in data:
                 pair = data['pair']
                 candle = {
@@ -117,49 +126,33 @@ class PocketOptionWebSocket:
                     'low': data['candle']['low'],
                     'close': data['candle']['close']
                 }
-                
-                # Initialize storage for this pair
                 if pair not in self.candles:
                     self.candles[pair] = []
                     self.ema_20[pair] = 0
-                
-                # Store last 5 candles
                 self.candles[pair].append(candle)
                 if len(self.candles[pair]) > 5:
                     self.candles[pair].pop(0)
-                
-                # Calculate EMA 20 (simplified)
                 if len(self.candles[pair]) >= 5:
-                    self.ema_20[pair] = sum([c['close'] for c in self.candles[pair]]) / len(self.candles[pair])
-                    
-                    # Run strategies for this pair
-                    if len(self.candles[pair]) >= 5:
-                        signals = check_strategies(
-                            pair,
-                            self.candles[pair][-1],  # candle 1 (most recent)
-                            self.candles[pair][-2],  # candle 2
-                            self.candles[pair][-3],  # candle 3
-                            self.candles[pair][-4],  # candle 4
-                            self.candles[pair][-5],  # candle 5
-                            self.ema_20[pair]
-                        )
-                        
-                        # Send ONLY THE FIRST SIGNAL (one per cycle)
-                        if signals:
-                            signal = signals[0]  # Take only the first one
-                            current_time = time.time()
-                            
-                            # Cooldown check
-                            if current_time - self.last_signal_time >= self.signal_cooldown:
-                                print(f"🔔 {signal}")
-                                send_telegram(f"🔔 {signal}")
-                                self.last_signal_time = current_time
-            
-            # Handle connection confirmation
+                    self.ema_20[pair] = sum(c['close'] for c in self.candles[pair]) / len(self.candles[pair])
+                    signals = check_strategies(
+                        pair,
+                        self.candles[pair][-1],
+                        self.candles[pair][-2],
+                        self.candles[pair][-3],
+                        self.candles[pair][-4],
+                        self.candles[pair][-5],
+                        self.ema_20[pair]
+                    )
+                    if signals:
+                        signal = signals[0]
+                        current_time = time.time()
+                        if current_time - self.last_signal_time >= self.signal_cooldown:
+                            print(f"🔔 {signal}")
+                            send_telegram(f"🔔 {signal}")
+                            self.last_signal_time = current_time
             elif 'status' in data and data['status'] == 'connected':
                 print("✅ Connected and authenticated")
                 self.connected = True
-                
         except Exception as e:
             print("Error processing message:", e)
 
@@ -175,20 +168,12 @@ class PocketOptionWebSocket:
 
     def on_open(self, ws):
         print("✅ WebSocket connected")
-        # Send authentication
-        auth_payload = self.generate_auth_payload()
-        ws.send(auth_payload)
+        ws.send(self.generate_auth_payload())
         print("🔐 Authentication sent...")
-        
-        # Subscribe to ALL OTC pairs
         for pair in OTC_PAIRS:
-            subscribe_msg = {
-                "event": "subscribe",
-                "pair": pair
-            }
-            ws.send(json.dumps(subscribe_msg))
+            ws.send(json.dumps({"event": "subscribe", "pair": pair}))
             print(f"📡 Subscribed to {pair}")
-            time.sleep(0.1)  # Small delay to avoid flooding
+            time.sleep(0.1)
 
     def connect(self):
         websocket.enableTrace(False)
@@ -212,6 +197,11 @@ if __name__ == "__main__":
     print(f"📊 Scanning {len(OTC_PAIRS)} OTC pairs")
     print("⏱️  One signal every 60 seconds max")
     print("=" * 50)
-    
+
+    # Start Flask in a background thread (keeps Render alive)
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.start()
+
+    # Start the WebSocket bot
     bot = PocketOptionWebSocket()
     bot.connect()
