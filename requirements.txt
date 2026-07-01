@@ -1,4 +1,4 @@
 requests
 flask
 websocket-client
-pocket-option
+pocket-option==0.1.0
