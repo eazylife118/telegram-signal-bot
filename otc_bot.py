@@ -449,6 +449,16 @@ Strategy: {reason}
 # MAIN BOT LOOP
 # ==========================================
 def run_bot():
+    # === DIRECT TELEGRAM TEST (INDEPENDENT) ===
+    try:
+        import requests
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        response = requests.post(url, data={"chat_id": CHAT_ID, "text": "✅ DIRECT TEST: Telegram is working!"})
+        print(f"Direct test response: {response.text}")
+    except Exception as e:
+        print(f"❌ Direct test failed: {e}")
+    # === END DIRECT TEST ===
+
     CHECK_INTERVAL = 4
     print(f"🤖 Bot started. TEST MODE — Sending test signals every 30 seconds.")
     
@@ -456,11 +466,12 @@ def run_bot():
         try:
             # === FORCE TEST SIGNAL EVERY 30 SECONDS ===
             if int(time.time()) % 30 == 0:
-                # Send a test signal using a dummy pair
                 send_signal("EURUSD-OTC", "BUY", "🧪 TEST SIGNAL - IGNORE")
                 print("✅ Test signal sent to Telegram")
                 time.sleep(2)
             # === END TEST ===
+            
+            # ... (rest of your code)
             
             # Still try to get real prices and signals
             all_prices = get_all_prices()
