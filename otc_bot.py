@@ -449,49 +449,39 @@ Strategy: {reason}
 # MAIN BOT LOOP
 # ==========================================
 def run_bot():
-    # === DIRECT TELEGRAM TEST (INDEPENDENT) ===
-    try:
-        import requests
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        response = requests.post(url, data={"chat_id": CHAT_ID, "text": "✅ DIRECT TEST: Telegram is working!"})
-        print(f"Direct test response: {response.text}")
-    except Exception as e:
-        print(f"❌ Direct test failed: {e}")
-    # === END DIRECT TEST ===
-
-    CHECK_INTERVAL = 4
-    print(f"🤖 Bot started. TEST MODE — Sending test signals every 30 seconds.")
+    print("🤖 Bot started. SIMPLE TEST MODE — Sending signal every 10 seconds.")
     
+    counter = 0
     while True:
         try:
-            # === FORCE TEST SIGNAL EVERY 30 SECONDS ===
-            if int(time.time()) % 30 == 0:
-                send_signal("EURUSD-OTC", "BUY", "🧪 TEST SIGNAL - IGNORE")
-                print("✅ Test signal sent to Telegram")
-                time.sleep(2)
-            # === END TEST ===
+            counter += 1
+            # Send a test signal every 10 seconds
+            if counter % 2 == 0:  # Every 2 loops (10 seconds)
+                message = f"""
+🚨 TEST SIGNAL #{counter}
+
+OTC Pair: EURUSD-OTC
+Direction: 🟢 BUY (TEST)
+
+⏰ Signal Time: {time.strftime('%H:%M:%S')}
+🎯 Entry Time: {time.strftime('%H:%M:%S', time.localtime(time.time() + 120))}
+Expiry: 2 Min
+
+Strength: 100% 🔥
+Strategy: ✅ SIMPLE TEST - IGNORE
+"""
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+                try:
+                    requests.post(url, data={"chat_id": CHAT_ID, "text": message})
+                    print(f"✅ Test signal #{counter} sent to Telegram")
+                except Exception as e:
+                    print(f"❌ Send error: {e}")
             
-            # ... (rest of your code)
-            
-            # Still try to get real prices and signals
-            all_prices = get_all_prices()
-            if all_prices:
-                for pair, price in all_prices.items():
-                    direction, reason = get_combined_signal(pair, price)
-                    if direction is not None and reason is not None:
-                        send_signal(pair, direction, reason)
-                        time.sleep(2)
-            
-            time.sleep(CHECK_INTERVAL)
+            time.sleep(5)  # Check every 5 seconds
 
         except Exception as e:
             print(f"❌ Main loop error: {e}")
-            time.sleep(CHECK_INTERVAL)
-
-        except Exception as e:
-            print(f"❌ Main loop error: {e}")
-            time.sleep(CHECK_INTERVAL)
-
+            time.sleep(5)
 # ==========================================
 # FLASK KEEP-ALIVE
 # ==========================================
