@@ -1,5 +1,5 @@
 requests
 yfinance
 flask
-pocket-option
+pocketoption
 websocket-client
