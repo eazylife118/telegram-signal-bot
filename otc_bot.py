@@ -139,7 +139,7 @@ def check_strategies(pair, candle1, candle2, candle3, candle4, candle5, ema_20):
 # ========== POCKET OPTION WEBSOCKET ==========
 class PocketOptionWebSocket:
     def __init__(self):
-        self.url = "wss://45.155.205.233/websocket"
+        self.url = "wss://ws.pocketoption.com/websocket?type=otc"
         self.ws = None
         self.candles = {}
         self.ema_20 = {}
