@@ -18,12 +18,12 @@ TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
 CHAT_ID = "6280535707"
 
 # ==========================================
-# CACHED PAIR (for millisecond response after first detection)
+# CACHED PAIR
 # ==========================================
 CACHED_PAIR = None
 
 # ==========================================
-# TIME ZONE
+# TIME ZONE (UTC+1)
 # ==========================================
 LOCAL_TZ = timezone(timedelta(hours=1))
 
@@ -43,7 +43,6 @@ def get_entry2_time(entry1_time):
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # Open and resize to 400px (fastest)
         img = Image.open(image_path)
         width, height = img.size
         if width > 400:
@@ -51,16 +50,13 @@ def detect_pair_from_image(image_path):
             new_size = (400, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
-        # Grayscale + crop top 12%
         img = img.convert('L')
         crop_height = int(img.height * 0.12)
         cropped_img = img.crop((0, 0, img.width, crop_height))
 
-        # OCR
         custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
 
-        # Match patterns
         match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
         if match:
             return match.group(1)
@@ -75,7 +71,7 @@ def detect_pair_from_image(image_path):
     return None
 
 # ==========================================
-# FLASK WEB SERVER (for Render)
+# FLASK WEB SERVER
 # ==========================================
 app = Flask(__name__)
 
@@ -94,7 +90,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
 # ==========================================
-# 10 STRATEGIES (OPTIMIZED)
+# 10 STRATEGIES
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -172,14 +168,13 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_na
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot — I'll detect the pair and give you a signal in ≤ 1 second."
+        "Send a screenshot — I'll detect the pair and give you a signal in ≤ 2.5 seconds."
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global CACHED_PAIR
 
     try:
-        # Start timer
         start_time = time.time()
 
         # Acknowledge
