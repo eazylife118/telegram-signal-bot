@@ -7,7 +7,7 @@ import requests
 import numpy as np
 import pytesseract
 from PIL import Image
-from flask import Flask, request
+from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timezone, timedelta
@@ -49,7 +49,7 @@ def detect_pair_from_image(image_path):
     return "CAD/JPY OTC"  # fallback
 
 # ==========================================
-# FLASK WEB SERVER
+# FLASK WEB SERVER (for Render health checks)
 # ==========================================
 app = Flask(__name__)
 
@@ -186,15 +186,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 # ==========================================
-# START BOT
+# START BOT (CORRECTED)
 # ==========================================
-async def run_telegram():
+def run_telegram():
     application = Application.builder().token(TOKEN).build()
-    await application.bot.delete_webhook()  # Force clear any old webhook
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    await application.run_polling()
+    application.run_polling()
 
+# ==========================================
+# MAIN ENTRY POINT
+# ==========================================
 if __name__ == "__main__":
-    threading.Thread(target=run_flask).start()
-    asyncio.run(run_telegram())
+    # Start Flask in a separate thread (for Render health checks)
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.start()
+    print("✅ Flask server started.")
+
+    # Run Telegram bot in the main thread (simpler event loop)
+    print("✅ Starting Telegram bot...")
+    run_telegram()
