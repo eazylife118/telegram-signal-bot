@@ -34,29 +34,31 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FAST OCR (400px, top 10%, no enhancement)
+# FAST OCR (600px, top 12%, no enhancement)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # Open and resize to 400px (very fast)
+        # Open and resize to 600px (fast + accurate)
         img = Image.open(image_path)
         width, height = img.size
-        if width > 400:
-            ratio = 400 / width
-            new_size = (400, int(height * ratio))
+        if width > 600:
+            ratio = 600 / width
+            new_size = (600, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
-        # Convert to grayscale (fast)
+        # Convert to grayscale
         img = img.convert('L')
 
-        # Crop to top 10% (where the pair is)
+        # Crop to top 12% (where the pair is)
         width, height = img.size
-        crop_box = (0, 0, width, int(height * 0.10))
+        crop_box = (0, 0, width, int(height * 0.12))
         cropped_img = img.crop(crop_box)
 
         # Fast OCR (single word mode)
         custom_config = r'--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
+
+        print("🔍 OCR Raw Text:", text)  # Debug
 
         # Look for pattern like "AUD/CAD OTC"
         match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
@@ -73,7 +75,7 @@ def detect_pair_from_image(image_path):
     return None  # Return None if not found
 
 # ==========================================
-# FLASK WEB SERVER (MINIMAL)
+# FLASK WEB SERVER
 # ==========================================
 app = Flask(__name__)
 
