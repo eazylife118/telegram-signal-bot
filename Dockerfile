@@ -1,8 +1,12 @@
 # Use the official Python image
 FROM python:3.10-slim
 
-# Install Tesseract OCR (required for pair recognition)
-RUN apt-get update && apt-get install -y tesseract-ocr
+# Install Tesseract OCR (system-level)
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    libtesseract-dev \
+    libleptonica-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
