@@ -5,7 +5,7 @@ import threading
 import requests
 import numpy as np
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -34,28 +34,29 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FAST OCR — BIGGER VALUES
+# OCR WITH HIGH CONTRAST, SMALL IMAGE
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # --- BIGGER VALUES ---
-        TARGET_WIDTH = 1600     # Much bigger = clearer text
-        CROP_PERCENT = 0.40     # 40% = very safe area
-        # --------------------------------
-
+        # Small image = fast
         img = Image.open(image_path)
         width, height = img.size
-        if width > TARGET_WIDTH:
-            ratio = TARGET_WIDTH / width
-            new_size = (TARGET_WIDTH, int(height * ratio))
+        if width > 600:
+            ratio = 600 / width
+            new_size = (600, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
+        # High contrast = clear text
         img = img.convert('L')
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(2.5)
 
+        # Small crop = fast
         width, height = img.size
-        crop_box = (0, 0, width, int(height * CROP_PERCENT))
+        crop_box = (0, 0, width, int(height * 0.12))
         cropped_img = img.crop(crop_box)
 
+        # Fast OCR mode
         custom_config = r'--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
 
@@ -209,7 +210,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   → Direction: {direction}\n"
         response += f"   → Confidence: {confidence}%\n"
         response += f"   → Expiry: {expiry_1} min\n\n"
-        response += f"📈 **Entry 2:\n"
+        response += f"📈 **Entry 2:**\n"
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
