@@ -34,13 +34,13 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FAST OCR — INCREASED BOTH
+# FAST OCR — BIGGER VALUES
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # --- INCREASED VALUES ---
-        TARGET_WIDTH = 1400     # Bigger = clearer text
-        CROP_PERCENT = 0.35     # 35% = safe area
+        # --- BIGGER VALUES ---
+        TARGET_WIDTH = 1600     # Much bigger = clearer text
+        CROP_PERCENT = 0.40     # 40% = very safe area
         # --------------------------------
 
         img = Image.open(image_path)
@@ -209,7 +209,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   → Direction: {direction}\n"
         response += f"   → Confidence: {confidence}%\n"
         response += f"   → Expiry: {expiry_1} min\n\n"
-        response += f"📈 **Entry 2:**\n"
+        response += f"📈 **Entry 2:\n"
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
