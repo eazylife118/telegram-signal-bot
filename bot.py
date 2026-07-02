@@ -50,7 +50,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
 # ==========================================
-# INDICATORS (LIGHTWEIGHT)
+# INDICATORS
 # ==========================================
 def calculate_rsi(data, period=14):
     if len(data) < period + 1:
@@ -260,7 +260,6 @@ def run_strategies(price_data):
             close[-1] > open_[-2] and open_[-1] < close_[-2]):
             add_signal("Bearish Harami", "SELL", 80, 2, 3)
 
-    # --- Filter: Minimum confidence 70% ---
     return [(name, dir, conf, e1, e2) for name, dir, conf, e1, e2 in results if conf >= 70]
 
 # ==========================================
@@ -289,18 +288,10 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
 # TELEGRAM BOT HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot — I'll give you a signal.\n\n"
-        "✅ 20 price-action strategies\n"
-        "✅ Indicators confirm (2–4 agree = boost)\n"
-        "✅ Minimum confidence: 70%"
-    )
+    await update.message.reply_text("📊 Send a screenshot of your OTC chart — I'll give you a signal.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        start_time = time.time()
-
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
@@ -333,9 +324,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
         await update.message.reply_text(response)
-
-        elapsed = time.time() - start_time
-        print(f"✅ Signal sent in {elapsed:.2f} seconds")
 
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
