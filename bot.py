@@ -34,13 +34,13 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FAST OCR — INCREASED AGAIN
+# FAST OCR — INCREASED BOTH
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
         # --- INCREASED VALUES ---
-        TARGET_WIDTH = 1200     # Maximum clarity
-        CROP_PERCENT = 0.22     # Maximum area
+        TARGET_WIDTH = 1400     # Bigger = clearer text
+        CROP_PERCENT = 0.35     # 35% = safe area
         # --------------------------------
 
         img = Image.open(image_path)
