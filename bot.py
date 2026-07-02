@@ -18,7 +18,7 @@ TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
 CHAT_ID = "6280535707"
 
 # ==========================================
-# CACHED PAIR (for millisecond response after first detection)
+# CACHED PAIR
 # ==========================================
 CACHED_PAIR = None
 
@@ -39,48 +39,37 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# RELIABLE OCR (2 seconds max)
+# FOCUSED OCR (top 8% — pair area only)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # Open image
         img = Image.open(image_path)
         width, height = img.size
 
-        # Resize to 600px (balance speed + accuracy)
-        if width > 600:
-            ratio = 600 / width
-            new_size = (600, int(height * ratio))
+        if width > 1200:
+            ratio = 1200 / width
+            new_size = (1200, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
-        # Convert to grayscale and enhance contrast
         img = img.convert('L')
         enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(1.5)
+        img = enhancer.enhance(2.5)
 
-        # Crop to top 15% (where the pair name is)
-        crop_height = int(img.height * 0.15)
+        crop_height = int(img.height * 0.08)
         cropped_img = img.crop((0, 0, img.width, crop_height))
 
-        # OCR with flexible config
         custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
 
-        # Try multiple patterns
-        patterns = [
-            r'([A-Z]{3}/[A-Z]{3}\s+OTC)',
-            r'([A-Z]{3}\s*/\s*[A-Z]{3})',
-            r'([A-Z]{3})[/\s]+([A-Z]{3})',
-        ]
+        print("🔍 OCR Raw Text (pair area):", text)
 
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                if '/' in match.group(1):
-                    pair = match.group(1).strip()
-                else:
-                    pair = match.group(1).strip() + "/" + match.group(2).strip()
-                return pair + " OTC"
+        match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
+        if match:
+            return match.group(1)
+
+        match = re.search(r'([A-Z]{3}\s*/\s*[A-Z]{3})', text)
+        if match:
+            return match.group(1).replace(" ", "") + " OTC"
 
     except Exception as e:
         print("OCR error:", e)
@@ -185,7 +174,7 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_na
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot — I'll detect the pair and give you a signal in ≤ 3.5 seconds."
+        "Send a screenshot — I'll detect the pair and give you a signal."
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -194,14 +183,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         start_time = time.time()
 
-        # Acknowledge
         await update.message.reply_text("⏳ Analyzing...")
 
-        # Download photo
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # Detect pair (use cache if available)
         pair_name = CACHED_PAIR
         if not pair_name:
             pair_name = detect_pair_from_image("screenshot.png")
@@ -213,7 +199,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-        # Price data (placeholder)
         price_data = {
             'open': np.random.randn(30) + 1.12,
             'high': np.random.randn(30) + 1.13,
@@ -221,19 +206,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'close': np.random.randn(30) + 1.12
         }
 
-        # Run strategies
         results = run_strategies(price_data)
 
         if not results:
             await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
             return
 
-        # Get best strategy
         best = max(results, key=lambda x: x[2])
         strategy, direction, confidence, expiry_1, expiry_2 = best
         prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_name)
 
-        # Build response
         response = f"📊 **OTC SIGNAL**\n\n"
         response += f"🔍 **Pair:** {prediction['pair']}\n\n"
         response += f"📈 **Entry 1:**\n"
@@ -246,10 +228,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
-        # Send response
         await update.message.reply_text(response)
 
-        # Log speed
         elapsed = time.time() - start_time
         print(f"✅ Signal sent in {elapsed:.2f} seconds")
 
@@ -276,7 +256,7 @@ async def set_pair(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
-    application.bot.delete_webhook()  # Force clear any old webhook
+    application.bot.delete_webhook()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("setpair", set_pair))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
