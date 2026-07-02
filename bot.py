@@ -39,36 +39,31 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FOCUSED OCR (top 12% — pair area only)
+# OCR WITH PAIR DETECTION (SLOW BUT WORKS)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
         img = Image.open(image_path)
         width, height = img.size
 
-        # Resize to 1200px (clearer text)
-        if width > 1200:
-            ratio = 1200 / width
-            new_size = (1200, int(height * ratio))
+        if width > 800:
+            ratio = 800 / width
+            new_size = (800, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
-        # Convert to grayscale, sharpen, contrast
         img = img.convert('L')
         img = img.filter(ImageFilter.SHARPEN)
         enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(2.5)
+        img = enhancer.enhance(2.0)
 
-        # Crop to top 12% (pair name area)
-        crop_height = int(img.height * 0.12)
+        crop_height = int(img.height * 0.15)
         cropped_img = img.crop((0, 0, img.width, crop_height))
 
-        # OCR
         custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
 
-        print("🔍 OCR Raw Text (pair area):", text)
+        print("🔍 OCR Raw Text:", text)
 
-        # Match patterns
         patterns = [
             r'([A-Z]{3}/[A-Z]{3}\s+OTC)',
             r'([A-Z]{3}\s*/\s*[A-Z]{3})',
