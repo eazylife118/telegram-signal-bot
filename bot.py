@@ -34,33 +34,33 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FAST OCR (600px, top 12%, no enhancement)
+# FAST OCR (ADJUST THESE TWO VALUES)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # Open and resize to 600px (fast + accurate)
+        # --- ADJUST THESE TWO VALUES ---
+        TARGET_WIDTH = 700      # Try: 600, 700, 800
+        CROP_PERCENT = 0.13     # Try: 0.10, 0.12, 0.13, 0.15
+        # --------------------------------
+
         img = Image.open(image_path)
         width, height = img.size
-        if width > 600:
-            ratio = 600 / width
-            new_size = (600, int(height * ratio))
+        if width > TARGET_WIDTH:
+            ratio = TARGET_WIDTH / width
+            new_size = (TARGET_WIDTH, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
-        # Convert to grayscale
         img = img.convert('L')
 
-        # Crop to top 12% (where the pair is)
         width, height = img.size
-        crop_box = (0, 0, width, int(height * 0.12))
+        crop_box = (0, 0, width, int(height * CROP_PERCENT))
         cropped_img = img.crop(crop_box)
 
-        # Fast OCR (single word mode)
         custom_config = r'--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
 
-        print("🔍 OCR Raw Text:", text)  # Debug
+        print("🔍 OCR Raw Text:", text)
 
-        # Look for pattern like "AUD/CAD OTC"
         match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
         if match:
             return match.group(1)
@@ -180,12 +180,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # Fast pair detection
         pair_name = detect_pair_from_image("screenshot.png")
         if not pair_name:
             pair_name = "AUD/CAD OTC"  # fallback
 
-        # Price data (placeholder)
         price_data = {
             'open': np.random.randn(30) + 1.12,
             'high': np.random.randn(30) + 1.13,
