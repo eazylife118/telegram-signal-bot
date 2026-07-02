@@ -21,16 +21,18 @@ LOCAL_TZ = timezone(timedelta(hours=1))
 
 def get_next_minute():
     now = datetime.now(LOCAL_TZ)
-    # Round up to the next full minute
-    next_minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    # If seconds > 0, round up to the next full minute
+    if now.second > 0 or now.microsecond > 0:
+        next_minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    else:
+        next_minute = now.replace(second=0, microsecond=0)
     return next_minute.strftime("%H:%M:%S")
 
 def get_entry2_time(entry1_time):
-    # Entry 2 is exactly 1 minute after Entry 1
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FLASK WEB SERVER (KEEPS RENDER ALIVE)
+# FLASK WEB SERVER
 # ==========================================
 app = Flask(__name__)
 
@@ -46,7 +48,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000)
 
 # ==========================================
-# 10 STRATEGIES (OTC OPTIMIZED)
+# 10 STRATEGIES
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -55,49 +57,40 @@ def run_strategies(price_data):
     high = np.array(price_data['high'])
     low = np.array(price_data['low'])
 
-    # Strategy 1: Candle Reversal Pattern
     if len(close) >= 3:
         if (close[-3:] > open_[-3:]).all() and (close[-1] < open_[-1]):
             results.append(("Candle Reversal Pattern", "SELL", 86, 2))
 
-    # Strategy 2: 3-Candle Momentum
     if len(close) >= 3:
         if (close[-3:] > open_[-3:]).all():
             results.append(("3-Candle Momentum", "BUY", 82, 1))
 
-    # Strategy 3: 2-Minute Reset
     if len(close) >= 3:
         if (close[-3:] < open_[-3:]).all():
             results.append(("2-Minute Reset", "SELL", 78, 2))
 
-    # Strategy 4: Double Touch
     if len(close) >= 10:
         if abs(low[-1] - low[-3]) < 0.0002:
             results.append(("Double Touch", "BUY", 89, 3))
 
-    # Strategy 5: Spike Rejection
     if len(close) >= 2:
         if (high[-1] - high[-2]) > 0.001 and (close[-1] < open_[-1]):
             results.append(("Spike Rejection", "SELL", 74, 2))
 
-    # Strategy 6: Consolidation Break
     if len(close) >= 10:
         high_range = max(high[-10:]) - min(low[-10:])
         if high_range < 0.0005:
             results.append(("Consolidation Break", "BUY", 71, 3))
 
-    # Strategy 7: EMA Pullback
     if len(close) >= 20:
         ema_20 = np.mean(close[-20:])
         if low[-1] < ema_20 and close[-1] > ema_20:
             results.append(("EMA Pullback", "BUY", 80, 2))
 
-    # Strategy 8: Bull/Bear Confirmation
     if len(close) >= 2:
         if close[-1] > open_[-1] and close[-2] > open_[-2]:
             results.append(("Bull/Bear Confirmation", "BUY", 76, 1))
 
-    # Strategy 9: 60-Second Scalp
     if len(close) >= 2:
         if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5:
             results.append(("60-Second Scalp", "BUY", 72, 1))
