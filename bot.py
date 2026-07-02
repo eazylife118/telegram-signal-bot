@@ -1,6 +1,8 @@
 import os
 import re
 import time
+import asyncio
+import threading
 import requests
 import numpy as np
 import pytesseract
@@ -186,14 +188,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 # START BOT
 # ==========================================
-def run_telegram():
+async def run_telegram():
     application = Application.builder().token(TOKEN).build()
-    application.bot.delete_webhook()  # Force clear any old webhook
+    await application.bot.delete_webhook()  # Force clear any old webhook
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.run_polling()
+    await application.run_polling()
 
 if __name__ == "__main__":
-    import threading
     threading.Thread(target=run_flask).start()
-    run_telegram()
+    asyncio.run(run_telegram())
