@@ -6,12 +6,21 @@ import numpy as np
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from datetime import datetime, timezone, timedelta
 
 # ==========================================
-# TELEGRAM CREDENTIALS (YOUR NEW BOT)
+# TELEGRAM CREDENTIALS
 # ==========================================
 TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
 CHAT_ID = "6280535707"
+
+# ==========================================
+# NIGERIA TIME (UTC+1)
+# ==========================================
+NIGERIA_TZ = timezone(timedelta(hours=1))
+
+def get_nigeria_time():
+    return datetime.now(NIGERIA_TZ).strftime("%H:%M:%S")
 
 # ==========================================
 # FLASK WEB SERVER (KEEPS RENDER ALIVE)
@@ -91,36 +100,39 @@ def run_strategies(price_data):
 # ==========================================
 # PREDICTION ENGINE
 # ==========================================
-def predict_entries(strategy, direction, confidence, expiry):
-    now = time.localtime()
-    entry1_time = time.strftime("%H:%M:%S", time.localtime(time.time() + 60))
-    entry2_time = time.strftime("%H:%M:%S", time.localtime(time.time() + 120))
+def predict_entries(strategy, direction, confidence, expiry, pair_name="CAD/JPY OTC"):
+    entry1_time = get_nigeria_time()
+    entry2_time = (datetime.now(NIGERIA_TZ) + timedelta(minutes=1)).strftime("%H:%M:%S")
 
     if direction == "BUY":
-        entry1_dir = "BUY"
-        entry2_dir = "BUY"
+        entry1_dir = "🟢 BUY"
+        entry2_dir = "🟢 BUY"
     else:
-        entry1_dir = "SELL"
-        entry2_dir = "SELL"
+        entry1_dir = "🔴 SELL"
+        entry2_dir = "🔴 SELL"
+
+    entry2_conf = max(confidence - 10, 50)
 
     if expiry >= 3:
         return {
+            "pair": pair_name,
             "strategy": strategy,
             "entry1": {"time": entry1_time, "dir": entry1_dir, "conf": confidence, "expiry": expiry},
             "entry2": None
         }
     else:
         return {
+            "pair": pair_name,
             "strategy": strategy,
             "entry1": {"time": entry1_time, "dir": entry1_dir, "conf": confidence, "expiry": expiry},
-            "entry2": {"time": entry2_time, "dir": entry2_dir, "conf": confidence - 10, "expiry": expiry + 1}
+            "entry2": {"time": entry2_time, "dir": entry2_dir, "conf": entry2_conf, "expiry": expiry + 1}
         }
 
 # ==========================================
 # TELEGRAM BOT HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 Send a screenshot of your OTC chart and I'll analyze it.")
+    await update.message.reply_text("📊 Send one or more screenshots of your OTC chart and I'll analyze each one.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -143,17 +155,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         best = max(results, key=lambda x: x[2])
         strategy, direction, confidence, expiry = best
-        prediction = predict_entries(strategy, direction, confidence, expiry)
+        pair_name = "CAD/JPY OTC"  # Replace with actual pair from OCR
+        prediction = predict_entries(strategy, direction, confidence, expiry, pair_name)
 
         response = f"📊 **OTC SIGNAL**\n\n"
-        response += f"🔍 Strategy: {strategy}\n"
+        response += f"🔍 **Pair:** {prediction['pair']}\n\n"
+        response += f"📈 **Entry 1:**\n"
+        response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
+        response += f"🔍 **Strategy:** {strategy}\n"
         response += f"   → Direction: {direction}\n"
         response += f"   → Confidence: {confidence}%\n"
         response += f"   → Expiry: {expiry} min\n\n"
-        response += f"📈 **Entries:**\n"
-        response += f"   - Entry 1: {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min)\n"
         if prediction['entry2']:
-            response += f"   - Entry 2: {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min)\n"
+            response += f"📈 **Entry 2:**\n"
+            response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
+        else:
+            response += f"📈 **Entry 2:**\n"
+            response += f"   No second entry — strategy ends at {expiry} min.\n"
 
         await update.message.reply_text(response)
 
