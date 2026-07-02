@@ -4,4 +4,3 @@ requests
 numpy
 pytesseract
 Pillow
-tesseract
