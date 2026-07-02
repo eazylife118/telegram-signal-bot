@@ -127,13 +127,12 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot — I'll analyze it and give you a signal."
+        "Send a screenshot — I'll give you a signal."
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         start_time = time.time()
-        await update.message.reply_text("⏳ Analyzing...")
 
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
