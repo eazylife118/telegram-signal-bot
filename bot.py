@@ -39,8 +39,8 @@ def get_entry2_time(entry1_time):
 def detect_pair_from_image(image_path):
     try:
         # --- INCREASED VALUES ---
-        TARGET_WIDTH = 800      # More clarity
-        CROP_PERCENT = 0.15     # More area
+        TARGET_WIDTH = 900      # More clarity
+        CROP_PERCENT = 0.17     # More area
         # --------------------------------
 
         img = Image.open(image_path)
