@@ -34,29 +34,25 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# OCR WITH HIGH CONTRAST, SMALL IMAGE
+# FASTER VERSION (800px, 15% crop, contrast 1.5, psm 8)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # Small image = fast
         img = Image.open(image_path)
         width, height = img.size
-        if width > 600:
-            ratio = 600 / width
-            new_size = (600, int(height * ratio))
+        if width > 800:
+            ratio = 800 / width
+            new_size = (800, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
-        # High contrast = clear text
         img = img.convert('L')
         enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(2.5)
+        img = enhancer.enhance(1.5)
 
-        # Small crop = fast
         width, height = img.size
-        crop_box = (0, 0, width, int(height * 0.12))
+        crop_box = (0, 0, width, int(height * 0.15))
         cropped_img = img.crop(crop_box)
 
-        # Fast OCR mode
         custom_config = r'--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
 
