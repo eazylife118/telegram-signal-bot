@@ -5,7 +5,8 @@ import threading
 import requests
 import numpy as np
 import pytesseract
-from PIL import Image, ImageEnhance
+import easyocr
+from PIL import Image, ImageEnhance, ImageFilter
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -21,6 +22,7 @@ CHAT_ID = "6280535707"
 # CACHED PAIR
 # ==========================================
 CACHED_PAIR = None
+reader = easyocr.Reader(['en'])  # EasyOCR reader
 
 # ==========================================
 # TIME ZONE
@@ -39,37 +41,63 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FOCUSED OCR (top 8% — pair area only)
+# DUAL OCR: Tesseract + EasyOCR Fallback
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
+        # Open and preprocess image
         img = Image.open(image_path)
         width, height = img.size
 
+        # Resize to 1200px
         if width > 1200:
             ratio = 1200 / width
             new_size = (1200, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
+        # Convert to grayscale, sharpen, contrast
         img = img.convert('L')
+        img = img.filter(ImageFilter.SHARPEN)
         enhancer = ImageEnhance.Contrast(img)
         img = enhancer.enhance(2.5)
 
-        crop_height = int(img.height * 0.08)
+        # Crop to top 20% (where pair is)
+        crop_height = int(img.height * 0.20)
         cropped_img = img.crop((0, 0, img.width, crop_height))
 
+        # ---- TRY TESSERACT FIRST ----
         custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
+        print("🔍 Tesseract OCR:", text)
 
-        print("🔍 OCR Raw Text (pair area):", text)
+        # Try patterns
+        patterns = [
+            r'([A-Z]{3}/[A-Z]{3}\s+OTC)',
+            r'([A-Z]{3}\s*/\s*[A-Z]{3})',
+            r'([A-Z]{3})[/\s]+([A-Z]{3})',
+        ]
 
-        match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
-        if match:
-            return match.group(1)
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                if '/' in match.group(1):
+                    pair = match.group(1).strip()
+                else:
+                    pair = match.group(1).strip() + "/" + match.group(2).strip()
+                return pair + " OTC"
 
-        match = re.search(r'([A-Z]{3}\s*/\s*[A-Z]{3})', text)
-        if match:
-            return match.group(1).replace(" ", "") + " OTC"
+        # ---- IF TESSERACT FAILS, USE EASYOCR ----
+        print("🔍 Tesseract failed, trying EasyOCR...")
+        result = reader.readtext(np.array(cropped_img))
+        for (bbox, text, prob) in result:
+            for pattern in patterns:
+                match = re.search(pattern, text)
+                if match:
+                    if '/' in match.group(1):
+                        pair = match.group(1).strip()
+                    else:
+                        pair = match.group(1).strip() + "/" + match.group(2).strip()
+                    return pair + " OTC"
 
     except Exception as e:
         print("OCR error:", e)
@@ -182,7 +210,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         start_time = time.time()
-
         await update.message.reply_text("⏳ Analyzing...")
 
         photo = await update.message.photo[-1].get_file()
