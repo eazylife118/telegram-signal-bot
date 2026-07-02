@@ -39,45 +39,42 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# OCR WITH PAIR DETECTION (SLOW BUT WORKS)
+# WORKING OCR (SLOW BUT DETECTS PAIR)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
+        # Open and resize
         img = Image.open(image_path)
         width, height = img.size
-
         if width > 800:
             ratio = 800 / width
             new_size = (800, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
+        # Convert to grayscale and enhance
         img = img.convert('L')
         img = img.filter(ImageFilter.SHARPEN)
         enhancer = ImageEnhance.Contrast(img)
         img = enhancer.enhance(2.0)
 
+        # Crop to top 15% (where pair is)
         crop_height = int(img.height * 0.15)
         cropped_img = img.crop((0, 0, img.width, crop_height))
 
+        # OCR
         custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
 
-        print("🔍 OCR Raw Text:", text)
+        print("🔍 OCR Raw Text:", text)  # Debug
 
-        patterns = [
-            r'([A-Z]{3}/[A-Z]{3}\s+OTC)',
-            r'([A-Z]{3}\s*/\s*[A-Z]{3})',
-            r'([A-Z]{3})[/\s]+([A-Z]{3})',
-        ]
+        # Look for patterns
+        match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
+        if match:
+            return match.group(1)
 
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                if '/' in match.group(1):
-                    pair = match.group(1).strip()
-                else:
-                    pair = match.group(1).strip() + "/" + match.group(2).strip()
-                return pair + " OTC"
+        match = re.search(r'([A-Z]{3}\s*/\s*[A-Z]{3})', text)
+        if match:
+            return match.group(1).replace(" ", "") + " OTC"
 
     except Exception as e:
         print("OCR error:", e)
