@@ -146,7 +146,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # Auto-detect pair from screenshot
         pair_name = detect_pair_from_image("screenshot.png")
 
         # Placeholder price data — replace with actual OCR extraction
