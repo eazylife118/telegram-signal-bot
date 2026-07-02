@@ -260,7 +260,7 @@ def run_strategies(price_data):
             close[-1] > open_[-2] and open_[-1] < close_[-2]):
             add_signal("Bearish Harami", "SELL", 80, 2, 3)
 
-    return [(name, dir, conf, e1, e2) for name, dir, conf, e1, e2 in results if conf >= 70]
+    return [(name, direction, conf, e1, e2) for name, direction, conf, e1, e2 in results if conf >= 70]
 
 # ==========================================
 # PREDICTION ENGINE
