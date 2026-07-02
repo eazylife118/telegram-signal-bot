@@ -188,6 +188,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
+    application.bot.delete_webhook()  # Force clear any old webhook
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.run_polling()
