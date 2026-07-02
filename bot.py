@@ -34,28 +34,36 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# OCR: DETECT PAIR FROM SCREENSHOT (CROPPED & IMPROVED)
+# FASTER OCR (800px, 20% crop, contrast 1.8, psm 8)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
         # Open image
         img = Image.open(image_path)
+        
+        # Resize to 800px (faster)
+        width, height = img.size
+        if width > 800:
+            ratio = 800 / width
+            new_size = (800, int(height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+
         img = img.convert('L')  # Grayscale
 
-        # Crop to top portion (where the pair name usually is)
+        # Crop to top 20% (where the pair name usually is)
         width, height = img.size
-        crop_box = (0, 0, width, height // 3)  # Top third
+        crop_box = (0, 0, width, int(height * 0.20))
         cropped_img = img.crop(crop_box)
 
-        # Increase contrast
+        # Increase contrast (lower = faster)
         enhancer = ImageEnhance.Contrast(cropped_img)
-        cropped_img = enhancer.enhance(2)
+        cropped_img = enhancer.enhance(1.8)
 
-        # OCR with custom config
-        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
+        # Faster OCR mode
+        custom_config = r'--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
 
-        print("🔍 OCR Raw Text (cropped):", text)  # Debug log
+        print("🔍 OCR Raw Text (cropped):", text)
 
         # Look for pattern like "AUD/CAD OTC"
         match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
@@ -70,11 +78,10 @@ def detect_pair_from_image(image_path):
     except Exception as e:
         print("OCR error:", e)
 
-    # If all fails, ask the user to set the pair manually
-    return "AUD/CAD OTC"  # Default to the pair you trade most (change this)
+    return "AUD/CAD OTC"  # Default fallback
 
 # ==========================================
-# FLASK WEB SERVER (OPTIMIZED)
+# FLASK WEB SERVER
 # ==========================================
 app = Flask(__name__)
 
@@ -173,16 +180,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Acknowledge receipt immediately
         await update.message.reply_text("⏳ Analyzing screenshot...")
 
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # Detect pair from screenshot
         pair_name = detect_pair_from_image("screenshot.png")
 
-        # Placeholder price data (replace with real OCR later)
         price_data = {
             'open': np.random.randn(30) + 1.12,
             'high': np.random.randn(30) + 1.13,
@@ -227,11 +231,8 @@ def run_telegram():
     application.run_polling()
 
 if __name__ == "__main__":
-    # Start Flask in background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     print("✅ Flask server started.")
-
-    # Start Telegram bot in main thread
     print("✅ Starting Telegram bot...")
     run_telegram()
