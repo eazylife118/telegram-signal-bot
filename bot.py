@@ -1,12 +1,11 @@
 import os
 import re
 import time
-import asyncio
 import threading
 import requests
 import numpy as np
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -35,37 +34,66 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# OCR: DETECT PAIR FROM SCREENSHOT
+# OCR: DETECT PAIR FROM SCREENSHOT (CROPPED & IMPROVED)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
+        # Open image
         img = Image.open(image_path)
-        text = pytesseract.image_to_string(img)
+        img = img.convert('L')  # Grayscale
+
+        # Crop to top portion (where the pair name usually is)
+        width, height = img.size
+        crop_box = (0, 0, width, height // 3)  # Top third
+        cropped_img = img.crop(crop_box)
+
+        # Increase contrast
+        enhancer = ImageEnhance.Contrast(cropped_img)
+        cropped_img = enhancer.enhance(2)
+
+        # OCR with custom config
+        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
+        text = pytesseract.image_to_string(cropped_img, config=custom_config)
+
+        print("🔍 OCR Raw Text (cropped):", text)  # Debug log
+
+        # Look for pattern like "AUD/CAD OTC"
         match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
         if match:
             return match.group(1)
+
+        # Fallback: look for any pair pattern
+        match = re.search(r'([A-Z]{3}/[A-Z]{3})', text)
+        if match:
+            return match.group(1) + " OTC"
+
     except Exception as e:
         print("OCR error:", e)
-    return "CAD/JPY OTC"  # fallback
+
+    # If all fails, ask the user to set the pair manually
+    return "AUD/CAD OTC"  # Default to the pair you trade most (change this)
 
 # ==========================================
-# FLASK WEB SERVER (for Render health checks)
+# FLASK WEB SERVER (OPTIMIZED)
 # ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ OTC Screenshot Bot is running!"
+    return "✅ Bot is running!"
 
 @app.route('/ping')
 def ping():
     return "pong", 200
 
 def run_flask():
-    app.run(host='0.0.0.0', port=10000)
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
 # ==========================================
-# 10 STRATEGIES (BRAIN CONTROLS BOTH ENTRIES)
+# 10 STRATEGIES
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -117,7 +145,7 @@ def run_strategies(price_data):
 # ==========================================
 # PREDICTION ENGINE
 # ==========================================
-def predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_name="CAD/JPY OTC"):
+def predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_name="AUD/CAD OTC"):
     entry1_time = get_next_minute()
     entry2_time = get_entry2_time(entry1_time)
 
@@ -141,16 +169,20 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_na
 # TELEGRAM BOT HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 Send one or more screenshots of your OTC chart and I'll analyze each one.")
+    await update.message.reply_text("📊 Send a screenshot of your OTC chart and I'll analyze it.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        # Acknowledge receipt immediately
+        await update.message.reply_text("⏳ Analyzing screenshot...")
+
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
+        # Detect pair from screenshot
         pair_name = detect_pair_from_image("screenshot.png")
 
-        # Placeholder price data — replace with actual OCR extraction
+        # Placeholder price data (replace with real OCR later)
         price_data = {
             'open': np.random.randn(30) + 1.12,
             'high': np.random.randn(30) + 1.13,
@@ -186,7 +218,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 # ==========================================
-# START BOT (CORRECTED)
+# START BOT
 # ==========================================
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
@@ -194,15 +226,12 @@ def run_telegram():
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.run_polling()
 
-# ==========================================
-# MAIN ENTRY POINT
-# ==========================================
 if __name__ == "__main__":
-    # Start Flask in a separate thread (for Render health checks)
-    flask_thread = threading.Thread(target=run_flask)
+    # Start Flask in background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     print("✅ Flask server started.")
 
-    # Run Telegram bot in the main thread (simpler event loop)
+    # Start Telegram bot in main thread
     print("✅ Starting Telegram bot...")
     run_telegram()
