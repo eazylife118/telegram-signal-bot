@@ -7,6 +7,7 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timezone, timedelta
+from collections import deque
 
 # ==========================================
 # TELEGRAM CREDENTIALS
@@ -19,6 +20,33 @@ CHAT_ID = "6280535707"
 # ==========================================
 LOCAL_TZ = timezone(timedelta(hours=1))
 
+# ==========================================
+# STRATEGY HEALTH TRACKING
+# ==========================================
+strategy_history = {name: deque(maxlen=10) for name in [
+    "Candle Reversal Pattern", "3-Candle Momentum", "2-Minute Reset",
+    "Double Touch", "Spike Rejection", "Consolidation Break",
+    "EMA Pullback", "Bull/Bear Confirmation", "60-Second Scalp",
+    "RSI Divergence", "Bollinger Squeeze", "MACD Crossover",
+    "Support/Resistance Break", "MA Crossover"
+]}
+
+def get_strategy_health(strategy_name):
+    if strategy_name not in strategy_history:
+        return 50
+    history = strategy_history[strategy_name]
+    if len(history) == 0:
+        return 50
+    win_rate = sum(history) / len(history) * 100
+    return min(100, max(50, win_rate))
+
+def record_signal(strategy_name, win):
+    if strategy_name in strategy_history:
+        strategy_history[strategy_name].append(win)
+
+# ==========================================
+# TIME FUNCTIONS
+# ==========================================
 def get_next_minute():
     now = datetime.now(LOCAL_TZ)
     if now.second > 0 or now.microsecond > 0:
@@ -50,7 +78,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
 # ==========================================
-# 10 STRATEGIES
+# 14 STRATEGIES WITH FILTERS
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -58,46 +86,150 @@ def run_strategies(price_data):
     open_ = np.array(price_data['open'])
     high = np.array(price_data['high'])
     low = np.array(price_data['low'])
+    volume = np.array(price_data.get('volume', np.ones(len(close))))
 
+    def calculate_rsi(data, period=14):
+        if len(data) < period + 1:
+            return 50
+        deltas = np.diff(data)
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        avg_gain = np.mean(gains[-period:])
+        avg_loss = np.mean(losses[-period:])
+        if avg_loss == 0:
+            return 100
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
+
+    rsi = calculate_rsi(close)
+
+    def calculate_ema(data, period=20):
+        if len(data) < period:
+            return data[-1] if len(data) > 0 else 0
+        return np.mean(data[-period:])
+
+    ema20 = calculate_ema(close, 20)
+
+    # --- 1. Candle Reversal Pattern ---
     if len(close) >= 3:
-        if (close[-3:] > open_[-3:]).all() and (close[-1] < open_[-1]):
+        if (close[-3:] > open_[-3:]).all() and (close[-1] < open_[-1]) and rsi > 70:
             results.append(("Candle Reversal Pattern", "SELL", 86, 2, 3))
+        elif (close[-3:] < open_[-3:]).all() and (close[-1] > open_[-1]) and rsi < 30:
+            results.append(("Candle Reversal Pattern", "BUY", 86, 2, 3))
 
+    # --- 2. 3-Candle Momentum ---
     if len(close) >= 3:
-        if (close[-3:] > open_[-3:]).all():
+        if (close[-3:] > open_[-3:]).all() and volume[-1] > np.mean(volume[-5:]):
             results.append(("3-Candle Momentum", "BUY", 82, 1, 2))
+        elif (close[-3:] < open_[-3:]).all() and volume[-1] > np.mean(volume[-5:]):
+            results.append(("3-Candle Momentum", "SELL", 82, 1, 2))
 
+    # --- 3. 2-Minute Reset ---
     if len(close) >= 3:
-        if (close[-3:] < open_[-3:]).all():
+        if (close[-3:] < open_[-3:]).all() and close[-1] < ema20 * 0.98:
             results.append(("2-Minute Reset", "SELL", 78, 2, 3))
+        elif (close[-3:] > open_[-3:]).all() and close[-1] > ema20 * 1.02:
+            results.append(("2-Minute Reset", "BUY", 78, 2, 3))
 
+    # --- 4. Double Touch ---
     if len(close) >= 10:
-        if abs(low[-1] - low[-3]) < 0.0002:
+        if abs(low[-1] - low[-3]) < 0.0002 and close[-1] > max(close[-5:-1]):
             results.append(("Double Touch", "BUY", 89, 3, 4))
+        elif abs(high[-1] - high[-3]) < 0.0002 and close[-1] < min(close[-5:-1]):
+            results.append(("Double Touch", "SELL", 89, 3, 4))
 
+    # --- 5. Spike Rejection ---
     if len(close) >= 2:
-        if (high[-1] - high[-2]) > 0.001 and (close[-1] < open_[-1]):
+        avg_range = np.mean(high[-5:] - low[-5:])
+        if (high[-1] - high[-2]) > 2 * avg_range and (close[-1] < open_[-1]):
             results.append(("Spike Rejection", "SELL", 74, 2, 3))
+        elif (low[-2] - low[-1]) > 2 * avg_range and (close[-1] > open_[-1]):
+            results.append(("Spike Rejection", "BUY", 74, 2, 3))
 
+    # --- 6. Consolidation Break ---
     if len(close) >= 10:
         high_range = max(high[-10:]) - min(low[-10:])
-        if high_range < 0.0005:
+        if high_range < 0.0005 and (close[-1] - open_[-1]) > 0.0005:
             results.append(("Consolidation Break", "BUY", 71, 3, 4))
+        elif high_range < 0.0005 and (open_[-1] - close[-1]) > 0.0005:
+            results.append(("Consolidation Break", "SELL", 71, 3, 4))
 
+    # --- 7. EMA Pullback ---
     if len(close) >= 20:
-        ema_20 = np.mean(close[-20:])
-        if low[-1] < ema_20 and close[-1] > ema_20:
+        if low[-1] < ema20 and close[-1] > ema20 and rsi > 40:
             results.append(("EMA Pullback", "BUY", 80, 2, 3))
+        elif high[-1] > ema20 and close[-1] < ema20 and rsi < 60:
+            results.append(("EMA Pullback", "SELL", 80, 2, 3))
 
-    if len(close) >= 2:
-        if close[-1] > open_[-1] and close[-2] > open_[-2]:
+    # --- 8. Bull/Bear Confirmation ---
+    if len(close) >= 3:
+        if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3]):
             results.append(("Bull/Bear Confirmation", "BUY", 76, 1, 2))
+        elif (close[-1] < open_[-1] and close[-2] < open_[-2] and close[-3] < open_[-3]):
+            results.append(("Bull/Bear Confirmation", "SELL", 76, 1, 2))
 
+    # --- 9. 60-Second Scalp ---
     if len(close) >= 2:
-        if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5:
+        if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "BUY", 72, 1, 1))
+        elif (open_[-1] - close[-1]) > (open_[-2] - close[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
+            results.append(("60-Second Scalp", "SELL", 72, 1, 1))
 
-    return results
+    # --- 10. RSI Divergence ---
+    if len(close) >= 20:
+        if close[-1] < min(close[-5:-1]) and rsi > min(50, np.mean(rsi)):
+            results.append(("RSI Divergence", "BUY", 84, 2, 3))
+        elif close[-1] > max(close[-5:-1]) and rsi < max(50, np.mean(rsi)):
+            results.append(("RSI Divergence", "SELL", 84, 2, 3))
+
+    # --- 11. Bollinger Squeeze ---
+    if len(close) >= 20:
+        atr = np.mean(high[-20:] - low[-20:])
+        current_range = high[-1] - low[-1]
+        if current_range < atr * 0.5:
+            if close[-1] > open_[-1] and close[-1] > ema20:
+                results.append(("Bollinger Squeeze", "BUY", 77, 2, 3))
+            elif close[-1] < open_[-1] and close[-1] < ema20:
+                results.append(("Bollinger Squeeze", "SELL", 77, 2, 3))
+
+    # --- 12. MACD Crossover ---
+    if len(close) >= 26:
+        ema12 = np.mean(close[-12:])
+        ema26 = np.mean(close[-26:])
+        macd = ema12 - ema26
+        signal = np.mean(close[-9:])
+        if macd > signal and close[-1] > ema20:
+            results.append(("MACD Crossover", "BUY", 80, 2, 3))
+        elif macd < signal and close[-1] < ema20:
+            results.append(("MACD Crossover", "SELL", 80, 2, 3))
+
+    # --- 13. Support/Resistance Break ---
+    if len(close) >= 20:
+        resistance = max(high[-20:-1])
+        support = min(low[-20:-1])
+        if close[-1] > resistance and close[-1] > open_[-1]:
+            results.append(("Support/Resistance Break", "BUY", 81, 2, 3))
+        elif close[-1] < support and close[-1] < open_[-1]:
+            results.append(("Support/Resistance Break", "SELL", 81, 2, 3))
+
+    # --- 14. MA Crossover ---
+    if len(close) >= 30:
+        ma10 = np.mean(close[-10:])
+        ma30 = np.mean(close[-30:])
+        if ma10 > ma30 and close[-1] > open_[-1]:
+            results.append(("MA Crossover", "BUY", 79, 2, 3))
+        elif ma10 < ma30 and close[-1] < open_[-1]:
+            results.append(("MA Crossover", "SELL", 79, 2, 3))
+
+    # --- Adjust confidence based on strategy health ---
+    adjusted_results = []
+    for name, direction, confidence, expiry1, expiry2 in results:
+        health = get_strategy_health(name)
+        adjusted_conf = int(confidence * (health / 50))
+        adjusted_conf = min(100, max(50, adjusted_conf))
+        adjusted_results.append((name, direction, adjusted_conf, expiry1, expiry2))
+    
+    return adjusted_results
 
 # ==========================================
 # PREDICTION ENGINE
@@ -137,12 +269,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # Price data (placeholder)
+        # Price data (placeholder — replace with real data)
         price_data = {
             'open': np.random.randn(30) + 1.12,
             'high': np.random.randn(30) + 1.13,
             'low': np.random.randn(30) + 1.11,
-            'close': np.random.randn(30) + 1.12
+            'close': np.random.randn(30) + 1.12,
+            'volume': np.random.randint(100, 1000, 30)
         }
 
         results = run_strategies(price_data)
@@ -151,6 +284,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
             return
 
+        # Pick best strategy (highest confidence)
         best = max(results, key=lambda x: x[2])
         strategy, direction, confidence, expiry_1, expiry_2 = best
         prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
