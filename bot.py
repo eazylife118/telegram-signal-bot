@@ -5,7 +5,7 @@ import threading
 import requests
 import numpy as np
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageEnhance
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -18,12 +18,12 @@ TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
 CHAT_ID = "6280535707"
 
 # ==========================================
-# CACHED PAIR
+# CACHED PAIR (for millisecond response after first detection)
 # ==========================================
 CACHED_PAIR = None
 
 # ==========================================
-# TIME ZONE (UTC+1)
+# TIME ZONE
 # ==========================================
 LOCAL_TZ = timezone(timedelta(hours=1))
 
@@ -39,31 +39,48 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FAST OCR (only runs once per session)
+# RELIABLE OCR (2 seconds max)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
+        # Open image
         img = Image.open(image_path)
         width, height = img.size
-        if width > 400:
-            ratio = 400 / width
-            new_size = (400, int(height * ratio))
+
+        # Resize to 600px (balance speed + accuracy)
+        if width > 600:
+            ratio = 600 / width
+            new_size = (600, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
+        # Convert to grayscale and enhance contrast
         img = img.convert('L')
-        crop_height = int(img.height * 0.12)
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.5)
+
+        # Crop to top 15% (where the pair name is)
+        crop_height = int(img.height * 0.15)
         cropped_img = img.crop((0, 0, img.width, crop_height))
 
+        # OCR with flexible config
         custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
 
-        match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
-        if match:
-            return match.group(1)
+        # Try multiple patterns
+        patterns = [
+            r'([A-Z]{3}/[A-Z]{3}\s+OTC)',
+            r'([A-Z]{3}\s*/\s*[A-Z]{3})',
+            r'([A-Z]{3})[/\s]+([A-Z]{3})',
+        ]
 
-        match = re.search(r'([A-Z]{3}\s*/\s*[A-Z]{3})', text)
-        if match:
-            return match.group(1).replace(" ", "") + " OTC"
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                if '/' in match.group(1):
+                    pair = match.group(1).strip()
+                else:
+                    pair = match.group(1).strip() + "/" + match.group(2).strip()
+                return pair + " OTC"
 
     except Exception as e:
         print("OCR error:", e)
@@ -168,7 +185,7 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_na
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot — I'll detect the pair and give you a signal in ≤ 2.5 seconds."
+        "Send a screenshot — I'll detect the pair and give you a signal in ≤ 3.5 seconds."
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -259,6 +276,7 @@ async def set_pair(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
+    application.bot.delete_webhook()  # Force clear any old webhook
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("setpair", set_pair))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
