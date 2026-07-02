@@ -34,13 +34,13 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FAST OCR (ADJUST THESE TWO VALUES)
+# FAST OCR — INCREASED FOR BETTER RESULTS
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # --- ADJUST THESE TWO VALUES ---
-        TARGET_WIDTH = 700      # Try: 600, 700, 800
-        CROP_PERCENT = 0.13     # Try: 0.10, 0.12, 0.13, 0.15
+        # --- INCREASED VALUES ---
+        TARGET_WIDTH = 750      # Slightly bigger
+        CROP_PERCENT = 0.14     # Slightly more area
         # --------------------------------
 
         img = Image.open(image_path)
@@ -72,7 +72,7 @@ def detect_pair_from_image(image_path):
     except Exception as e:
         print("OCR error:", e)
 
-    return None  # Return None if not found
+    return None
 
 # ==========================================
 # FLASK WEB SERVER
@@ -182,7 +182,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         pair_name = detect_pair_from_image("screenshot.png")
         if not pair_name:
-            pair_name = "AUD/CAD OTC"  # fallback
+            pair_name = "AUD/CAD OTC"
 
         price_data = {
             'open': np.random.randn(30) + 1.12,
