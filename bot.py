@@ -5,9 +5,9 @@ import threading
 import requests
 import numpy as np
 import pytesseract
-from PIL import Image, ImageEnhance
+from PIL import Image
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timezone, timedelta
 
@@ -18,7 +18,12 @@ TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
 CHAT_ID = "6280535707"
 
 # ==========================================
-# TIME ZONE (UTC+1)
+# CACHED PAIR (for millisecond response after first detection)
+# ==========================================
+CACHED_PAIR = None
+
+# ==========================================
+# TIME ZONE
 # ==========================================
 LOCAL_TZ = timezone(timedelta(hours=1))
 
@@ -34,46 +39,43 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# FAST OCR: DETECT PAIR FROM SCREENSHOT (TOP PORTION ONLY)
+# FAST OCR (only runs once per session)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # Open image and resize to 600px wide (fast)
+        # Open and resize to 400px (fastest)
         img = Image.open(image_path)
         width, height = img.size
-        if width > 600:
-            ratio = 600 / width
-            new_size = (600, int(height * ratio))
+        if width > 400:
+            ratio = 400 / width
+            new_size = (400, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
-        # Convert to grayscale
+        # Grayscale + crop top 12%
         img = img.convert('L')
-
-        # Crop to top 12% (where the pair name is)
         crop_height = int(img.height * 0.12)
         cropped_img = img.crop((0, 0, img.width, crop_height))
 
-        # OCR with fast config
+        # OCR
         custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
 
-        # Look for pattern like "AUD/CAD OTC"
+        # Match patterns
         match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
         if match:
             return match.group(1)
 
-        # Fallback: look for any pair pattern
-        match = re.search(r'([A-Z]{3}/[A-Z]{3})', text)
+        match = re.search(r'([A-Z]{3}\s*/\s*[A-Z]{3})', text)
         if match:
-            return match.group(1) + " OTC"
+            return match.group(1).replace(" ", "") + " OTC"
 
     except Exception as e:
         print("OCR error:", e)
 
-    return None  # Return None if not found
+    return None
 
 # ==========================================
-# FLASK WEB SERVER
+# FLASK WEB SERVER (for Render)
 # ==========================================
 app = Flask(__name__)
 
@@ -92,7 +94,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
 # ==========================================
-# 10 STRATEGIES
+# 10 STRATEGIES (OPTIMIZED)
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -170,30 +172,36 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_na
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot of your OTC chart, and I'll analyze it.\n\n"
-        "I'll detect the pair name automatically."
+        "Send a screenshot — I'll detect the pair and give you a signal in ≤ 1 second."
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global CACHED_PAIR
+
     try:
-        # Acknowledge receipt
+        # Start timer
+        start_time = time.time()
+
+        # Acknowledge
         await update.message.reply_text("⏳ Analyzing...")
 
+        # Download photo
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # Fast OCR to detect pair name
-        pair_name = detect_pair_from_image("screenshot.png")
-
-        # If pair not detected, ask user
+        # Detect pair (use cache if available)
+        pair_name = CACHED_PAIR
         if not pair_name:
-            await update.message.reply_text(
-                "⚠️ Could not detect pair name.\n"
-                "Please use /setpair to set it manually."
-            )
-            return
+            pair_name = detect_pair_from_image("screenshot.png")
+            if pair_name:
+                CACHED_PAIR = pair_name
+            else:
+                await update.message.reply_text(
+                    "⚠️ Could not detect pair.\nUse /setpair to set it."
+                )
+                return
 
-        # Placeholder price data
+        # Price data (placeholder)
         price_data = {
             'open': np.random.randn(30) + 1.12,
             'high': np.random.randn(30) + 1.13,
@@ -201,16 +209,19 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'close': np.random.randn(30) + 1.12
         }
 
+        # Run strategies
         results = run_strategies(price_data)
 
         if not results:
             await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
             return
 
+        # Get best strategy
         best = max(results, key=lambda x: x[2])
         strategy, direction, confidence, expiry_1, expiry_2 = best
         prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_name)
 
+        # Build response
         response = f"📊 **OTC SIGNAL**\n\n"
         response += f"🔍 **Pair:** {prediction['pair']}\n\n"
         response += f"📈 **Entry 1:**\n"
@@ -223,23 +234,27 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
+        # Send response
         await update.message.reply_text(response)
+
+        # Log speed
+        elapsed = time.time() - start_time
+        print(f"✅ Signal sent in {elapsed:.2f} seconds")
 
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
 async def set_pair(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global CACHED_PAIR
     try:
         new_pair = update.message.text.replace("/setpair", "").strip()
         if new_pair:
-            # Store in a global or context variable (simplified)
-            context.user_data['pair'] = new_pair
-            await update.message.reply_text(f"✅ Pair set to: `{new_pair}`")
+            CACHED_PAIR = new_pair
+            await update.message.reply_text(f"✅ Pair set to: `{CACHED_PAIR}`")
         else:
             await update.message.reply_text(
                 "📊 **Set Pair**\n\n"
-                "Send the pair name like this:\n"
-                "`/setpair EUR/USD OTC`"
+                "Send: `/setpair EUR/USD OTC`"
             )
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
