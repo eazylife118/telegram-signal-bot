@@ -1,11 +1,12 @@
-# Use the official Python image
-FROM python:3.10-slim
+# Use the official Python image (slim-buster is smaller)
+FROM python:3.10-slim-buster
 
-# Install Tesseract OCR (system-level)
+# Install Tesseract OCR (system-level) — minimal dependencies
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     libtesseract-dev \
     libleptonica-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
