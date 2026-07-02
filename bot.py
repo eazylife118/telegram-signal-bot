@@ -5,7 +5,7 @@ import threading
 import requests
 import numpy as np
 import pytesseract
-from PIL import Image, ImageEnhance
+from PIL import Image
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -34,42 +34,35 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# OPTIMIZED OCR: FASTER IMAGE PROCESSING
+# FAST OCR (400px, top 10%, no enhancement)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # Open image and resize to 600px (faster)
+        # Open and resize to 400px (very fast)
         img = Image.open(image_path)
         width, height = img.size
-        if width > 600:
-            ratio = 600 / width
-            new_size = (600, int(height * ratio))
+        if width > 400:
+            ratio = 400 / width
+            new_size = (400, int(height * ratio))
             img = img.resize(new_size, Image.LANCZOS)
 
-        # Convert to grayscale
+        # Convert to grayscale (fast)
         img = img.convert('L')
 
-        # Crop to top third (where the pair name usually is)
+        # Crop to top 10% (where the pair is)
         width, height = img.size
-        crop_box = (0, 0, width, height // 3)
+        crop_box = (0, 0, width, int(height * 0.10))
         cropped_img = img.crop(crop_box)
 
-        # Increase contrast (lighter enhancement)
-        enhancer = ImageEnhance.Contrast(cropped_img)
-        cropped_img = enhancer.enhance(1.5)
-
-        # OCR with custom config
-        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
+        # Fast OCR (single word mode)
+        custom_config = r'--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
-
-        print("🔍 OCR Raw Text (cropped):", text)
 
         # Look for pattern like "AUD/CAD OTC"
         match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
         if match:
             return match.group(1)
 
-        # Fallback: look for any pair pattern
         match = re.search(r'([A-Z]{3}/[A-Z]{3})', text)
         if match:
             return match.group(1) + " OTC"
@@ -77,10 +70,10 @@ def detect_pair_from_image(image_path):
     except Exception as e:
         print("OCR error:", e)
 
-    return "AUD/CAD OTC"  # Default fallback
+    return None  # Return None if not found
 
 # ==========================================
-# FLASK WEB SERVER (OPTIMIZED)
+# FLASK WEB SERVER (MINIMAL)
 # ==========================================
 app = Flask(__name__)
 
@@ -179,13 +172,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        await update.message.reply_text("⏳ Analyzing screenshot...")
+        start_time = time.time()
+        await update.message.reply_text("⏳ Analyzing...")
 
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
+        # Fast pair detection
         pair_name = detect_pair_from_image("screenshot.png")
+        if not pair_name:
+            pair_name = "AUD/CAD OTC"  # fallback
 
+        # Price data (placeholder)
         price_data = {
             'open': np.random.randn(30) + 1.12,
             'high': np.random.randn(30) + 1.13,
@@ -216,6 +214,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
         await update.message.reply_text(response)
+
+        elapsed = time.time() - start_time
+        print(f"✅ Signal sent in {elapsed:.2f} seconds")
 
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
