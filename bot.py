@@ -86,7 +86,7 @@ def calculate_bollinger(close, period=20):
     return sma + 2 * std, sma - 2 * std
 
 # ==========================================
-# 20 STRATEGIES
+# 14 STRATEGIES
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -223,42 +223,6 @@ def run_strategies(price_data):
             add_signal("Outside Candle", "BUY", 82, 2, 3)
         elif high[-1] > high[-2] and low[-1] < low[-2] and close[-1] < open_[-1]:
             add_signal("Outside Candle", "SELL", 82, 2, 3)
-
-    # --- 15. Three White Soldiers ---
-    if len(close) >= 3:
-        if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3] and
-            close[-1] > close[-2] > close[-3]):
-            add_signal("Three White Soldiers", "BUY", 85, 2, 3)
-
-    # --- 16. Three Black Crows ---
-    if len(close) >= 3:
-        if (close[-1] < open_[-1] and close[-2] < open_[-2] and close[-3] < open_[-3] and
-            close[-1] < close[-2] < close[-3]):
-            add_signal("Three Black Crows", "SELL", 85, 2, 3)
-
-    # --- 17. Morning Star ---
-    if len(close) >= 3:
-        if (close[-3] < open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
-            close[-1] > open_[-1] and close[-1] > (close[-3] + open_[-3]) / 2):
-            add_signal("Morning Star", "BUY", 84, 2, 3)
-
-    # --- 18. Evening Star ---
-    if len(close) >= 3:
-        if (close[-3] > open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
-            close[-1] < open_[-1] and close[-1] < (close[-3] + open_[-3]) / 2):
-            add_signal("Evening Star", "SELL", 84, 2, 3)
-
-    # --- 19. Bullish Harami ---
-    if len(close) >= 2:
-        if (close[-2] < open_[-2] and close[-1] > open_[-1] and
-            close[-1] < open_[-2] and open_[-1] > close_[-2]):
-            add_signal("Bullish Harami", "BUY", 80, 2, 3)
-
-    # --- 20. Bearish Harami ---
-    if len(close) >= 2:
-        if (close[-2] > open_[-2] and close[-1] < open_[-1] and
-            close[-1] > open_[-2] and open_[-1] < close_[-2]):
-            add_signal("Bearish Harami", "SELL", 80, 2, 3)
 
     return [(name, direction, conf, e1, e2) for name, direction, conf, e1, e2 in results if conf >= 70]
 
