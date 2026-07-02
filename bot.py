@@ -15,12 +15,19 @@ TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
 CHAT_ID = "6280535707"
 
 # ==========================================
-# NIGERIA TIME (UTC+1)
+# TIME ZONE (UTC+1)
 # ==========================================
-NIGERIA_TZ = timezone(timedelta(hours=1))
+LOCAL_TZ = timezone(timedelta(hours=1))
 
-def get_nigeria_time():
-    return datetime.now(NIGERIA_TZ).strftime("%H:%M:%S")
+def get_next_minute():
+    now = datetime.now(LOCAL_TZ)
+    # Round up to the next full minute
+    next_minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    return next_minute.strftime("%H:%M:%S")
+
+def get_entry2_time(entry1_time):
+    # Entry 2 is exactly 1 minute after Entry 1
+    return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
 # FLASK WEB SERVER (KEEPS RENDER ALIVE)
@@ -101,8 +108,8 @@ def run_strategies(price_data):
 # PREDICTION ENGINE
 # ==========================================
 def predict_entries(strategy, direction, confidence, expiry, pair_name="CAD/JPY OTC"):
-    entry1_time = get_nigeria_time()
-    entry2_time = (datetime.now(NIGERIA_TZ) + timedelta(minutes=1)).strftime("%H:%M:%S")
+    entry1_time = get_next_minute()
+    entry2_time = get_entry2_time(entry1_time)
 
     if direction == "BUY":
         entry1_dir = "🟢 BUY"
