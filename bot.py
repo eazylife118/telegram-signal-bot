@@ -7,7 +7,7 @@ import numpy as np
 import pytesseract
 from PIL import Image, ImageEnhance
 from flask import Flask
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timezone, timedelta
 
@@ -34,28 +34,28 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# OCR: DETECT PAIR FROM SCREENSHOT (CROPPED & IMPROVED)
+# FAST OCR: DETECT PAIR FROM SCREENSHOT (TOP PORTION ONLY)
 # ==========================================
 def detect_pair_from_image(image_path):
     try:
-        # Open image
+        # Open image and resize to 600px wide (fast)
         img = Image.open(image_path)
-        img = img.convert('L')  # Grayscale
-
-        # Crop to top portion (where the pair name usually is)
         width, height = img.size
-        crop_box = (0, 0, width, height // 3)  # Top third
-        cropped_img = img.crop(crop_box)
+        if width > 600:
+            ratio = 600 / width
+            new_size = (600, int(height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
 
-        # Increase contrast
-        enhancer = ImageEnhance.Contrast(cropped_img)
-        cropped_img = enhancer.enhance(2)
+        # Convert to grayscale
+        img = img.convert('L')
 
-        # OCR with custom config
+        # Crop to top 12% (where the pair name is)
+        crop_height = int(img.height * 0.12)
+        cropped_img = img.crop((0, 0, img.width, crop_height))
+
+        # OCR with fast config
         custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
-
-        print("🔍 OCR Raw Text (cropped):", text)  # Debug log
 
         # Look for pattern like "AUD/CAD OTC"
         match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
@@ -70,17 +70,16 @@ def detect_pair_from_image(image_path):
     except Exception as e:
         print("OCR error:", e)
 
-    # If all fails, ask the user to set the pair manually
-    return "AUD/CAD OTC"  # Default to the pair you trade most (change this)
+    return None  # Return None if not found
 
 # ==========================================
-# FLASK WEB SERVER (OPTIMIZED)
+# FLASK WEB SERVER
 # ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ Bot is running!"
+    return "✅ OTC Signal Bot is running!"
 
 @app.route('/ping')
 def ping():
@@ -145,7 +144,7 @@ def run_strategies(price_data):
 # ==========================================
 # PREDICTION ENGINE
 # ==========================================
-def predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_name="AUD/CAD OTC"):
+def predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_name):
     entry1_time = get_next_minute()
     entry2_time = get_entry2_time(entry1_time)
 
@@ -169,20 +168,32 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2, pair_na
 # TELEGRAM BOT HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 Send a screenshot of your OTC chart and I'll analyze it.")
+    await update.message.reply_text(
+        "📊 **OTC Signal Bot**\n\n"
+        "Send a screenshot of your OTC chart, and I'll analyze it.\n\n"
+        "I'll detect the pair name automatically."
+    )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Acknowledge receipt immediately
-        await update.message.reply_text("⏳ Analyzing screenshot...")
+        # Acknowledge receipt
+        await update.message.reply_text("⏳ Analyzing...")
 
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # Detect pair from screenshot
+        # Fast OCR to detect pair name
         pair_name = detect_pair_from_image("screenshot.png")
 
-        # Placeholder price data (replace with real OCR later)
+        # If pair not detected, ask user
+        if not pair_name:
+            await update.message.reply_text(
+                "⚠️ Could not detect pair name.\n"
+                "Please use /setpair to set it manually."
+            )
+            return
+
+        # Placeholder price data
         price_data = {
             'open': np.random.randn(30) + 1.12,
             'high': np.random.randn(30) + 1.13,
@@ -217,21 +228,34 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
+async def set_pair(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        new_pair = update.message.text.replace("/setpair", "").strip()
+        if new_pair:
+            # Store in a global or context variable (simplified)
+            context.user_data['pair'] = new_pair
+            await update.message.reply_text(f"✅ Pair set to: `{new_pair}`")
+        else:
+            await update.message.reply_text(
+                "📊 **Set Pair**\n\n"
+                "Send the pair name like this:\n"
+                "`/setpair EUR/USD OTC`"
+            )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
 # ==========================================
 # START BOT
 # ==========================================
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("setpair", set_pair))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.run_polling()
 
 if __name__ == "__main__":
-    # Start Flask in background thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+    threading.Thread(target=run_flask, daemon=True).start()
     print("✅ Flask server started.")
-
-    # Start Telegram bot in main thread
     print("✅ Starting Telegram bot...")
     run_telegram()
