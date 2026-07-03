@@ -281,7 +281,7 @@ def run_strategies(price_data):
         adjusted_conf = min(100, max(50, adjusted_conf))
         adjusted_results.append((name, direction, adjusted_conf, expiry1, expiry2))
     
-    return import os
+return import os
 import time
 import threading
 import requests
