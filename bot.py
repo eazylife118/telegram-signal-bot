@@ -16,6 +16,11 @@ TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
 CHAT_ID = "6280535707"
 
 # ==========================================
+# PROCESSING LOCK
+# ==========================================
+process_lock = asyncio.Lock()
+
+# ==========================================
 # TIME ZONE (UTC+1)
 # ==========================================
 LOCAL_TZ = timezone(timedelta(hours=1))
