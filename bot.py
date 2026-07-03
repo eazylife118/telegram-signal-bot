@@ -221,15 +221,95 @@ def run_strategies(price_data):
         elif ma10 < ma30 and close[-1] < open_[-1]:
             results.append(("MA Crossover", "SELL", 79, 2, 3))
 
-    # --- Adjust confidence based on strategy health ---
-    adjusted_results = []
-    for name, direction, confidence, expiry1, expiry2 in results:
-        health = get_strategy_health(name)
-        adjusted_conf = int(confidence * (health / 50))
-        adjusted_conf = min(100, max(50, adjusted_conf))
-        adjusted_results.append((name, direction, adjusted_conf, expiry1, expiry2))
+    # --- 15. Three White Soldiers ---
+    if len(close) >= 3:
+        if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3] and
+            close[-1] > close[-2] and close[-2] > close[-3]):
+            results.append(("Three White Soldiers", "BUY", 85, 2, 3))
+
+    # --- 16. Three Black Crows ---
+    if len(close) >= 3:
+        if (close[-1] < open_[-1] and close[-2] < open_[-2] and close[-3] < open_[-3] and
+            close[-1] < close[-2] and close[-2] < close[-3]):
+            results.append(("Three Black Crows", "SELL", 85, 2, 3))
+
+    # --- 17. Morning Star ---
+    if len(close) >= 5:
+        if (close[-3] < open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
+            close[-1] > open_[-1] and close[-1] > (close[-3] + open_[-3]) / 2):
+            results.append(("Morning Star", "BUY", 84, 2, 3))
+
+    # --- 18. Evening Star ---
+    if len(close) >= 5:
+        if (close[-3] > open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
+            close[-1] < open_[-1] and close[-1] < (close[-3] + open_[-3]) / 2):
+            results.append(("Evening Star", "SELL", 84, 2, 3))
+
+    # --- 19. Bullish Harami ---
+    if len(close) >= 2:
+        if (close[-2] < open_[-2] and close[-1] > open_[-1] and
+            close[-1] < open_[-2] and open_[-1] > close_[-2]):
+            results.append(("Bullish Harami", "BUY", 80, 2, 3))
+
+    # --- 20. Bearish Harami ---
+    if len(close) >= 2:
+        if (close[-2] > open_[-2] and close[-1] < open_[-1] and
+            close[-1] > open_[-2] and open_[-1] < close_[-2]):
+            results.append(("Bearish Harami", "SELL", 80, 2, 3))
     
-    return adjusted_results
+   # ==========================================
+    # 3‑STRATEGY AGREEMENT FILTER
+    # ==========================================
+
+    # If fewer than 3 strategies triggered, no signal
+    if len(results) < 3:
+        return []
+
+    # Separate BUY and SELL signals
+    buy_signals = [r for r in results if r[1] == "BUY"]
+    sell_signals = [r for r in results if r[1] == "SELL"]
+
+    # Choose the direction with more signals
+    if len(buy_signals) > len(sell_signals):
+        direction = "BUY"
+        group = buy_signals
+    elif len(sell_signals) > len(buy_signals):
+        direction = "SELL"
+        group = sell_signals
+    else:
+        # If equal, pick the side with higher average confidence
+        buy_avg = np.mean([r[2] for r in buy_signals]) if buy_signals else 0
+        sell_avg = np.mean([r[2] for r in sell_signals]) if sell_signals else 0
+        if buy_avg >= sell_avg:
+            direction = "BUY"
+            group = buy_signals
+        else:
+            direction = "SELL"
+            group = sell_signals
+
+    # How many strategies agree?
+    num_agree = len(group)
+
+    # Confidence = actual probability based on agreement
+    if num_agree >= 6:
+        agreement_conf = 92
+    elif num_agree >= 5:
+        agreement_conf = 88
+    elif num_agree >= 4:
+        agreement_conf = 82
+    else:  # exactly 3 strategies
+        agreement_conf = 75
+
+    # Blend with the average confidence of the agreeing strategies
+    avg_conf = np.mean([r[2] for r in group]) if group else 50
+    final_conf = int((agreement_conf + avg_conf) / 2)
+    final_conf = min(100, max(50, final_conf))
+
+    # Pick the best strategy from the agreeing group
+    best = max(group, key=lambda x: x[2])
+
+    # Return only the best signal with the new confidence
+    return [(best[0], direction, final_conf, best[3], best[4])]
 
 # ==========================================
 # PREDICTION ENGINE
