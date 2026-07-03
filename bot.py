@@ -306,25 +306,53 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        start_time = time.time()
+        async with process_lock:
+            start_time = time.time()
 
-        photo = await update.message.photo[-1].get_file()
-        await photo.download_to_drive("screenshot.png")
+            photo = await update.message.photo[-1].get_file()
+            await photo.download_to_drive("screenshot.png")
 
-        # Price data (placeholder — replace with real data)
-        price_data = {
-            'open': np.random.randn(30) + 1.12,
-            'high': np.random.randn(30) + 1.13,
-            'low': np.random.randn(30) + 1.11,
-            'close': np.random.randn(30) + 1.12,
-            'volume': np.random.randint(100, 1000, 30)
-        }
+            price_data = {
+                'open': np.random.randn(30) + 1.12,
+                'high': np.random.randn(30) + 1.13,
+                'low': np.random.randn(30) + 1.11,
+                'close': np.random.randn(30) + 1.12,
+                'volume': np.random.randint(100, 1000, 30)
+            }
 
-        results = run_strategies(price_data)
+            results = run_strategies(price_data)
 
-        if not results:
-            await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
-            return
+            if not results:
+                await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
+                return
+
+            best = max(results, key=lambda x: x[2])
+            strategy, direction, confidence, expiry_1, expiry_2 = best
+            prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
+
+            response = f"📊 **OTC SIGNAL**\n\n"
+            response += f"📈 **Entry 1:**\n"
+            response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
+            response += f"🔍 **Strategy:** {strategy}\n"
+            response += f"   → Direction: {direction}\n"
+            response += f"   → Confidence: {confidence}%\n"
+            response += f"   → Expiry: {expiry_1} min\n\n"
+            response += f"📈 **Entry 2:**\n"
+            response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
+            response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
+
+            await update.message.reply_text(response)
+
+            # Small delay to prevent rate-limiting
+            await asyncio.sleep(0.5)
+
+            elapsed = time.time() - start_time
+            print(f"✅ Signal sent in {elapsed:.2f} seconds")
+
+    except Exception as e:
+        error_msg = f"⚠️ Temporary error: {str(e)}"
+        await update.message.reply_text(error_msg)
+        print(f"Error: {e}")
 
         # Pick best strategy (highest confidence)
         best = max(results, key=lambda x: x[2])
