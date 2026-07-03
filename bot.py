@@ -21,14 +21,17 @@ CHAT_ID = "6280535707"
 LOCAL_TZ = timezone(timedelta(hours=1))
 
 # ==========================================
-# STRATEGY HEALTH TRACKING
+# STRATEGY HEALTH TRACKING (UPDATED WITH 20 NAMES)
 # ==========================================
 strategy_history = {name: deque(maxlen=10) for name in [
     "Candle Reversal Pattern", "3-Candle Momentum", "2-Minute Reset",
     "Double Touch", "Spike Rejection", "Consolidation Break",
     "EMA Pullback", "Bull/Bear Confirmation", "60-Second Scalp",
     "RSI Divergence", "Bollinger Squeeze", "MACD Crossover",
-    "Support/Resistance Break", "MA Crossover"
+    "Support/Resistance Break", "MA Crossover",
+    "Three White Soldiers", "Three Black Crows",
+    "Morning Star", "Evening Star",
+    "Bullish Harami", "Bearish Harami"
 ]}
 
 def get_strategy_health(strategy_name):
@@ -78,7 +81,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
 # ==========================================
-# 14 STRATEGIES WITH FILTERS
+# 20 STRATEGIES (14 ORIGINAL + 6 NEW — NOTHING REMOVED)
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -172,7 +175,7 @@ def run_strategies(price_data):
     if len(close) >= 2:
         if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "BUY", 72, 1, 1))
-        elif (open_[-1] - close[-1]) > (open_[-2] - close[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
+        elif (open_[-1] - close[-1]) > (open_[-2] - close_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "SELL", 72, 1, 1))
 
     # --- 10. RSI Divergence ---
@@ -220,6 +223,46 @@ def run_strategies(price_data):
             results.append(("MA Crossover", "BUY", 79, 2, 3))
         elif ma10 < ma30 and close[-1] < open_[-1]:
             results.append(("MA Crossover", "SELL", 79, 2, 3))
+
+    # ==========================================
+    # NEW STRATEGIES (15–20) — ADDED ONLY
+    # ==========================================
+
+    # --- 15. Three White Soldiers ---
+    if len(close) >= 3:
+        if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3] and
+            close[-1] > close[-2] > close[-3]):
+            results.append(("Three White Soldiers", "BUY", 85, 2, 3))
+
+    # --- 16. Three Black Crows ---
+    if len(close) >= 3:
+        if (close[-1] < open_[-1] and close[-2] < open_[-2] and close[-3] < open_[-3] and
+            close[-1] < close[-2] < close[-3]):
+            results.append(("Three Black Crows", "SELL", 85, 2, 3))
+
+    # --- 17. Morning Star ---
+    if len(close) >= 3:
+        if (close[-3] < open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
+            close[-1] > open_[-1] and close[-1] > (close[-3] + open_[-3]) / 2):
+            results.append(("Morning Star", "BUY", 84, 2, 3))
+
+    # --- 18. Evening Star ---
+    if len(close) >= 3:
+        if (close[-3] > open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
+            close[-1] < open_[-1] and close[-1] < (close[-3] + open_[-3]) / 2):
+            results.append(("Evening Star", "SELL", 84, 2, 3))
+
+    # --- 19. Bullish Harami ---
+    if len(close) >= 2:
+        if (close[-2] < open_[-2] and close[-1] > open_[-1] and
+            close[-1] < open_[-2] and open_[-1] > close_[-2]):
+            results.append(("Bullish Harami", "BUY", 80, 2, 3))
+
+    # --- 20. Bearish Harami ---
+    if len(close) >= 2:
+        if (close[-2] > open_[-2] and close[-1] < open_[-1] and
+            close[-1] > open_[-2] and open_[-1] < close_[-2]):
+            results.append(("Bearish Harami", "SELL", 80, 2, 3))
 
     # --- Adjust confidence based on strategy health ---
     adjusted_results = []
