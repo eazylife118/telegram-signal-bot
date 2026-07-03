@@ -1,7 +1,6 @@
 import os
 import time
 import threading
-import asyncio
 import requests
 import numpy as np
 from flask import Flask
@@ -17,17 +16,12 @@ TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
 CHAT_ID = "6280535707"
 
 # ==========================================
-# PROCESSING LOCK
-# ==========================================
-process_lock = asyncio.Lock()
-
-# ==========================================
 # TIME ZONE (UTC+1)
 # ==========================================
 LOCAL_TZ = timezone(timedelta(hours=1))
 
 # ==========================================
-# STRATEGY HEALTH TRACKING (14 STRATEGIES)
+# STRATEGY HEALTH TRACKING
 # ==========================================
 strategy_history = {name: deque(maxlen=10) for name in [
     "Candle Reversal Pattern", "3-Candle Momentum", "2-Minute Reset",
@@ -45,6 +39,10 @@ def get_strategy_health(strategy_name):
         return 50
     win_rate = sum(history) / len(history) * 100
     return min(100, max(50, win_rate))
+
+def record_signal(strategy_name, win):
+    if strategy_name in strategy_history:
+        strategy_history[strategy_name].append(win)
 
 # ==========================================
 # TIME FUNCTIONS
@@ -80,7 +78,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
 # ==========================================
-# 14 STRATEGIES (5 MUST AGREE)
+# 14 STRATEGIES WITH FILTERS
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -89,9 +87,6 @@ def run_strategies(price_data):
     high = np.array(price_data['high'])
     low = np.array(price_data['low'])
     volume = np.array(price_data.get('volume', np.ones(len(close))))
-
-    if len(close) < 5:
-        return results
 
     def calculate_rsi(data, period=14):
         if len(data) < period + 1:
@@ -115,83 +110,77 @@ def run_strategies(price_data):
 
     ema20 = calculate_ema(close, 20)
 
-    def add_signal(name, direction, base_conf, exp1, exp2):
-        health = get_strategy_health(name)
-        conf = int(base_conf * (health / 50))
-        conf = min(100, max(50, conf))
-        results.append((name, direction, conf, exp1, exp2))
-
     # --- 1. Candle Reversal Pattern ---
     if len(close) >= 3:
         if (close[-3:] > open_[-3:]).all() and (close[-1] < open_[-1]) and rsi > 70:
-            add_signal("Candle Reversal Pattern", "SELL", 86, 2, 3)
+            results.append(("Candle Reversal Pattern", "SELL", 86, 2, 3))
         elif (close[-3:] < open_[-3:]).all() and (close[-1] > open_[-1]) and rsi < 30:
-            add_signal("Candle Reversal Pattern", "BUY", 86, 2, 3)
+            results.append(("Candle Reversal Pattern", "BUY", 86, 2, 3))
 
     # --- 2. 3-Candle Momentum ---
     if len(close) >= 3:
         if (close[-3:] > open_[-3:]).all() and volume[-1] > np.mean(volume[-5:]):
-            add_signal("3-Candle Momentum", "BUY", 82, 1, 2)
+            results.append(("3-Candle Momentum", "BUY", 82, 1, 2))
         elif (close[-3:] < open_[-3:]).all() and volume[-1] > np.mean(volume[-5:]):
-            add_signal("3-Candle Momentum", "SELL", 82, 1, 2)
+            results.append(("3-Candle Momentum", "SELL", 82, 1, 2))
 
     # --- 3. 2-Minute Reset ---
     if len(close) >= 3:
         if (close[-3:] < open_[-3:]).all() and close[-1] < ema20 * 0.98:
-            add_signal("2-Minute Reset", "SELL", 78, 2, 3)
+            results.append(("2-Minute Reset", "SELL", 78, 2, 3))
         elif (close[-3:] > open_[-3:]).all() and close[-1] > ema20 * 1.02:
-            add_signal("2-Minute Reset", "BUY", 78, 2, 3)
+            results.append(("2-Minute Reset", "BUY", 78, 2, 3))
 
     # --- 4. Double Touch ---
     if len(close) >= 10:
         if abs(low[-1] - low[-3]) < 0.0002 and close[-1] > max(close[-5:-1]):
-            add_signal("Double Touch", "BUY", 89, 3, 4)
+            results.append(("Double Touch", "BUY", 89, 3, 4))
         elif abs(high[-1] - high[-3]) < 0.0002 and close[-1] < min(close[-5:-1]):
-            add_signal("Double Touch", "SELL", 89, 3, 4)
+            results.append(("Double Touch", "SELL", 89, 3, 4))
 
     # --- 5. Spike Rejection ---
     if len(close) >= 2:
         avg_range = np.mean(high[-5:] - low[-5:])
         if (high[-1] - high[-2]) > 2 * avg_range and (close[-1] < open_[-1]):
-            add_signal("Spike Rejection", "SELL", 74, 2, 3)
+            results.append(("Spike Rejection", "SELL", 74, 2, 3))
         elif (low[-2] - low[-1]) > 2 * avg_range and (close[-1] > open_[-1]):
-            add_signal("Spike Rejection", "BUY", 74, 2, 3)
+            results.append(("Spike Rejection", "BUY", 74, 2, 3))
 
     # --- 6. Consolidation Break ---
     if len(close) >= 10:
         high_range = max(high[-10:]) - min(low[-10:])
         if high_range < 0.0005 and (close[-1] - open_[-1]) > 0.0005:
-            add_signal("Consolidation Break", "BUY", 71, 3, 4)
+            results.append(("Consolidation Break", "BUY", 71, 3, 4))
         elif high_range < 0.0005 and (open_[-1] - close[-1]) > 0.0005:
-            add_signal("Consolidation Break", "SELL", 71, 3, 4)
+            results.append(("Consolidation Break", "SELL", 71, 3, 4))
 
     # --- 7. EMA Pullback ---
     if len(close) >= 20:
         if low[-1] < ema20 and close[-1] > ema20 and rsi > 40:
-            add_signal("EMA Pullback", "BUY", 80, 2, 3)
+            results.append(("EMA Pullback", "BUY", 80, 2, 3))
         elif high[-1] > ema20 and close[-1] < ema20 and rsi < 60:
-            add_signal("EMA Pullback", "SELL", 80, 2, 3)
+            results.append(("EMA Pullback", "SELL", 80, 2, 3))
 
     # --- 8. Bull/Bear Confirmation ---
     if len(close) >= 3:
         if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3]):
-            add_signal("Bull/Bear Confirmation", "BUY", 76, 1, 2)
+            results.append(("Bull/Bear Confirmation", "BUY", 76, 1, 2))
         elif (close[-1] < open_[-1] and close[-2] < open_[-2] and close[-3] < open_[-3]):
-            add_signal("Bull/Bear Confirmation", "SELL", 76, 1, 2)
+            results.append(("Bull/Bear Confirmation", "SELL", 76, 1, 2))
 
     # --- 9. 60-Second Scalp ---
     if len(close) >= 2:
         if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
-            add_signal("60-Second Scalp", "BUY", 72, 1, 1)
-        elif (open_[-1] - close[-1]) > (open_[-2] - close_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
-            add_signal("60-Second Scalp", "SELL", 72, 1, 1)
+            results.append(("60-Second Scalp", "BUY", 72, 1, 1))
+        elif (open_[-1] - close[-1]) > (open_[-2] - close[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
+            results.append(("60-Second Scalp", "SELL", 72, 1, 1))
 
     # --- 10. RSI Divergence ---
     if len(close) >= 20:
         if close[-1] < min(close[-5:-1]) and rsi > min(50, np.mean(rsi)):
-            add_signal("RSI Divergence", "BUY", 84, 2, 3)
+            results.append(("RSI Divergence", "BUY", 84, 2, 3))
         elif close[-1] > max(close[-5:-1]) and rsi < max(50, np.mean(rsi)):
-            add_signal("RSI Divergence", "SELL", 84, 2, 3)
+            results.append(("RSI Divergence", "SELL", 84, 2, 3))
 
     # --- 11. Bollinger Squeeze ---
     if len(close) >= 20:
@@ -199,9 +188,9 @@ def run_strategies(price_data):
         current_range = high[-1] - low[-1]
         if current_range < atr * 0.5:
             if close[-1] > open_[-1] and close[-1] > ema20:
-                add_signal("Bollinger Squeeze", "BUY", 77, 2, 3)
+                results.append(("Bollinger Squeeze", "BUY", 77, 2, 3))
             elif close[-1] < open_[-1] and close[-1] < ema20:
-                add_signal("Bollinger Squeeze", "SELL", 77, 2, 3)
+                results.append(("Bollinger Squeeze", "SELL", 77, 2, 3))
 
     # --- 12. MACD Crossover ---
     if len(close) >= 26:
@@ -210,27 +199,27 @@ def run_strategies(price_data):
         macd = ema12 - ema26
         signal = np.mean(close[-9:])
         if macd > signal and close[-1] > ema20:
-            add_signal("MACD Crossover", "BUY", 80, 2, 3)
+            results.append(("MACD Crossover", "BUY", 80, 2, 3))
         elif macd < signal and close[-1] < ema20:
-            add_signal("MACD Crossover", "SELL", 80, 2, 3)
+            results.append(("MACD Crossover", "SELL", 80, 2, 3))
 
     # --- 13. Support/Resistance Break ---
     if len(close) >= 20:
         resistance = max(high[-20:-1])
         support = min(low[-20:-1])
         if close[-1] > resistance and close[-1] > open_[-1]:
-            add_signal("Support/Resistance Break", "BUY", 81, 2, 3)
+            results.append(("Support/Resistance Break", "BUY", 81, 2, 3))
         elif close[-1] < support and close[-1] < open_[-1]:
-            add_signal("Support/Resistance Break", "SELL", 81, 2, 3)
+            results.append(("Support/Resistance Break", "SELL", 81, 2, 3))
 
     # --- 14. MA Crossover ---
     if len(close) >= 30:
         ma10 = np.mean(close[-10:])
         ma30 = np.mean(close[-30:])
         if ma10 > ma30 and close[-1] > open_[-1]:
-            add_signal("MA Crossover", "BUY", 79, 2, 3)
+            results.append(("MA Crossover", "BUY", 79, 2, 3))
         elif ma10 < ma30 and close[-1] < open_[-1]:
-            add_signal("MA Crossover", "SELL", 79, 2, 3)
+            results.append(("MA Crossover", "SELL", 79, 2, 3))
 
     # ==========================================
     # 5 STRATEGIES MUST AGREE (WITH GRADED CONFIDENCE)
@@ -312,58 +301,54 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot — I'll give you a signal.\n\n"
-        "✅ 14 strategies active\n"
-        "✅ 5 must agree\n"
-        "✅ Dynamic confidence"
+        "Send a screenshot — I'll give you a signal."
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        async with process_lock:
-            start_time = time.time()
+        start_time = time.time()
 
-            photo = await update.message.photo[-1].get_file()
-            await photo.download_to_drive("screenshot.png")
+        photo = await update.message.photo[-1].get_file()
+        await photo.download_to_drive("screenshot.png")
 
-            price_data = {
-                'open': np.random.randn(30) + 1.12,
-                'high': np.random.randn(30) + 1.13,
-                'low': np.random.randn(30) + 1.11,
-                'close': np.random.randn(30) + 1.12,
-                'volume': np.random.randint(100, 1000, 30)
-            }
+        # Price data (placeholder — replace with real data)
+        price_data = {
+            'open': np.random.randn(30) + 1.12,
+            'high': np.random.randn(30) + 1.13,
+            'low': np.random.randn(30) + 1.11,
+            'close': np.random.randn(30) + 1.12,
+            'volume': np.random.randint(100, 1000, 30)
+        }
 
-            results = run_strategies(price_data)
+        results = run_strategies(price_data)
 
-            if not results:
-                await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
-                return
+        if not results:
+            await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
+            return
 
-            strategy, direction, confidence, expiry_1, expiry_2 = results[0]
-            prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
+        # Pick best strategy (highest confidence)
+        best = max(results, key=lambda x: x[2])
+        strategy, direction, confidence, expiry_1, expiry_2 = best
+        prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
 
-            response = f"📊 **OTC SIGNAL**\n\n"
-            response += f"📈 **Entry 1:**\n"
-            response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
-            response += f"🔍 **Strategy:** {strategy}\n"
-            response += f"   → Direction: {direction}\n"
-            response += f"   → Confidence: {confidence}%\n"
-            response += f"   → Expiry: {expiry_1} min\n\n"
-            response += f"📈 **Entry 2:**\n"
-            response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
-            response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
+        response = f"📊 **OTC SIGNAL**\n\n"
+        response += f"📈 **Entry 1:**\n"
+        response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
+        response += f"🔍 **Strategy:** {strategy}\n"
+        response += f"   → Direction: {direction}\n"
+        response += f"   → Confidence: {confidence}%\n"
+        response += f"   → Expiry: {expiry_1} min\n\n"
+        response += f"📈 **Entry 2:**\n"
+        response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
+        response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
-            await update.message.reply_text(response)
+        await update.message.reply_text(response)
 
-            await asyncio.sleep(0.5)
-
-            elapsed = time.time() - start_time
-            print(f"✅ Signal sent in {elapsed:.2f} seconds")
+        elapsed = time.time() - start_time
+        print(f"✅ Signal sent in {elapsed:.2f} seconds")
 
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Temporary error: {str(e)}")
-        print(f"Error: {e}")
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 # ==========================================
 # START BOT
