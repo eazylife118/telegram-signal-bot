@@ -233,8 +233,8 @@ def run_strategies(price_data):
             close[-1] < close[-2] and close[-2] < close[-3]):
             add_signal("Three Black Crows", "SELL", 85, 2, 3)
     
-    # --- 17. Morning Star ---
-    if len(close) >= 3:
+    # --- 17. Morning Star (Safer) ---
+    if len(close) >= 5:
         if (close[-3] < open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
             close[-1] > open_[-1] and close[-1] > (close[-3] + open_[-3]) / 2):
             add_signal("Morning Star", "BUY", 84, 2, 3)
