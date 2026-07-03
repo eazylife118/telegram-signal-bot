@@ -336,11 +336,6 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
 # ==========================================
 # TELEGRAM BOT HANDLERS
 # ==========================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot — I'll give you a signal."
-    )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -382,12 +377,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(response)
 
+        # Small delay to prevent rate-limiting
+        await asyncio.sleep(0.5)
+
         elapsed = time.time() - start_time
         print(f"✅ Signal sent in {elapsed:.2f} seconds")
 
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-
+        await update.message.reply_text(f"⚠️ Temporary error: {str(e)}")
+        print(f"Error: {e}")
+    
 # ==========================================
 # START BOT
 # ==========================================
