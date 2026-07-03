@@ -10,9 +10,9 @@ from datetime import datetime, timezone, timedelta
 from collections import deque
 
 # ==========================================
-# TELEGRAM CREDENTIALS
+# TELEGRAM CREDENTIALS (NEW BOT)
 # ==========================================
-TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
+TOKEN = "8846196749:AAGWGWuwP3gpGsjMD0hse570SAKh1g6-4BA"
 CHAT_ID = "6280535707"
 
 # ==========================================
@@ -21,14 +21,17 @@ CHAT_ID = "6280535707"
 LOCAL_TZ = timezone(timedelta(hours=1))
 
 # ==========================================
-# STRATEGY HEALTH TRACKING (14 STRATEGIES)
+# STRATEGY HEALTH TRACKING (20 STRATEGIES)
 # ==========================================
 strategy_history = {name: deque(maxlen=10) for name in [
     "Candle Reversal Pattern", "3-Candle Momentum", "2-Minute Reset",
     "Double Touch", "Spike Rejection", "Consolidation Break",
     "EMA Pullback", "Bull/Bear Confirmation", "60-Second Scalp",
     "RSI Divergence", "Bollinger Squeeze", "MACD Crossover",
-    "Support/Resistance Break", "MA Crossover"
+    "Support/Resistance Break", "MA Crossover",
+    "Three White Soldiers", "Three Black Crows",
+    "Morning Star", "Evening Star",
+    "Bullish Harami", "Bearish Harami"
 ]}
 
 def get_strategy_health(strategy_name):
@@ -110,7 +113,7 @@ def calculate_bollinger(close, period=20):
     return sma + 2 * std, sma - 2 * std
 
 # ==========================================
-# 14 STRATEGIES
+# 20 STRATEGIES
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -235,6 +238,42 @@ def run_strategies(price_data):
         elif ma10 < ma30 and close[-1] < open_[-1]:
             add_signal("MA Crossover", "SELL", 79, 2, 3)
 
+    # --- 15. Three White Soldiers ---
+    if len(close) >= 3:
+        if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3] and
+            close[-1] > close[-2] and close[-2] > close[-3]):
+            add_signal("Three White Soldiers", "BUY", 85, 2, 3)
+
+    # --- 16. Three Black Crows ---
+    if len(close) >= 3:
+        if (close[-1] < open_[-1] and close[-2] < open_[-2] and close[-3] < open_[-3] and
+            close[-1] < close[-2] and close[-2] < close[-3]):
+            add_signal("Three Black Crows", "SELL", 85, 2, 3)
+
+    # --- 17. Morning Star ---
+    if len(close) >= 3:
+        if (close[-3] < open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
+            close[-1] > open_[-1] and close[-1] > (close[-3] + open_[-3]) / 2):
+            add_signal("Morning Star", "BUY", 84, 2, 3)
+
+    # --- 18. Evening Star ---
+    if len(close) >= 3:
+        if (close[-3] > open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
+            close[-1] < open_[-1] and close[-1] < (close[-3] + open_[-3]) / 2):
+            add_signal("Evening Star", "SELL", 84, 2, 3)
+
+    # --- 19. Bullish Harami ---
+    if len(close) >= 2:
+        if (close[-2] < open_[-2] and close[-1] > open_[-1] and
+            close[-1] < open_[-2] and open_[-1] > close_[-2]):
+            add_signal("Bullish Harami", "BUY", 80, 2, 3)
+
+    # --- 20. Bearish Harami ---
+    if len(close) >= 2:
+        if (close[-2] > open_[-2] and close[-1] < open_[-1] and
+            close[-1] > open_[-2] and open_[-1] < close_[-2]):
+            add_signal("Bearish Harami", "SELL", 80, 2, 3)
+
     # --- Adjust confidence based on strategy health ---
     adjusted_results = []
     for name, direction, confidence, expiry1, expiry2 in results:
@@ -325,7 +364,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
-    application.bot.delete_webhook()
+    
+    # FORCE CLEAR WEBHOOK
+    try:
+        application.bot.delete_webhook()
+        print("✅ Webhook cleared.")
+    except Exception as e:
+        print(f"⚠️ Webhook clear error: {e}")
+    
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.run_polling()
