@@ -87,12 +87,24 @@ def run_flask():
 # 14 STRATEGIES WITH FILTERS
 # ==========================================
 def run_strategies(price_data):
-    results = []
-    close = np.array(price_data['close'])
-    open_ = np.array(price_data['open'])
-    high = np.array(price_data['high'])
-    low = np.array(price_data['low'])
-    volume = np.array(price_data.get('volume', np.ones(len(close))))
+    try:
+        results = []
+        close = np.array(price_data['close'])
+        open_ = np.array(price_data['open'])
+        high = np.array(price_data['high'])
+        low = np.array(price_data['low'])
+        volume = np.array(price_data.get('volume', np.ones(len(close))))
+
+        if len(close) < 5:
+            return results
+
+        # ... rest of your code ...
+
+        return adjusted_results
+
+    except Exception as e:
+        print(f"⚠️ run_strategies error: {e}")
+        return []  # Return empty on error
 
     def calculate_rsi(data, period=14):
         if len(data) < period + 1:
