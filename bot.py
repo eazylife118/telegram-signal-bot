@@ -220,7 +220,13 @@ def run_strategies(price_data):
             results.append(("MA Crossover", "BUY", 79, 2, 3))
         elif ma10 < ma30 and close[-1] < open_[-1]:
             results.append(("MA Crossover", "SELL", 79, 2, 3))
-
+    
+    # --- 15. Three White Soldiers ---
+    if len(close) >= 3:
+        if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3] and
+            close[-1] > close[-2] and close[-2] > close[-3]):
+            add_signal("Three White Soldiers", "BUY", 85, 2, 3)
+    
     # --- Adjust confidence based on strategy health ---
     adjusted_results = []
     for name, direction, confidence, expiry1, expiry2 in results:
