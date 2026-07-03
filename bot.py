@@ -21,15 +21,14 @@ CHAT_ID = "6280535707"
 LOCAL_TZ = timezone(timedelta(hours=1))
 
 # ==========================================
-# STRATEGY HEALTH TRACKING (16 STRATEGIES)
+# STRATEGY HEALTH TRACKING (14 STRATEGIES)
 # ==========================================
 strategy_history = {name: deque(maxlen=10) for name in [
     "Candle Reversal Pattern", "3-Candle Momentum", "2-Minute Reset",
     "Double Touch", "Spike Rejection", "Consolidation Break",
     "EMA Pullback", "Bull/Bear Confirmation", "60-Second Scalp",
     "RSI Divergence", "Bollinger Squeeze", "MACD Crossover",
-    "Support/Resistance Break", "MA Crossover",
-    "Bullish Harami", "Bearish Harami"
+    "Support/Resistance Break", "MA Crossover"
 ]}
 
 def get_strategy_health(strategy_name):
@@ -111,7 +110,7 @@ def calculate_bollinger(close, period=20):
     return sma + 2 * std, sma - 2 * std
 
 # ==========================================
-# 16 STRATEGIES (14 ORIGINAL + 2 ADDED BACK)
+# 14 STRATEGIES
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -235,22 +234,6 @@ def run_strategies(price_data):
             add_signal("MA Crossover", "BUY", 79, 2, 3)
         elif ma10 < ma30 and close[-1] < open_[-1]:
             add_signal("MA Crossover", "SELL", 79, 2, 3)
-
-    # ==========================================
-    # ADDED BACK: Bullish Harami & Bearish Harami
-    # ==========================================
-
-    # --- 15. Bullish Harami ---
-    if len(close) >= 2:
-        if (close[-2] < open_[-2] and close[-1] > open_[-1] and
-            close[-1] < open_[-2] and open_[-1] > close_[-2]):
-            add_signal("Bullish Harami", "BUY", 80, 2, 3)
-
-    # --- 16. Bearish Harami ---
-    if len(close) >= 2:
-        if (close[-2] > open_[-2] and close[-1] < open_[-1] and
-            close[-1] > open_[-2] and open_[-1] < close_[-2]):
-            add_signal("Bearish Harami", "SELL", 80, 2, 3)
 
     # --- Adjust confidence based on strategy health ---
     adjusted_results = []
