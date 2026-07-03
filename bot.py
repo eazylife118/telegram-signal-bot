@@ -226,6 +226,11 @@ def run_strategies(price_data):
         if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3] and
             close[-1] > close[-2] and close[-2] > close[-3]):
             add_signal("Three White Soldiers", "BUY", 85, 2, 3)
+    # --- 16. Three Black Crows ---
+    if len(close) >= 3:
+        if (close[-1] < open_[-1] and close[-2] < open_[-2] and close[-3] < open_[-3] and
+            close[-1] < close[-2] and close[-2] < close[-3]):
+            add_signal("Three Black Crows", "SELL", 85, 2, 3)
     
     # --- Adjust confidence based on strategy health ---
     adjusted_results = []
