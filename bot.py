@@ -43,10 +43,6 @@ def get_strategy_health(strategy_name):
     win_rate = sum(history) / len(history) * 100
     return min(100, max(50, win_rate))
 
-def record_signal(strategy_name, win):
-    if strategy_name in strategy_history:
-        strategy_history[strategy_name].append(win)
-
 # ==========================================
 # TIME FUNCTIONS
 # ==========================================
@@ -132,23 +128,7 @@ def run_strategies(price_data):
     macd, signal = calculate_macd(close)
     upper_band, lower_band = calculate_bollinger(close)
 
-    def get_indicator_agreement(direction):
-        agree = 0
-        if direction == "BUY":
-            if rsi < 40: agree += 1
-            if close[-1] > ema20: agree += 1
-            if macd > signal: agree += 1
-            if close[-1] < lower_band: agree += 1
-        else:
-            if rsi > 60: agree += 1
-            if close[-1] < ema20: agree += 1
-            if macd < signal: agree += 1
-            if close[-1] > upper_band: agree += 1
-        return agree
-
-    def add_signal(name, direction, base_conf, exp1, exp2):
-        agree = get_indicator_agreement(direction)
-        conf = min(100, base_conf + agree * 3)
+    def add_signal(name, direction, conf, exp1, exp2):
         results.append((name, direction, conf, exp1, exp2))
 
     # --- 1. Candle Reversal Pattern ---
@@ -258,16 +238,20 @@ def run_strategies(price_data):
         elif ma10 < ma30 and close[-1] < open_[-1]:
             add_signal("MA Crossover", "SELL", 79, 2, 3)
 
+    # ==========================================
+    # NEW STRATEGIES (15–20)
+    # ==========================================
+
     # --- 15. Three White Soldiers ---
     if len(close) >= 3:
         if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3] and
-            close[-1] > close[-2] > close[-3]):
+            close[-1] > close[-2] and close[-2] > close[-3]):
             add_signal("Three White Soldiers", "BUY", 85, 2, 3)
 
     # --- 16. Three Black Crows ---
     if len(close) >= 3:
         if (close[-1] < open_[-1] and close[-2] < open_[-2] and close[-3] < open_[-3] and
-            close[-1] < close[-2] < close[-3]):
+            close[-1] < close[-2] and close[-2] < close[-3]):
             add_signal("Three Black Crows", "SELL", 85, 2, 3)
 
     # --- 17. Morning Star ---
@@ -385,7 +369,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
     
-    # FORCE CLEAR ANY OLD WEBHOOK (FIXES CONFLICT ERROR)
+    # FORCE CLEAR WEBHOOK
     try:
         application.bot.delete_webhook()
         print("✅ Webhook cleared.")
