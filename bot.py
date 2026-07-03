@@ -32,10 +32,9 @@ LOCAL_TZ = timezone(timedelta(hours=1))
 strategy_history = {name: deque(maxlen=10) for name in [
     "Candle Reversal Pattern", "3-Candle Momentum", "2-Minute Reset",
     "Double Touch", "Spike Rejection", "Consolidation Break",
-    "Bull/Bear Confirmation", "60-Second Scalp",
-    "Support/Resistance Break", "Long Wick Rejection",
-    "Opening Range Break", "Close Beyond Previous High/Low",
-    "2-Candle Engulfing", "Outside Candle",
+    "EMA Pullback", "Bull/Bear Confirmation", "60-Second Scalp",
+    "RSI Divergence", "Bollinger Squeeze", "MACD Crossover",
+    "Support/Resistance Break", "MA Crossover",
     "Three White Soldiers", "Three Black Crows",
     "Morning Star", "Evening Star",
     "Bullish Harami", "Bearish Harami"
@@ -88,7 +87,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
 # ==========================================
-# 20 STRATEGIES — DYNAMIC CONFIDENCE
+# 20 STRATEGIES (MINIMUM 3 AGREEMENT)
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -96,29 +95,193 @@ def run_strategies(price_data):
     open_ = np.array(price_data['open'])
     high = np.array(price_data['high'])
     low = np.array(price_data['low'])
+    volume = np.array(price_data.get('volume', np.ones(len(close))))
 
-    if len(close) < 5:
-        return results
+    # --- Indicators (for strategies that use them) ---
+    def calculate_rsi(data, period=14):
+        if len(data) < period + 1:
+            return 50
+        deltas = np.diff(data)
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        avg_gain = np.mean(gains[-period:])
+        avg_loss = np.mean(losses[-period:])
+        if avg_loss == 0:
+            return 100
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
+
+    rsi = calculate_rsi(close)
+    ema20 = np.mean(close[-20:]) if len(close) >= 20 else close[-1]
+    macd = np.mean(close[-12:]) - np.mean(close[-26:]) if len(close) >= 26 else 0
+    signal = np.mean(close[-9:]) if len(close) >= 9 else 0
+    upper_band = np.mean(close[-20:]) + 2 * np.std(close[-20:]) if len(close) >= 20 else 0
+    lower_band = np.mean(close[-20:]) - 2 * np.std(close[-20:]) if len(close) >= 20 else 0
 
     def add_signal(name, direction, base_conf, exp1, exp2):
-        # Health adjustment
         health = get_strategy_health(name)
         conf = int(base_conf * (health / 50))
         conf = min(100, max(50, conf))
         results.append((name, direction, conf, exp1, exp2))
 
-    # --- All 20 strategies (same as before, but without indicators) ---
-    # ... (keep all strategies from the previous version) ...
+    # --- 1. Candle Reversal Pattern ---
+    if len(close) >= 3:
+        if (close[-3:] > open_[-3:]).all() and (close[-1] < open_[-1]) and rsi > 70:
+            add_signal("Candle Reversal Pattern", "SELL", 86, 2, 3)
+        elif (close[-3:] < open_[-3:]).all() and (close[-1] > open_[-1]) and rsi < 30:
+            add_signal("Candle Reversal Pattern", "BUY", 86, 2, 3)
 
-    # --- After collecting all signals, calculate agreement ---
-    if not results:
-        return results
+    # --- 2. 3-Candle Momentum ---
+    if len(close) >= 3:
+        if (close[-3:] > open_[-3:]).all() and volume[-1] > np.mean(volume[-5:]):
+            add_signal("3-Candle Momentum", "BUY", 82, 1, 2)
+        elif (close[-3:] < open_[-3:]).all() and volume[-1] > np.mean(volume[-5:]):
+            add_signal("3-Candle Momentum", "SELL", 82, 1, 2)
 
-    # Group signals by direction (BUY/SELL)
+    # --- 3. 2-Minute Reset ---
+    if len(close) >= 3:
+        if (close[-3:] < open_[-3:]).all() and close[-1] < ema20 * 0.98:
+            add_signal("2-Minute Reset", "SELL", 78, 2, 3)
+        elif (close[-3:] > open_[-3:]).all() and close[-1] > ema20 * 1.02:
+            add_signal("2-Minute Reset", "BUY", 78, 2, 3)
+
+    # --- 4. Double Touch ---
+    if len(close) >= 10:
+        if abs(low[-1] - low[-3]) < 0.0002 and close[-1] > max(close[-5:-1]):
+            add_signal("Double Touch", "BUY", 89, 3, 4)
+        elif abs(high[-1] - high[-3]) < 0.0002 and close[-1] < min(close[-5:-1]):
+            add_signal("Double Touch", "SELL", 89, 3, 4)
+
+    # --- 5. Spike Rejection ---
+    if len(close) >= 2:
+        avg_range = np.mean(high[-5:] - low[-5:]) if len(high) >= 5 else 0.001
+        if (high[-1] - high[-2]) > 2 * avg_range and (close[-1] < open_[-1]):
+            add_signal("Spike Rejection", "SELL", 74, 2, 3)
+        elif (low[-2] - low[-1]) > 2 * avg_range and (close[-1] > open_[-1]):
+            add_signal("Spike Rejection", "BUY", 74, 2, 3)
+
+    # --- 6. Consolidation Break ---
+    if len(close) >= 10:
+        high_range = max(high[-10:]) - min(low[-10:])
+        if high_range < 0.0005 and (close[-1] - open_[-1]) > 0.0005:
+            add_signal("Consolidation Break", "BUY", 71, 3, 4)
+        elif high_range < 0.0005 and (open_[-1] - close[-1]) > 0.0005:
+            add_signal("Consolidation Break", "SELL", 71, 3, 4)
+
+    # --- 7. EMA Pullback ---
+    if len(close) >= 20:
+        if low[-1] < ema20 and close[-1] > ema20 and rsi > 40:
+            add_signal("EMA Pullback", "BUY", 80, 2, 3)
+        elif high[-1] > ema20 and close[-1] < ema20 and rsi < 60:
+            add_signal("EMA Pullback", "SELL", 80, 2, 3)
+
+    # --- 8. Bull/Bear Confirmation ---
+    if len(close) >= 3:
+        if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3]):
+            add_signal("Bull/Bear Confirmation", "BUY", 76, 1, 2)
+        elif (close[-1] < open_[-1] and close[-2] < open_[-2] and close[-3] < open_[-3]):
+            add_signal("Bull/Bear Confirmation", "SELL", 76, 1, 2)
+
+    # --- 9. 60-Second Scalp ---
+    if len(close) >= 2:
+        if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
+            add_signal("60-Second Scalp", "BUY", 72, 1, 1)
+        elif (open_[-1] - close[-1]) > (open_[-2] - close_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
+            add_signal("60-Second Scalp", "SELL", 72, 1, 1)
+
+    # --- 10. RSI Divergence ---
+    if len(close) >= 20:
+        if close[-1] < min(close[-5:-1]) and rsi > min(50, np.mean(rsi)):
+            add_signal("RSI Divergence", "BUY", 84, 2, 3)
+        elif close[-1] > max(close[-5:-1]) and rsi < max(50, np.mean(rsi)):
+            add_signal("RSI Divergence", "SELL", 84, 2, 3)
+
+    # --- 11. Bollinger Squeeze ---
+    if len(close) >= 20:
+        atr = np.mean(high[-20:] - low[-20:])
+        current_range = high[-1] - low[-1]
+        if current_range < atr * 0.5:
+            if close[-1] > open_[-1] and close[-1] > ema20:
+                add_signal("Bollinger Squeeze", "BUY", 77, 2, 3)
+            elif close[-1] < open_[-1] and close[-1] < ema20:
+                add_signal("Bollinger Squeeze", "SELL", 77, 2, 3)
+
+    # --- 12. MACD Crossover ---
+    if len(close) >= 26:
+        if macd > signal and close[-1] > ema20:
+            add_signal("MACD Crossover", "BUY", 80, 2, 3)
+        elif macd < signal and close[-1] < ema20:
+            add_signal("MACD Crossover", "SELL", 80, 2, 3)
+
+    # --- 13. Support/Resistance Break ---
+    if len(close) >= 20:
+        resistance = max(high[-20:-1])
+        support = min(low[-20:-1])
+        if close[-1] > resistance and close[-1] > open_[-1]:
+            add_signal("Support/Resistance Break", "BUY", 81, 2, 3)
+        elif close[-1] < support and close[-1] < open_[-1]:
+            add_signal("Support/Resistance Break", "SELL", 81, 2, 3)
+
+    # --- 14. MA Crossover ---
+    if len(close) >= 30:
+        ma10 = np.mean(close[-10:])
+        ma30 = np.mean(close[-30:])
+        if ma10 > ma30 and close[-1] > open_[-1]:
+            add_signal("MA Crossover", "BUY", 79, 2, 3)
+        elif ma10 < ma30 and close[-1] < open_[-1]:
+            add_signal("MA Crossover", "SELL", 79, 2, 3)
+
+    # --- 15. Three White Soldiers ---
+    if len(close) >= 3:
+        if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3] and
+            close[-1] > close[-2] and close[-2] > close[-3]):
+            add_signal("Three White Soldiers", "BUY", 85, 2, 3)
+
+    # --- 16. Three Black Crows ---
+    if len(close) >= 3:
+        if (close[-1] < open_[-1] and close[-2] < open_[-2] and close[-3] < open_[-3] and
+            close[-1] < close[-2] and close[-2] < close[-3]):
+            add_signal("Three Black Crows", "SELL", 85, 2, 3)
+
+    # --- 17. Morning Star (Safer) ---
+    try:
+        if len(close) >= 5:
+            if (close[-3] < open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
+                close[-1] > open_[-1] and close[-1] > (close[-3] + open_[-3]) / 2):
+                add_signal("Morning Star", "BUY", 84, 2, 3)
+    except:
+        pass
+
+    # --- 18. Evening Star (Safer) ---
+    try:
+        if len(close) >= 5:
+            if (close[-3] > open_[-3] and abs(close[-2] - open_[-2]) < abs(close[-3] - open_[-3]) * 0.3 and
+                close[-1] < open_[-1] and close[-1] < (close[-3] + open_[-3]) / 2):
+                add_signal("Evening Star", "SELL", 84, 2, 3)
+    except:
+        pass
+
+    # --- 19. Bullish Harami ---
+    if len(close) >= 2:
+        if (close[-2] < open_[-2] and close[-1] > open_[-1] and
+            close[-1] < open_[-2] and open_[-1] > close_[-2]):
+            add_signal("Bullish Harami", "BUY", 80, 2, 3)
+
+    # --- 20. Bearish Harami ---
+    if len(close) >= 2:
+        if (close[-2] > open_[-2] and close[-1] < open_[-1] and
+            close[-1] > open_[-2] and open_[-1] < close_[-2]):
+            add_signal("Bearish Harami", "SELL", 80, 2, 3)
+
+    # --- FILTER: Minimum 3 strategies must agree ---
+    if len(results) < 3:
+        return []  # No signal if fewer than 3 strategies agree
+
+    # --- DYNAMIC CONFIDENCE BASED ON AGREEMENT ---
     buy_signals = [r for r in results if r[1] == "BUY"]
     sell_signals = [r for r in results if r[1] == "SELL"]
 
-    # Pick the direction with more signals
+    # Pick direction with more signals
     if len(buy_signals) > len(sell_signals):
         direction = "BUY"
         group = buy_signals
@@ -126,7 +289,7 @@ def run_strategies(price_data):
         direction = "SELL"
         group = sell_signals
     else:
-        # If equal, pick the one with higher average confidence
+        # If equal, pick higher average confidence
         buy_avg = np.mean([r[2] for r in buy_signals]) if buy_signals else 0
         sell_avg = np.mean([r[2] for r in sell_signals]) if sell_signals else 0
         if buy_avg >= sell_avg:
@@ -136,30 +299,27 @@ def run_strategies(price_data):
             direction = "SELL"
             group = sell_signals
 
-    # Calculate agreement confidence
     num_agree = len(group)
-    total = len(results)
 
-    if num_agree == 1:
-        confidence = 55  # Low confidence
-    elif num_agree == 2:
-        confidence = 68  # Medium
-    elif num_agree == 3:
-        confidence = 78  # High
+    # Confidence based on number of agreeing strategies
+    if num_agree >= 6:
+        agreement_conf = 92
+    elif num_agree >= 5:
+        agreement_conf = 88
     elif num_agree >= 4:
-        confidence = 88  # Very high
-    else:
-        confidence = 50
+        agreement_conf = 82
+    else:  # 3 strategies
+        agreement_conf = 75
 
-    # Also consider the average confidence of the agreeing strategies
+    # Average with health-adjusted confidence
     avg_conf = np.mean([r[2] for r in group]) if group else 50
-    confidence = int((confidence + avg_conf) / 2)  # Blend both
+    final_conf = int((agreement_conf + avg_conf) / 2)
+    final_conf = min(100, max(50, final_conf))
 
-    # Pick the best strategy from the group (highest confidence)
-    best_strategy = max(group, key=lambda x: x[2])
+    # Pick best strategy from the group
+    best = max(group, key=lambda x: x[2])
 
-    # Return only the best signal with the new confidence
-    return [(best_strategy[0], direction, confidence, best_strategy[3], best_strategy[4])]
+    return [(best[0], direction, final_conf, best[3], best[4])]
 
 # ==========================================
 # PREDICTION ENGINE
@@ -193,8 +353,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    async with process_lock:
-        try:
+    try:
+        async with process_lock:
             start_time = time.time()
 
             photo = await update.message.photo[-1].get_file()
@@ -204,7 +364,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'open': np.random.randn(30) + 1.12,
                 'high': np.random.randn(30) + 1.13,
                 'low': np.random.randn(30) + 1.11,
-                'close': np.random.randn(30) + 1.12
+                'close': np.random.randn(30) + 1.12,
+                'volume': np.random.randint(100, 1000, 30)
             }
 
             results = run_strategies(price_data)
@@ -234,21 +395,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elapsed = time.time() - start_time
             print(f"✅ Signal sent in {elapsed:.2f} seconds")
 
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {str(e)}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 # ==========================================
 # START BOT
 # ==========================================
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
-    
-    try:
-        application.bot.delete_webhook()
-        print("✅ Webhook cleared.")
-    except Exception as e:
-        print(f"⚠️ Webhook clear error: {e}")
-    
+    application.bot.delete_webhook()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.run_polling()
