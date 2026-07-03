@@ -238,10 +238,6 @@ def run_strategies(price_data):
         elif ma10 < ma30 and close[-1] < open_[-1]:
             add_signal("MA Crossover", "SELL", 79, 2, 3)
 
-    # ==========================================
-    # NEW STRATEGIES (15–20)
-    # ==========================================
-
     # --- 15. Three White Soldiers ---
     if len(close) >= 3:
         if (close[-1] > open_[-1] and close[-2] > open_[-2] and close[-3] > open_[-3] and
@@ -368,14 +364,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
-    
-    # FORCE CLEAR WEBHOOK
-    try:
-        application.bot.delete_webhook()
-        print("✅ Webhook cleared.")
-    except Exception as e:
-        print(f"⚠️ Webhook clear error: {e}")
-    
+    application.bot.delete_webhook()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.run_polling()
