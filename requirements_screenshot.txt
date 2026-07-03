@@ -1,4 +1,4 @@
-flask
-python-telegram-bot
-requests
-numpy
+flask==3.0.0
+python-telegram-bot==20.7
+requests==2.31.0
+numpy==1.26.3
