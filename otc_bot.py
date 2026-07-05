@@ -1,60 +1,22 @@
-import time
 import requests
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 
-TELEGRAM_TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
-TELEGRAM_CHAT_ID = "6280535707"
+TOKEN = "8846196749:AAG9CP2fNqw4vSt0l4MAUQK3lc783VR0Hb0"
+CHANNEL_ID = "-1004324805205"
 
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+def send_test_message():
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    data = {
+        "chat_id": CHANNEL_ID,
+        "text": "✅ Test message from bot to channel!",
+        "parse_mode": "Markdown"
+    }
     try:
-        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
-        print(f"✅ Sent: {message}")
+        response = requests.post(url, data=data)
+        if response.status_code == 200:
+            print("✅ Message sent successfully!")
+        else:
+            print("❌ Failed:", response.text)
     except Exception as e:
-        print("Telegram error:", e)
+        print("❌ Error:", e)
 
-# ==========================================
-# SEND "BOT IS ALIVE" MESSAGE ONLY ONCE
-# ==========================================
-send_telegram("✅ BOT IS ALIVE — Connected and scanning for OTC signals!")
-
-options = Options()
-options.add_argument("--headless")
-options.add_argument("--no-sandbox")
-options.add_argument("--disable-dev-shm-usage")
-
-driver = webdriver.Chrome(
-    service=Service(ChromeDriverManager().install()),
-    options=options
-)
-
-driver.get("https://pocketoption.com/en/trading")
-time.sleep(10)
-
-send_telegram("✅ Connected to Pocket Option — watching for live price changes...")
-
-last_prices = {}
-
-while True:
-    try:
-        assets = driver.find_elements(By.CLASS_NAME, "asset-item")
-        for asset in assets:
-            name = asset.get_attribute("data-name")
-            if name and "OTC" in name:
-                try:
-                    price_el = asset.find_element(By.CLASS_NAME, "price")
-                    price = float(price_el.text.replace(",", ""))
-                    
-                    if name not in last_prices or last_prices[name] != price:
-                        last_prices[name] = price
-                        send_telegram(f"📈 LIVE OTC SIGNAL: {name} - Price: {price}")
-                except:
-                    pass
-        time.sleep(2)
-    except Exception as e:
-        print("Error:", e)
-        time.sleep(5)
+send_test_message()
