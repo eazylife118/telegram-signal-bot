@@ -310,11 +310,8 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
 # TELEGRAM BOT HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot — I'll give you a signal."
-    )
-
+    response = "📊 **OTC Signal Bot**\n\nSend a screenshot — I'll give you a signal."
+    send_telegram(response)
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         start_time = time.time()
