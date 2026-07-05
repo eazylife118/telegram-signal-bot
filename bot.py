@@ -14,7 +14,6 @@ from collections import deque
 # ==========================================
 TOKEN = "8846196749:AAG9CP2fNqw4vSt0l4MAUQK3lc783VR0Hb0"
 CHAT_ID = "6280535707"
-CHAT_ID = "6280535707"
 CHANNEL_ID = "-1004324805205" 
 # ==========================================
 # TIME ZONE (UTC+1)
