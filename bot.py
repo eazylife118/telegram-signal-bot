@@ -3,7 +3,7 @@ import requests
 # ==========================================
 # YOUR CREDENTIALS
 # ==========================================
-TOKEN = "8846196749:AAGWGWuw3PgpGsjMD0hse570SAKh1g6-4BA"
+TOKEN = "8846196749:AAG9CP2fNqw4vSt0l4MAUQK3lc783VR0Hb0"
 CHANNEL_ID = "-1004324805205"  # Your channel ID
 
 def send_test_message():
