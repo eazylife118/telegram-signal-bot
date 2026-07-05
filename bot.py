@@ -390,4 +390,3 @@ def send_telegram(message):
     except Exception as e:
         print("Telegram error:", e)
 
-It’s added between run flask and run strategy in between them, I have already added it in the make code, the down write was just to know where to add, so that I can do it manually anytime. I only need to remove that code, for it to be personal to me 
