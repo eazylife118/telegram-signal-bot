@@ -1,5 +1,4 @@
-selenium
-webdriver-manager
-requests
-pandas
 flask
+python-telegram-bot
+requests
+numpy
