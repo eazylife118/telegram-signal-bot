@@ -11,11 +11,11 @@ from datetime import datetime, timezone, timedelta
 from collections import deque
 
 # ==========================================
-# TELEGRAM CREDENTIALS
+# TELEGRAM CREDENTIALS (UPDATED)
 # ==========================================
-TOKEN = "8846196749:AAGWGWuw3PgpGsjMD0hse570SAKh1g6-4BA"
+TOKEN = "8846196749:AAGWGWuwP3gpGsjMD0hse570SAKh1g6-4BA"
 CHAT_ID = "6280535707"
-CHANNEL_ID = "-1004324805205"  # ✅ Your actual channel ID
+CHANNEL_ID = "-1004324805205"
 
 # ==========================================
 # PROCESSING LOCK
