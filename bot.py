@@ -153,15 +153,14 @@ def run_flask():
     log.setLevel(logging.ERROR)
 
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
-
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     try:
         # Send to your private chat
-        requests.post(url, data={"chat_id": CHAT_ID, "text": message})
+        requests.post(url, data={"chat_id": CHAT_ID, "text": "✅ Private test"})
         # Send to the channel
-        requests.post(url, data={"chat_id": CHANNEL_ID, "text": message})
-        print(f"✅ Sent to private and channel: {message}")
+        requests.post(url, data={"chat_id": CHANNEL_ID, "text": "✅ Channel test"})
+        print("✅ Test messages sent")
     except Exception as e:
         print("Telegram error:", e)
 
