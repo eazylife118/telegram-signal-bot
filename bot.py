@@ -14,7 +14,8 @@ from collections import deque
 # ==========================================
 TOKEN = "8846196749:AAG9CP2fNqw4vSt0l4MAUQK3lc783VR0Hb0"
 CHAT_ID = "6280535707"
-CHANNEL_ID = "-1004324805205" 
+CHANNEL_ID = "-1004324805205"   # ✅ Your channel ID
+
 # ==========================================
 # TIME ZONE (UTC+1)
 # ==========================================
@@ -77,6 +78,9 @@ def run_flask():
     log.setLevel(logging.ERROR)
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
+# ==========================================
+# SEND TO TELEGRAM (PRIVATE + CHANNEL)
+# ==========================================
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     try:
@@ -84,7 +88,7 @@ def send_telegram(message):
         requests.post(url, data={"chat_id": CHAT_ID, "text": message})
         # Send to the channel
         requests.post(url, data={"chat_id": CHANNEL_ID, "text": message})
-        print(f"✅ Sent to private and channel: {message}")
+        print("✅ Sent to private and channel")
     except Exception as e:
         print("Telegram error:", e)
 
@@ -183,7 +187,7 @@ def run_strategies(price_data):
     if len(close) >= 2:
         if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "BUY", 72, 1, 1))
-        elif (open_[-1] - close[-1]) > (open_[-2] - close[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
+        elif (open_[-1] - close[-1]) > (open_[-2] - close_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "SELL", 72, 1, 1))
 
     # --- 10. RSI Divergence ---
@@ -233,18 +237,15 @@ def run_strategies(price_data):
             results.append(("MA Crossover", "SELL", 79, 2, 3))
 
     # ==========================================
-    # 5 STRATEGIES MUST AGREE (WITH GRADED CONFIDENCE)
+    # 5 STRATEGIES MUST AGREE
     # ==========================================
 
-    # If fewer than 5 strategies triggered, no signal
     if len(results) < 5:
         return []
 
-    # Separate BUY and SELL signals
     buy_signals = [r for r in results if r[1] == "BUY"]
     sell_signals = [r for r in results if r[1] == "SELL"]
 
-    # Choose the direction with more signals
     if len(buy_signals) > len(sell_signals):
         direction = "BUY"
         group = buy_signals
@@ -263,25 +264,20 @@ def run_strategies(price_data):
 
     num_agree = len(group)
 
-    # Confidence based on number of agreeing strategies
     if num_agree >= 10:
         agreement_conf = 90
     elif num_agree >= 8:
         agreement_conf = 85
     elif num_agree >= 6:
         agreement_conf = 80
-    else:  # exactly 5
+    else:
         agreement_conf = 75
 
-    # Blend with the average confidence of the agreeing strategies
     avg_conf = np.mean([r[2] for r in group]) if group else 50
     final_conf = int((agreement_conf + avg_conf) / 2)
     final_conf = min(100, max(50, final_conf))
 
-    # Pick the best strategy from the agreeing group
     best = max(group, key=lambda x: x[2])
-
-    # Return only the best signal with the new confidence
     return [(best[0], direction, final_conf, best[3], best[4])]
 
 # ==========================================
@@ -307,11 +303,12 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
     }
 
 # ==========================================
-# TELEGRAM BOT HANDLERS
+# TELEGRAM BOT HANDLERS (FIXED)
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = "📊 **OTC Signal Bot**\n\nSend a screenshot — I'll give you a signal."
     send_telegram(response)
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         start_time = time.time()
@@ -319,7 +316,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # Price data (placeholder — replace with real data)
         price_data = {
             'open': np.random.randn(30) + 1.12,
             'high': np.random.randn(30) + 1.13,
@@ -334,7 +330,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
             return
 
-        # Pick best strategy (highest confidence)
         best = max(results, key=lambda x: x[2])
         strategy, direction, confidence, expiry_1, expiry_2 = best
         prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
@@ -350,7 +345,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
-        await update.message.reply_text(response)
+        # ✅ THIS IS THE FIX — sends to both private and channel
+        send_telegram(response)
 
         elapsed = time.time() - start_time
         print(f"✅ Signal sent in {elapsed:.2f} seconds")
