@@ -12,9 +12,9 @@ from collections import deque
 # ==========================================
 # TELEGRAM CREDENTIALS
 # ==========================================
-TOKEN = "8846196749:AAG9CP2fNqw4vSt0l4MAUQK3lc783VR0Hb0"
+TOKEN = "8846196749:AAGWGWuwP3gpGsjMD0hse570SAKh1g6-4BA"
 CHAT_ID = "6280535707"
-CHANNEL_ID = "-1004324805205"
+
 # ==========================================
 # TIME ZONE (UTC+1)
 # ==========================================
@@ -376,17 +376,3 @@ if __name__ == "__main__":
     print("✅ Flask server started.")
     print("✅ Starting Telegram bot...")
     run_telegram()
-
-The code needed to send signals to my telegram channel
-
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    try:
-        # Send to your private chat
-        requests.post(url, data={"chat_id": CHAT_ID, "text": message})
-        # Send to the channel
-        requests.post(url, data={"chat_id": CHANNEL_ID, "text": message})
-        print(f"✅ Sent to private and channel: {message}")
-    except Exception as e:
-        print("Telegram error:", e)
-
