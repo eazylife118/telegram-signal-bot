@@ -322,8 +322,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ✅ CHECK IF THE MESSAGE HAS A PHOTO
-    if not update.message or not update.message.photo:
+    if not update.message or not 
+update.message.photo:
         await update.message.reply_text("⚠️ Please send a screenshot (photo).")
+Please send a screenshot (photo).")
         return
         
         # Price data (placeholder — replace with real data)
