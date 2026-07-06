@@ -324,9 +324,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ✅ CHECK IF THE MESSAGE HAS A PHOTO
     if not update.message or not 
 update.message.photo:
-        await update.message.reply_text("⚠️ 
-Please send a screenshot (photo).")
-        return
+        await update.message.reply_text("⚠️ Please 
+        send a screenshot (photo).")
     try:
         start_time = time.time()
 
