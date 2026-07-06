@@ -358,8 +358,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
-        await update.message.reply_text to both private chat and channel
-send_telegram(response)
+        send_telegram(response)
 
         elapsed = time.time() - start_time
         print(f"✅ Signal sent in {elapsed:.2f} seconds")
