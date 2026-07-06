@@ -321,12 +321,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        start_time = time.time()
-
-        photo = await update.message.photo[-1].get_file()
-        await photo.download_to_drive("screenshot.png")
-
+    # ✅ CHECK IF THE MESSAGE HAS A PHOTO
+    if not update.message or not update.message.photo:
+        await update.message.reply_text("⚠️ Please send a screenshot (photo).")
+        return
+        
         # Price data (placeholder — replace with real data)
         price_data = {
             'open': np.random.randn(30) + 1.12,
