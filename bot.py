@@ -358,10 +358,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
-        # ✅ FORWARD SCREENSHOT TO CHANNEL FIRST
-        await update.message.photo[-1].forward(chat_id=CHANNEL_ID)
+        await context.bot.forward_message(
+            chat_id=CHANNEL_ID,
+            from_chat_id=update.message.chat_id,
+            message_id=update.message.message_id
+        )
 
-        # ✅ THEN SEND SIGNAL
         send_telegram(response)
 
         elapsed = time.time() - start_time
