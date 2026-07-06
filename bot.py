@@ -327,6 +327,11 @@ update.message.photo:
         await update.message.reply_text("⚠️ 
 Please send a screenshot (photo).")
         return
+    try:
+        start_time = time.time()
+
+        photo = await update.message.photo[-1].get_file()
+        await photo.download_to_drive("screenshot.png")    
         
         # Price data (placeholder — replace with real data)
         price_data = {
