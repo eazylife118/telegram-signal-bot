@@ -188,7 +188,7 @@ def run_strategies(price_data):
     if len(close) >= 2:
         if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "BUY", 72, 1, 1))
-        elif (open_[-1] - close[-1]) > (open_[-2] - close[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
+        elif (open_[-1] - close[-1]) > (open_[-2] - close_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "SELL", 72, 1, 1))
 
     # --- 10. RSI Divergence ---
@@ -321,17 +321,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ✅ CHECK IF THE MESSAGE HAS A PHOTO
-    if not update.message or not 
-update.message.photo:
-        await update.message.reply_text("⚠️ Please 
-        send a screenshot (photo).")
     try:
         start_time = time.time()
 
         photo = await update.message.photo[-1].get_file()
-        await photo.download_to_drive("screenshot.png")    
-        
+        await photo.download_to_drive("screenshot.png")
+
         # Price data (placeholder — replace with real data)
         price_data = {
             'open': np.random.randn(30) + 1.12,
@@ -363,10 +358,14 @@ update.message.photo:
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
+        # Send signal to private chat and channel
         send_telegram(response)
 
+        # ✅ FORWARD THE SCREENSHOT TO THE CHANNEL
+        await update.message.photo[-1].forward(chat_id=CHANNEL_ID)
+
         elapsed = time.time() - start_time
-        print(f"✅ Signal sent in {elapsed:.2f} seconds")
+        print(f"✅ Signal and screenshot sent in {elapsed:.2f} seconds")
 
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
