@@ -241,8 +241,8 @@ def run_strategies(price_data):
     # 5 STRATEGIES MUST AGREE (WITH GRADED CONFIDENCE)
     # ==========================================
 
-    # If fewer than 5 strategies triggered, no signal
-    if len(results) < 5:
+    # If fewer than 6 strategies triggered, no signal
+    if len(results) < 6:
         return []
 
     # Separate BUY and SELL signals
