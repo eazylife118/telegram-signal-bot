@@ -290,35 +290,44 @@ def run_strategies(price_data):
     return [(best[0], direction, final_conf, best[3], best[4])]
 
 # ==========================================
-# CANDLE PREDICTION ENGINE (ADDED)
+# CANDLE PREDICTION ENGINE (REALISTIC)
 # ==========================================
 def predict_next_candles(strategy, direction, confidence, price_data):
     close = np.array(price_data['close'])
     high = np.array(price_data['high'])
     low = np.array(price_data['low'])
 
-    base_prob = confidence / 100
+    # Base probability (capped at 70%)
+    base_prob = min(confidence / 100, 0.70)
 
+    # Trend factor (smaller, more realistic)
     if close[-1] > close[-5:].mean():
-        trend_factor = 0.10
+        trend_factor = 0.06
     else:
-        trend_factor = -0.10
+        trend_factor = -0.06
 
+    # Support/Resistance factor
     resistance = high[-5:].max()
     support = low[-5:].min()
-    if close[-1] < support + 0.001:
-        sr_factor = 0.08
-    elif close[-1] > resistance - 0.001:
-        sr_factor = -0.08
+
+    if close[-1] > resistance - 0.001:
+        sr_factor = -0.05  # reversal
+    elif close[-1] < support + 0.001:
+        sr_factor = 0.05   # bounce
     else:
         sr_factor = 0
 
+    # Candle 1 probability
     prob1 = base_prob + trend_factor + sr_factor
-    prob1 = max(0.50, min(0.90, prob1))
+    prob1 = max(0.45, min(0.75, prob1))  # Between 45% and 75%
 
-    prob2 = prob1 * 0.90
-    prob3 = prob1 * 0.80
+    # Candle 2 (decay)
+    prob2 = prob1 * 0.85
 
+    # Candle 3 (more decay)
+    prob3 = prob1 * 0.70
+
+    # If SELL, invert
     if direction == "SELL":
         prob1 = 1 - prob1
         prob2 = 1 - prob2
@@ -400,7 +409,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
         # ==========================================
-        # ADD 3-CANDLE PREDICTION (ADDED)
+        # 3-CANDLE PREDICTION
         # ==========================================
         prediction_data = predict_next_candles(strategy, direction, confidence, price_data)
 
