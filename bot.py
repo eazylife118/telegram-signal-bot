@@ -289,7 +289,7 @@ def run_strategies(price_data):
     # Return only the best signal with the new confidence
     return [(best[0], direction, final_conf, best[3], best[4])]
 
-==========================================
+# ==========================================
 # CANDLE PREDICTION ENGINE 
 # ==========================================
 def predict_next_candles(strategy, direction, confidence, price_data):
