@@ -289,9 +289,8 @@ def run_strategies(price_data):
     # Return only the best signal with the new confidence
     return [(best[0], direction, final_conf, best[3], best[4])]
 
-# ==========================================
-# ==========================================
-# CANDLE PREDICTION ENGINE (ADD THIS)
+==========================================
+# CANDLE PREDICTION ENGINE 
 # ==========================================
 def predict_next_candles(strategy, direction, confidence, price_data):
     close = np.array(price_data['close'])
@@ -332,12 +331,6 @@ def predict_next_candles(strategy, direction, confidence, price_data):
     }
 
 # ==========================================
-# PREDICTION ENGINE
-# ==========================================
-def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
-    # ... your existing code stays here ...
-
-# ==========================================
 # TELEGRAM BOT HANDLERS
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -375,6 +368,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         response = f"📊 **OTC SIGNAL**\n\n"
         response += f"📈 **Entry 1:**\n"
+        response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
+        response += f"🔍 **Strategy:** {strategy}\n"
+        response += f"   → Direction: {direction}\n"
+        response += f"   → Confidence: {confidence}%\n"
+        response += f"   → Expiry: {expiry_1} min\n\n"
+        response += f"📈 **Entry 2:**\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
         prediction_data = predict_next_candles(strategy, direction, confidence, price_data)
 
@@ -394,6 +393,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response += f"   - Candle 3: ⬆️ UP {prediction_data['candle3']['up']}%\n"
         else:
             response += f"   - Candle 3: ⬇️ DOWN {prediction_data['candle3']['down']}%\n"
+
+        await context.bot.forward_message(
+            chat_id=CHANNEL_ID,
+            from_chat_id=update.message.chat_id,
+            message_id=update.message.message_id
+        )
 
         send_telegram(response)
 
