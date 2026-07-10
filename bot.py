@@ -188,7 +188,7 @@ def run_strategies(price_data):
     if len(close) >= 2:
         if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "BUY", 72, 1, 1))
-        elif (open_[-1] - close[-1]) > (open_[-2] - close_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
+        elif (open_[-1] - close[-1]) > (open_[-2] - close[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "SELL", 72, 1, 1))
 
     # --- 10. RSI Divergence ---
@@ -290,44 +290,36 @@ def run_strategies(price_data):
     return [(best[0], direction, final_conf, best[3], best[4])]
 
 # ==========================================
-# CANDLE PREDICTION ENGINE (REALISTIC)
+# CANDLE PREDICTION ENGINE (ADD THIS)
 # ==========================================
 def predict_next_candles(strategy, direction, confidence, price_data):
     close = np.array(price_data['close'])
     high = np.array(price_data['high'])
     low = np.array(price_data['low'])
 
-    # Base probability (capped at 70%)
     base_prob = min(confidence / 100, 0.70)
 
-    # Trend factor (smaller, more realistic)
     if close[-1] > close[-5:].mean():
         trend_factor = 0.06
     else:
         trend_factor = -0.06
 
-    # Support/Resistance factor
     resistance = high[-5:].max()
     support = low[-5:].min()
 
     if close[-1] > resistance - 0.001:
-        sr_factor = -0.05  # reversal
+        sr_factor = -0.05
     elif close[-1] < support + 0.001:
-        sr_factor = 0.05   # bounce
+        sr_factor = 0.05
     else:
         sr_factor = 0
 
-    # Candle 1 probability
     prob1 = base_prob + trend_factor + sr_factor
-    prob1 = max(0.45, min(0.75, prob1))  # Between 45% and 75%
+    prob1 = max(0.45, min(0.75, prob1))
 
-    # Candle 2 (decay)
     prob2 = prob1 * 0.85
-
-    # Candle 3 (more decay)
     prob3 = prob1 * 0.70
 
-    # If SELL, invert
     if direction == "SELL":
         prob1 = 1 - prob1
         prob2 = 1 - prob2
@@ -339,9 +331,10 @@ def predict_next_candles(strategy, direction, confidence, price_data):
         "candle3": {"up": round(prob3 * 100, 1), "down": round((1 - prob3) * 100, 1)}
     }
 
-# ==========================================
-# PREDICTION ENGINE
-# ==========================================
+# =========================
+def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
+    # ... your existing code ...
+
 def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
     entry1_time = get_next_minute()
     entry2_time = get_entry2_time(entry1_time)
@@ -397,6 +390,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         strategy, direction, confidence, expiry_1, expiry_2 = best
         prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
 
+        # ==========================================
+        # BUILD RESPONSE
+        # ==========================================
         response = f"📊 **OTC SIGNAL**\n\n"
         response += f"📈 **Entry 1:**\n"
         response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
@@ -430,12 +426,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             response += f"   - Candle 3: ⬇️ DOWN {prediction_data['candle3']['down']}%\n"
 
+        # ==========================================
+        # FORWARD SCREENSHOT TO CHANNEL
+        # ==========================================
         await context.bot.forward_message(
             chat_id=CHANNEL_ID,
             from_chat_id=update.message.chat_id,
             message_id=update.message.message_id
         )
 
+        # ==========================================
+        # SEND SIGNAL TO PRIVATE + CHANNEL
+        # ==========================================
         send_telegram(response)
 
         elapsed = time.time() - start_time
