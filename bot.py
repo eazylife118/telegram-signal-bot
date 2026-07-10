@@ -188,7 +188,7 @@ def run_strategies(price_data):
     if len(close) >= 2:
         if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "BUY", 72, 1, 1))
-        elif (open_[-1] - close[-1]) > (open_[-2] - close[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
+        elif (open_[-1] - close[-1]) > (open_[-2] - close_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "SELL", 72, 1, 1))
 
     # --- 10. RSI Divergence ---
@@ -290,7 +290,7 @@ def run_strategies(price_data):
     return [(best[0], direction, final_conf, best[3], best[4])]
 
 # ==========================================
-# CANDLE PREDICTION ENGINE 
+# CANDLE PREDICTION ENGINE (ADDED)
 # ==========================================
 def predict_next_candles(strategy, direction, confidence, price_data):
     close = np.array(price_data['close'])
@@ -328,6 +328,28 @@ def predict_next_candles(strategy, direction, confidence, price_data):
         "candle1": {"up": round(prob1 * 100, 1), "down": round((1 - prob1) * 100, 1)},
         "candle2": {"up": round(prob2 * 100, 1), "down": round((1 - prob2) * 100, 1)},
         "candle3": {"up": round(prob3 * 100, 1), "down": round((1 - prob3) * 100, 1)}
+    }
+
+# ==========================================
+# PREDICTION ENGINE
+# ==========================================
+def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
+    entry1_time = get_next_minute()
+    entry2_time = get_entry2_time(entry1_time)
+
+    if direction == "BUY":
+        entry1_dir = "🟢 BUY"
+        entry2_dir = "🟢 BUY"
+    else:
+        entry1_dir = "🔴 SELL"
+        entry2_dir = "🔴 SELL"
+
+    entry2_conf = max(confidence - 10, 50)
+
+    return {
+        "strategy": strategy,
+        "entry1": {"time": entry1_time, "dir": entry1_dir, "conf": confidence, "expiry": expiry_1},
+        "entry2": {"time": entry2_time, "dir": entry2_dir, "conf": entry2_conf, "expiry": expiry_2}
     }
 
 # ==========================================
@@ -374,7 +396,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   → Confidence: {confidence}%\n"
         response += f"   → Expiry: {expiry_1} min\n\n"
         response += f"📈 **Entry 2:**\n"
+        response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
+
+        # ==========================================
+        # ADD 3-CANDLE PREDICTION (ADDED)
+        # ==========================================
         prediction_data = predict_next_candles(strategy, direction, confidence, price_data)
 
         response += f"\n📊 **Next 3 Candles (Probability):**\n"
