@@ -290,26 +290,52 @@ def run_strategies(price_data):
     return [(best[0], direction, final_conf, best[3], best[4])]
 
 # ==========================================
+# ==========================================
+# CANDLE PREDICTION ENGINE (ADD THIS)
+# ==========================================
+def predict_next_candles(strategy, direction, confidence, price_data):
+    close = np.array(price_data['close'])
+    high = np.array(price_data['high'])
+    low = np.array(price_data['low'])
+
+    base_prob = confidence / 100
+
+    if close[-1] > close[-5:].mean():
+        trend_factor = 0.10
+    else:
+        trend_factor = -0.10
+
+    resistance = high[-5:].max()
+    support = low[-5:].min()
+    if close[-1] < support + 0.001:
+        sr_factor = 0.08
+    elif close[-1] > resistance - 0.001:
+        sr_factor = -0.08
+    else:
+        sr_factor = 0
+
+    prob1 = base_prob + trend_factor + sr_factor
+    prob1 = max(0.50, min(0.90, prob1))
+
+    prob2 = prob1 * 0.90
+    prob3 = prob1 * 0.80
+
+    if direction == "SELL":
+        prob1 = 1 - prob1
+        prob2 = 1 - prob2
+        prob3 = 1 - prob3
+
+    return {
+        "candle1": {"up": round(prob1 * 100, 1), "down": round((1 - prob1) * 100, 1)},
+        "candle2": {"up": round(prob2 * 100, 1), "down": round((1 - prob2) * 100, 1)},
+        "candle3": {"up": round(prob3 * 100, 1), "down": round((1 - prob3) * 100, 1)}
+    }
+
+# ==========================================
 # PREDICTION ENGINE
 # ==========================================
 def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
-    entry1_time = get_next_minute()
-    entry2_time = get_entry2_time(entry1_time)
-
-    if direction == "BUY":
-        entry1_dir = "🟢 BUY"
-        entry2_dir = "🟢 BUY"
-    else:
-        entry1_dir = "🔴 SELL"
-        entry2_dir = "🔴 SELL"
-
-    entry2_conf = max(confidence - 10, 50)
-
-    return {
-        "strategy": strategy,
-        "entry1": {"time": entry1_time, "dir": entry1_dir, "conf": confidence, "expiry": expiry_1},
-        "entry2": {"time": entry2_time, "dir": entry2_dir, "conf": entry2_conf, "expiry": expiry_2}
-    }
+    # ... your existing code stays here ...
 
 # ==========================================
 # TELEGRAM BOT HANDLERS
@@ -349,20 +375,25 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         response = f"📊 **OTC SIGNAL**\n\n"
         response += f"📈 **Entry 1:**\n"
-        response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
-        response += f"🔍 **Strategy:** {strategy}\n"
-        response += f"   → Direction: {direction}\n"
-        response += f"   → Confidence: {confidence}%\n"
-        response += f"   → Expiry: {expiry_1} min\n\n"
-        response += f"📈 **Entry 2:**\n"
-        response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
+        prediction_data = predict_next_candles(strategy, direction, confidence, price_data)
 
-        await context.bot.forward_message(
-            chat_id=CHANNEL_ID,
-            from_chat_id=update.message.chat_id,
-            message_id=update.message.message_id
-        )
+        response += f"\n📊 **Next 3 Candles (Probability):**\n"
+        
+        if prediction_data['candle1']['up'] > prediction_data['candle1']['down']:
+            response += f"   - Candle 1: ⬆️ UP {prediction_data['candle1']['up']}%\n"
+        else:
+            response += f"   - Candle 1: ⬇️ DOWN {prediction_data['candle1']['down']}%\n"
+        
+        if prediction_data['candle2']['up'] > prediction_data['candle2']['down']:
+            response += f"   - Candle 2: ⬆️ UP {prediction_data['candle2']['up']}%\n"
+        else:
+            response += f"   - Candle 2: ⬇️ DOWN {prediction_data['candle2']['down']}%\n"
+        
+        if prediction_data['candle3']['up'] > prediction_data['candle3']['down']:
+            response += f"   - Candle 3: ⬆️ UP {prediction_data['candle3']['up']}%\n"
+        else:
+            response += f"   - Candle 3: ⬇️ DOWN {prediction_data['candle3']['down']}%\n"
 
         send_telegram(response)
 
