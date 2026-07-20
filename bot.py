@@ -188,7 +188,7 @@ def run_strategies(price_data):
     if len(close) >= 2:
         if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "BUY", 72, 1, 1))
-        elif (open_[-1] - close[-1]) > (open_[-2] - close[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
+        elif (open_[-1] - close[-1]) > (open_[-2] - close_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "SELL", 72, 1, 1))
 
     # --- 10. RSI Divergence ---
@@ -331,10 +331,9 @@ def predict_next_candles(strategy, direction, confidence, price_data):
         "candle3": {"up": round(prob3 * 100, 1), "down": round((1 - prob3) * 100, 1)}
     }
 
-# =========================
-def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
-    # ... your existing code ...
-
+# ==========================================
+# PREDICTION ENGINE
+# ==========================================
 def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
     entry1_time = get_next_minute()
     entry2_time = get_entry2_time(entry1_time)
