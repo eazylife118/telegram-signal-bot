@@ -12,7 +12,7 @@ from collections import deque
 # ==========================================
 # TELEGRAM CREDENTIALS
 # ==========================================
-TOKEN = "8846196749:AAHbfxiFqW49b0Ap2yZ2Vt_qE1wlfQ4os6s"
+TOKEN = "8846196749:AAHxqCpbH9MUQmXUWPmsYI_ktRDYT8mxndc"
 CHAT_ID = "6280535707"
 CHANNEL_ID = "-1004324805205"
 
