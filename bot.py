@@ -410,27 +410,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"📈 **Entry 2:**\n"
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
         response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
-        # ==========================================
-        # 3-CANDLE PREDICTION
-        # ==========================================
-        prediction_data = predict_next_candles(strategy, direction, confidence, price_data)
-
-        response += f"\n📊 **Next 3 Candles (Probability):**\n"
         
-        if prediction_data['candle1']['up'] > prediction_data['candle1']['down']:
-            response += f"   - Candle 1: ⬆️ UP {prediction_data['candle1']['up']}%\n"
-        else:
-            response += f"   - Candle 1: ⬇️ DOWN {prediction_data['candle1']['down']}%\n"
-        
-        if prediction_data['candle2']['up'] > prediction_data['candle2']['down']:
-            response += f"   - Candle 2: ⬆️ UP {prediction_data['candle2']['up']}%\n"
-        else:
-            response += f"   - Candle 2: ⬇️ DOWN {prediction_data['candle2']['down']}%\n"
-        
-        if prediction_data['candle3']['up'] > prediction_data['candle3']['down']:
-            response += f"   - Candle 3: ⬆️ UP {prediction_data['candle3']['up']}%\n"
-        else:
-            response += f"   - Candle 3: ⬇️ DOWN {prediction_data['candle3']['down']}%\n"
         await context.bot.forward_message(
             chat_id=CHANNEL_ID,
             from_chat_id=update.message.chat_id,
