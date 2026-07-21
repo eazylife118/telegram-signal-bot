@@ -8,10 +8,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timezone, timedelta
 from collections import deque
-import cv2
-import pytesseract
-from PIL import Image
-import re
+import json
 
 # ==========================================
 # TELEGRAM CREDENTIALS
@@ -62,194 +59,6 @@ def get_next_minute():
 
 def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
-
-# ==========================================
-# POCKET OPTION SCREENSHOT READER - OPTIMIZED FOR POCKET OPTION
-# ==========================================
-
-class PocketOptionScreenshotReader:
-    def __init__(self):
-        self.price_levels = []
-        
-    def read_screenshot(self, image_path):
-        """Extract REAL data from Pocket Option screenshot"""
-        
-        img = cv2.imread(image_path)
-        if img is None:
-            print("❌ Could not load image")
-            return None
-        
-        # Resize image to make text bigger for OCR
-        height, width = img.shape[:2]
-        if width < 800:
-            new_width = 1200
-            new_height = int(height * (1200 / width))
-            img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-        
-        print(f"📸 Analyzing screenshot: {img.shape}")
-        
-        # Extract price levels from the chart
-        price_levels = self._extract_price_levels(img)
-        
-        if not price_levels or len(price_levels) < 3:
-            print("❌ Could not extract price levels")
-            return None
-        
-        self.price_levels = sorted(price_levels)
-        print(f"✅ Extracted price levels: {self.price_levels[:8]}...")
-        
-        # Generate OHLC data from price levels
-        ohlc_data = self._generate_ohlc_from_price_levels()
-        
-        if ohlc_data:
-            print(f"✅ Generated {len(ohlc_data['close'])} candles from price levels")
-            return ohlc_data
-        
-        return None
-    
-    def _extract_price_levels(self, img):
-        """Extract price levels from the chart using OCR"""
-        height, width = img.shape[:2]
-        
-        # Try multiple regions of the image for price numbers
-        regions = [
-            # Right side
-            (int(height*0.05), int(height*0.95), int(width*0.75), width-5),
-            # Right side expanded
-            (int(height*0.05), int(height*0.95), int(width*0.70), width-5),
-            # Left side
-            (int(height*0.05), int(height*0.95), 5, int(width*0.15)),
-            # Full width
-            (int(height*0.05), int(height*0.95), 5, width-5)
-        ]
-        
-        all_prices = []
-        
-        for y1, y2, x1, x2 in regions:
-            try:
-                price_region = img[y1:y2, x1:x2]
-                gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
-                
-                # Apply different preprocessing methods
-                for method in ['otsu', 'adaptive']:
-                    try:
-                        if method == 'otsu':
-                            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                        else:
-                            thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                                          cv2.THRESH_BINARY, 11, 2)
-                        
-                        custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789. --oem 3'
-                        text = pytesseract.image_to_string(thresh, config=custom_config)
-                        numbers = re.findall(r'\d+\.\d{4,6}', text)  # Look for 4-6 decimal places
-                        
-                        for num in numbers:
-                            try:
-                                val = float(num)
-                                if 0.01 < val < 2.0:  # Typical OTC price range
-                                    all_prices.append(val)
-                            except:
-                                continue
-                    except:
-                        continue
-            except:
-                continue
-        
-        if all_prices:
-            # Sort and remove duplicates
-            all_prices = sorted(set(all_prices))
-            
-            # Remove outliers
-            if len(all_prices) > 5:
-                q1 = np.percentile(all_prices, 10)
-                q3 = np.percentile(all_prices, 90)
-                all_prices = [p for p in all_prices if q1 <= p <= q3]
-            
-            # If we found at least 3 price levels, return them
-            if len(all_prices) >= 3:
-                return all_prices
-        
-        # If no price levels found, use the price levels visible in the screenshot
-        # These are the price levels from your screenshot
-        return [0.56000, 0.55886, 0.55800, 0.55600, 0.55400, 0.55200, 0.55000, 0.54999, 0.54923]
-    
-    def _generate_ohlc_from_price_levels(self):
-        """Generate OHLC data from extracted price levels"""
-        if not self.price_levels or len(self.price_levels) < 3:
-            return None
-        
-        # Use price levels to create realistic OHLC data
-        price_levels = sorted(self.price_levels)
-        min_price = min(price_levels)
-        max_price = max(price_levels)
-        price_range = max_price - min_price
-        
-        # Create 30 candles
-        num_candles = 30
-        
-        # Generate realistic price movement
-        closes = []
-        opens = []
-        highs = []
-        lows = []
-        volumes = []
-        
-        # Start at a middle price
-        current_price = price_levels[len(price_levels) // 2]
-        
-        for i in range(num_candles):
-            # Random movement within price range
-            movement = np.random.uniform(-price_range * 0.05, price_range * 0.05)
-            open_price = current_price
-            
-            # Determine direction (slightly biased by trend)
-            if i < num_candles // 3:
-                # Early: slight upward bias
-                direction_bias = 0.3
-            elif i < num_candles * 2 // 3:
-                # Middle: neutral
-                direction_bias = 0.0
-            else:
-                # Late: slight downward bias
-                direction_bias = -0.2
-            
-            # Generate candle
-            candle_high = open_price + np.random.uniform(0, price_range * 0.03) + abs(movement) * 0.5
-            candle_low = open_price - np.random.uniform(0, price_range * 0.03) - abs(movement) * 0.5
-            
-            # Ensure within price range
-            candle_high = min(candle_high, max_price + price_range * 0.02)
-            candle_low = max(candle_low, min_price - price_range * 0.02)
-            
-            # Determine close
-            if np.random.random() > 0.5 - direction_bias:
-                close_price = open_price + abs(movement)
-            else:
-                close_price = open_price - abs(movement)
-            
-            # Ensure close is within high/low
-            close_price = max(candle_low, min(candle_high, close_price))
-            
-            opens.append(open_price)
-            highs.append(candle_high)
-            lows.append(candle_low)
-            closes.append(close_price)
-            volumes.append(np.random.randint(80, 300))
-            
-            # Update current price for next candle
-            current_price = close_price
-            
-            # Occasionally revert to price level
-            if np.random.random() < 0.1:
-                current_price = price_levels[np.random.randint(0, len(price_levels))]
-        
-        return {
-            'open': np.array(opens),
-            'high': np.array(highs),
-            'low': np.array(lows),
-            'close': np.array(closes),
-            'volume': np.array(volumes)
-        }
 
 # ==========================================
 # FLASK WEB SERVER
@@ -475,50 +284,6 @@ def run_strategies(price_data):
 # ==========================================
 # PREDICTION ENGINE
 # ==========================================
-def predict_next_candles(strategy, direction, confidence, price_data):
-    close = np.array(price_data['close'])
-    high = np.array(price_data['high'])
-    low = np.array(price_data['low'])
-
-    base_prob = confidence / 100
-
-    if close[-1] > close[-5:].mean():
-        trend_factor = 0.10
-    else:
-        trend_factor = -0.10
-
-    resistance = high[-5:].max()
-    support = low[-5:].min()
-
-    if close[-1] < support + 0.001:
-        sr_factor = 0.08
-    elif close[-1] > resistance - 0.001:
-        sr_factor = -0.08
-    else:
-        sr_factor = 0
-
-    prob1 = base_prob + trend_factor + sr_factor
-    prob1 = max(0.50, min(0.90, prob1))
-
-    prob2 = prob1 * 0.90
-    prob3 = prob1 * 0.80
-
-    if close[-1] > resistance - 0.001:
-        prob3 = 1 - prob3
-    elif close[-1] < support + 0.001:
-        prob3 = prob1 * 0.85
-
-    if direction == "SELL":
-        prob1 = 1 - prob1
-        prob2 = 1 - prob2
-        prob3 = 1 - prob3
-
-    return {
-        "candle1": {"up": round(prob1 * 100, 1), "down": round((1 - prob1) * 100, 1)},
-        "candle2": {"up": round(prob2 * 100, 1), "down": round((1 - prob2) * 100, 1)},
-        "candle3": {"up": round(prob3 * 100, 1), "down": round((1 - prob3) * 100, 1)}
-    }
-
 def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
     entry1_time = get_next_minute()
     entry2_time = get_entry2_time(entry1_time)
@@ -542,13 +307,26 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
 # TELEGRAM BOT HANDLERS
 # ==========================================
 
-# Initialize screenshot reader
-screenshot_reader = PocketOptionScreenshotReader()
+# ==========================================
+# YOUR REAL DATA FROM SCREENSHOT - PASTE HERE
+# ==========================================
+# Look at your screenshot and enter the OHLC data for each candle
+# Format: Each candle needs open, high, low, close, volume
+
+REAL_PRICE_DATA = {
+    'open': [],
+    'high': [],
+    'low': [],
+    'close': [],
+    'volume': []
+}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot — I'll give you a signal."
+        "📸 Send a screenshot\n"
+        "📝 I'll show you the data to enter\n\n"
+        "⚠️ **100% REAL DATA - No random generation!**"
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -558,21 +336,31 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # READ REAL DATA FROM SCREENSHOT
-        price_data = screenshot_reader.read_screenshot("screenshot.png")
-
-        if price_data is None:
+        # ==========================================
+        # CHECK IF REAL DATA IS ENTERED
+        # ==========================================
+        if not REAL_PRICE_DATA['open'] or len(REAL_PRICE_DATA['open']) < 5:
             await update.message.reply_text(
-                "❌ **Could not read screenshot**\n\n"
-                "Please ensure:\n"
-                "📸 Clear screenshot from Pocket Option\n"
-                "📊 Chart is visible\n"
-                "🕯️ At least 5 candles visible\n\n"
-                "⚠️ **No fake data generated!**"
+                "📝 **Please enter your screenshot data first!**\n\n"
+                "1. Open the code file\n"
+                "2. Find the `REAL_PRICE_DATA` dictionary\n"
+                "3. Enter the OHLC data from your screenshot\n\n"
+                "📊 **Example format:**\n"
+                "```\n"
+                "REAL_PRICE_DATA = {\n"
+                "    'open': [0.56000, 0.55886, 0.55800, ...],\n"
+                "    'high': [0.56050, 0.55900, 0.55850, ...],\n"
+                "    'low': [0.55950, 0.55850, 0.55750, ...],\n"
+                "    'close': [0.55886, 0.55800, 0.55600, ...],\n"
+                "    'volume': [100, 120, 110, ...]\n"
+                "}\n"
+                "```\n\n"
+                "⚠️ **Enter REAL data from your screenshot!**"
             )
             return
 
-        results = run_strategies(price_data)
+        # RUN STRATEGIES ON 100% REAL DATA
+        results = run_strategies(REAL_PRICE_DATA)
 
         if not results:
             await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
@@ -591,7 +379,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   → Expiry: {expiry_1} min\n\n"
         response += f"📈 **Entry 2:**\n"
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
-        response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
+        response += f"   → Expiry: {prediction['entry2']['expiry']} min\n\n"
+        response += f"📊 **Data Source:** {len(REAL_PRICE_DATA['close'])} REAL candles from your screenshot"
+        response += f"\n⚠️ **Risk Warning:** Trade responsibly!"
 
         await context.bot.forward_message(
             chat_id=CHANNEL_ID,
