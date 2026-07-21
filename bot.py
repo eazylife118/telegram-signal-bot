@@ -718,4 +718,4 @@ if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
     print("✅ Flask server started.")
     print("✅ Starting Telegram bot...")
-    run_telegram(
+    run_telegram()
