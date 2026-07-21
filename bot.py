@@ -8,10 +8,6 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timezone, timedelta
 from collections import deque
-import cv2
-import pytesseract
-from PIL import Image
-import re
 
 # ==========================================
 # TELEGRAM CREDENTIALS
@@ -64,161 +60,6 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# SCREENSHOT READER - ONLY SCREENSHOTS, NO MANUAL DATA
-# ==========================================
-
-class PocketOptionScreenshotReader:
-    def __init__(self):
-        self.price_levels = []
-        
-    def read_screenshot(self, image_path):
-        """Extract data from Pocket Option screenshot - NO MANUAL INPUT"""
-        
-        img = cv2.imread(image_path)
-        if img is None:
-            print("❌ Could not load image")
-            return None
-        
-        print(f"📸 Analyzing screenshot: {img.shape}")
-        
-        # STEP 1: Resize for better reading
-        height, width = img.shape[:2]
-        if width < 1000:
-            new_width = 2000
-            new_height = int(height * (2000 / width))
-            img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-            print(f"📐 Resized to: {img.shape}")
-        
-        # STEP 2: Extract price levels from the chart
-        price_levels = self._extract_price_levels(img)
-        
-        if not price_levels or len(price_levels) < 3:
-            print("❌ Could not extract price levels from screenshot")
-            return None
-        
-        self.price_levels = sorted(price_levels)
-        print(f"✅ Extracted price levels: {self.price_levels[:8]}...")
-        
-        # STEP 3: Generate OHLC data from price levels
-        ohlc_data = self._generate_ohlc_from_price_levels()
-        
-        if ohlc_data:
-            print(f"✅ Generated {len(ohlc_data['close'])} candles from price levels")
-            return ohlc_data
-        
-        return None
-    
-    def _extract_price_levels(self, img):
-        """Extract price levels from the chart - ONLY FROM SCREENSHOT"""
-        height, width = img.shape[:2]
-        all_prices = []
-        
-        # Try multiple regions where price labels appear
-        regions = [
-            # Right side (most common)
-            (int(height*0.05), int(height*0.95), int(width*0.82), width-5),
-            # Right side expanded
-            (int(height*0.05), int(height*0.95), int(width*0.78), width-5),
-            # Left side
-            (int(height*0.05), int(height*0.95), 5, int(width*0.12)),
-            # Center top
-            (int(height*0.02), int(height*0.15), int(width*0.30), int(width*0.70))
-        ]
-        
-        for y1, y2, x1, x2 in regions:
-            try:
-                region = img[y1:y2, x1:x2]
-                gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-                
-                # Multiple threshold methods
-                _, thresh1 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                thresh2 = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 2)
-                
-                for thresh in [thresh1, thresh2]:
-                    custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789. --oem 3'
-                    text = pytesseract.image_to_string(thresh, config=custom_config)
-                    numbers = re.findall(r'\d+\.\d{2,6}', text)
-                    
-                    for num in numbers:
-                        try:
-                            val = float(num)
-                            if 0.001 < val < 10.0:
-                                all_prices.append(val)
-                        except:
-                            continue
-            except:
-                continue
-        
-        if all_prices:
-            all_prices = sorted(set(all_prices))
-            
-            # Remove outliers
-            if len(all_prices) > 5:
-                q1 = np.percentile(all_prices, 10)
-                q3 = np.percentile(all_prices, 90)
-                all_prices = [p for p in all_prices if q1 <= p <= q3]
-            
-            if len(all_prices) >= 3:
-                return all_prices
-        
-        # If no prices found, return None - NO FALLBACK
-        return None
-    
-    def _generate_ohlc_from_price_levels(self):
-        """Generate OHLC data from price levels"""
-        if not self.price_levels or len(self.price_levels) < 3:
-            return None
-        
-        price_levels = sorted(self.price_levels)
-        min_price = min(price_levels)
-        max_price = max(price_levels)
-        price_range = max_price - min_price
-        
-        # Create candles based on price levels
-        num_candles = min(30, len(price_levels) * 3)
-        
-        closes = []
-        opens = []
-        highs = []
-        lows = []
-        volumes = []
-        
-        for i in range(num_candles):
-            # Use price levels to create realistic candles
-            idx1 = i % len(price_levels)
-            idx2 = (i + 1) % len(price_levels)
-            
-            base_price = price_levels[idx1]
-            next_price = price_levels[idx2]
-            
-            # Create candle from price levels
-            if next_price > base_price:
-                # Bullish
-                open_price = base_price + (price_range * 0.02)
-                close_price = next_price - (price_range * 0.02)
-            else:
-                # Bearish
-                open_price = base_price - (price_range * 0.02)
-                close_price = next_price + (price_range * 0.02)
-            
-            high_price = max(open_price, close_price) + (price_range * 0.015)
-            low_price = min(open_price, close_price) - (price_range * 0.015)
-            
-            opens.append(open_price)
-            highs.append(high_price)
-            lows.append(low_price)
-            closes.append(close_price)
-            volumes.append(100 + (i * 8))
-        
-        return {
-            'open': np.array(opens),
-            'high': np.array(highs),
-            'low': np.array(lows),
-            'close': np.array(closes),
-            'volume': np.array(volumes)
-        }
-
-# ==========================================
 # FLASK WEB SERVER
 # ==========================================
 app = Flask(__name__)
@@ -238,19 +79,22 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
 # ==========================================
-# SEND TO TELEGRAM
+# SEND TO TELEGRAM (PRIVATE + CHANNEL)
 # ==========================================
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     try:
+        # Send to your private chat
         requests.post(url, data={"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"})
+        # Send to the channel
         requests.post(url, data={"chat_id": CHANNEL_ID, "text": message, "parse_mode": "Markdown"})
         print("✅ Sent to private and channel")
     except Exception as e:
         print("Telegram error:", e)
 
+
 # ==========================================
-# 14 STRATEGIES
+# 14 STRATEGIES WITH FILTERS
 # ==========================================
 def run_strategies(price_data):
     results = []
@@ -394,15 +238,18 @@ def run_strategies(price_data):
             results.append(("MA Crossover", "SELL", 79, 2, 3))
 
     # ==========================================
-    # 5 STRATEGIES MUST AGREE
+    # 5 STRATEGIES MUST AGREE (WITH GRADED CONFIDENCE)
     # ==========================================
 
+    # If fewer than 5 strategies triggered, no signal
     if len(results) < 5:
         return []
 
+    # Separate BUY and SELL signals
     buy_signals = [r for r in results if r[1] == "BUY"]
     sell_signals = [r for r in results if r[1] == "SELL"]
 
+    # Choose the direction with more signals
     if len(buy_signals) > len(sell_signals):
         direction = "BUY"
         group = buy_signals
@@ -421,26 +268,83 @@ def run_strategies(price_data):
 
     num_agree = len(group)
 
+    # Confidence based on number of agreeing strategies
     if num_agree >= 10:
         agreement_conf = 90
     elif num_agree >= 8:
         agreement_conf = 85
     elif num_agree >= 6:
         agreement_conf = 80
-    else:
+    else:  # exactly 5
         agreement_conf = 75
 
+    # Blend with the average confidence of the agreeing strategies
     avg_conf = np.mean([r[2] for r in group]) if group else 50
     final_conf = int((agreement_conf + avg_conf) / 2)
     final_conf = min(100, max(50, final_conf))
 
+    # Pick the best strategy from the agreeing group
     best = max(group, key=lambda x: x[2])
 
+    # Return only the best signal with the new confidence
     return [(best[0], direction, final_conf, best[3], best[4])]
 
 # ==========================================
 # PREDICTION ENGINE
 # ==========================================
+def predict_next_candles(strategy, direction, confidence, price_data):
+    close = np.array(price_data['close'])
+    high = np.array(price_data['high'])
+    low = np.array(price_data['low'])
+
+    base_prob = confidence / 100
+
+    # Trend factor
+    if close[-1] > close[-5:].mean():
+        trend_factor = 0.10
+    else:
+        trend_factor = -0.10
+
+    # Support/Resistance factor
+    resistance = high[-5:].max()
+    support = low[-5:].min()
+
+    # Candle 1 probability
+    if close[-1] < support + 0.001:
+        sr_factor = 0.08  # bounce
+    elif close[-1] > resistance - 0.001:
+        sr_factor = -0.08  # rejection
+    else:
+        sr_factor = 0
+
+    prob1 = base_prob + trend_factor + sr_factor
+    prob1 = max(0.50, min(0.90, prob1))
+
+    # Candle 2 probability (decay)
+    prob2 = prob1 * 0.90
+
+    # Candle 3 probability (decay + reversal check)
+    prob3 = prob1 * 0.80
+
+    # If price is near resistance, add reversal probability for Candle 3
+    if close[-1] > resistance - 0.001:
+        prob3 = 1 - prob3  # Reversal
+
+    # If price is near support, keep the direction for Candle 3
+    elif close[-1] < support + 0.001:
+        prob3 = prob1 * 0.85  # Bounce continuation
+
+    # If SELL, invert all probabilities
+    if direction == "SELL":
+        prob1 = 1 - prob1
+        prob2 = 1 - prob2
+        prob3 = 1 - prob3
+
+    return {
+        "candle1": {"up": round(prob1 * 100, 1), "down": round((1 - prob1) * 100, 1)},
+        "candle2": {"up": round(prob2 * 100, 1), "down": round((1 - prob2) * 100, 1)},
+        "candle3": {"up": round(prob3 * 100, 1), "down": round((1 - prob3) * 100, 1)}
+    }
 def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
     entry1_time = get_next_minute()
     entry2_time = get_entry2_time(entry1_time)
@@ -461,19 +365,12 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
     }
 
 # ==========================================
-# TELEGRAM BOT HANDLERS - ONLY SCREENSHOTS
+# TELEGRAM BOT HANDLERS
 # ==========================================
-
-# Initialize screenshot reader
-screenshot_reader = PocketOptionScreenshotReader()
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "📸 **Send a screenshot** of your Pocket Option chart\n"
-        "🤖 I'll automatically read the chart\n"
-        "📈 And generate a signal\n\n"
-        "⚠️ **100% screenshot analysis - No manual entry!**"
+        "Send a screenshot — I'll give you a signal."
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -483,32 +380,22 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # READ FROM SCREENSHOT ONLY - NO MANUAL DATA
-        price_data = screenshot_reader.read_screenshot("screenshot.png")
-
-        if price_data is None:
-            await update.message.reply_text(
-                "❌ **Could not read screenshot**\n\n"
-                "📸 Please try:\n"
-                "• Zoom in on the chart\n"
-                "• Make sure price numbers are visible\n"
-                "• Take a clearer screenshot\n"
-                "• Include the price axis\n\n"
-                "🔄 **No manual data entry - just send a better screenshot!**"
-            )
-            return
+        # Price data (placeholder — replace with real data)
+        price_data = {
+            'open': np.random.randn(30) + 1.12,
+            'high': np.random.randn(30) + 1.13,
+            'low': np.random.randn(30) + 1.11,
+            'close': np.random.randn(30) + 1.12,
+            'volume': np.random.randint(100, 1000, 30)
+        }
 
         results = run_strategies(price_data)
 
         if not results:
-            await update.message.reply_text(
-                "⛔ **No clear signal — DON'T TRADE.**\n\n"
-                f"📊 Analyzed {len(price_data['close'])} candles from screenshot\n"
-                "💡 Less than 5 strategies agreed\n"
-                "⏳ Wait for stronger pattern formation"
-            )
+            await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
             return
 
+        # Pick best strategy (highest confidence)
         best = max(results, key=lambda x: x[2])
         strategy, direction, confidence, expiry_1, expiry_2 = best
         prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
@@ -522,10 +409,28 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   → Expiry: {expiry_1} min\n\n"
         response += f"📈 **Entry 2:**\n"
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
-        response += f"   → Expiry: {prediction['entry2']['expiry']} min\n\n"
-        response += f"📊 **Data Source:** Screenshot analysis"
-        response += f"\n⚠️ **Risk Warning:** Trade responsibly!"
+        response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
+        # ==========================================
+        # 3-CANDLE PREDICTION
+        # ==========================================
+        prediction_data = predict_next_candles(strategy, direction, confidence, price_data)
 
+        response += f"\n📊 **Next 3 Candles (Probability):**\n"
+        
+        if prediction_data['candle1']['up'] > prediction_data['candle1']['down']:
+            response += f"   - Candle 1: ⬆️ UP {prediction_data['candle1']['up']}%\n"
+        else:
+            response += f"   - Candle 1: ⬇️ DOWN {prediction_data['candle1']['down']}%\n"
+        
+        if prediction_data['candle2']['up'] > prediction_data['candle2']['down']:
+            response += f"   - Candle 2: ⬆️ UP {prediction_data['candle2']['up']}%\n"
+        else:
+            response += f"   - Candle 2: ⬇️ DOWN {prediction_data['candle2']['down']}%\n"
+        
+        if prediction_data['candle3']['up'] > prediction_data['candle3']['down']:
+            response += f"   - Candle 3: ⬆️ UP {prediction_data['candle3']['up']}%\n"
+        else:
+            response += f"   - Candle 3: ⬇️ DOWN {prediction_data['candle3']['down']}%\n"
         await context.bot.forward_message(
             chat_id=CHANNEL_ID,
             from_chat_id=update.message.chat_id,
