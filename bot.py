@@ -16,9 +16,9 @@ import re
 # ==========================================
 # TELEGRAM CREDENTIALS
 # ==========================================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8846196749:AAHxqCpbH9MUQmXUWPmsYI_ktRDYT8mxndc")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "6280535707")
-CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "-1004324805205")
+TOKEN = "8846196749:AAHxqCpbH9MUQmXUWPmsYI_ktRDYT8mxndc"
+CHAT_ID = "6280535707"
+CHANNEL_ID = "-1004324805205"
 
 # ==========================================
 # TIME ZONE (UTC+1)
@@ -47,7 +47,7 @@ def get_strategy_health(strategy_name):
 
 def record_signal(strategy_name, win):
     if strategy_name in strategy_history:
-        strategy_history[strategy_name].append(1 if win else 0)
+        strategy_history[strategy_name].append(win)
 
 # ==========================================
 # TIME FUNCTIONS
@@ -84,9 +84,6 @@ class PocketOptionScreenshotReader:
             
         print(f"📸 Reading REAL data from screenshot")
         
-        # UPSCALE IMAGE FOR BETTER OCR - KEY FIX
-        img = self._upscale_image(img)
-        
         # Detect chart area
         chart = self._detect_chart_area(img)
         if chart is None:
@@ -100,7 +97,7 @@ class PocketOptionScreenshotReader:
             return None
             
         self.price_levels = sorted(price_levels)
-        print(f"💹 Extracted {len(self.price_levels)} price levels: {self.price_levels}")
+        print(f"💹 Extracted {len(self.price_levels)} price levels")
         
         # Detect candlesticks
         candles = self._detect_candlesticks(chart)
@@ -119,16 +116,6 @@ class PocketOptionScreenshotReader:
             return ohlc_data
         
         return None
-    
-    def _upscale_image(self, img):
-        """Enlarge image for better OCR reading - CRITICAL FIX"""
-        height, width = img.shape[:2]
-        # Scale up by 2.5x for better OCR
-        new_width = int(width * 2.5)
-        new_height = int(height * 2.5)
-        upscaled = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-        print(f"📐 Image upscaled from {width}x{height} to {new_width}x{new_height}")
-        return upscaled
     
     def _detect_chart_area(self, img):
         """Detect the chart area"""
@@ -160,64 +147,16 @@ class PocketOptionScreenshotReader:
         return img[margin_h:height-margin_h, margin_w:width-margin_w]
     
     def _extract_price_levels(self, img):
-        """Extract price levels from Y-axis using OCR with improved detection"""
+        """Extract price levels from Y-axis using OCR"""
         height, width = img.shape[:2]
         
-        # Try right side first - expand the region
-        price_region = img[int(height*0.05):int(height*0.95), int(width*0.85):width-5]
-        
-        # Convert to grayscale and enhance
+        # Try right side first
+        price_region = img[int(height*0.05):int(height*0.95), int(width*0.90):width-5]
         gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # Apply multiple preprocessing techniques
-        # 1. Gaussian blur to reduce noise
-        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-        
-        # 2. Adaptive thresholding
-        thresh1 = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                        cv2.THRESH_BINARY, 11, 2)
-        
-        # 3. Otsu thresholding
-        _, thresh2 = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # Try both thresholding methods
-        for thresh in [thresh1, thresh2]:
-            try:
-                # Use more permissive OCR config
-                custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789. --oem 3'
-                text = pytesseract.image_to_string(thresh, config=custom_config)
-                numbers = re.findall(r'\d+\.\d+', text)
-                
-                price_levels = []
-                for num in numbers:
-                    try:
-                        val = float(num)
-                        # Accept wider price range (0.001 to 100)
-                        if 0.001 < val < 100:
-                            price_levels.append(val)
-                    except:
-                        continue
-                
-                if price_levels and len(price_levels) >= 3:
-                    price_levels = sorted(set(price_levels))
-                    # Remove outliers
-                    if len(price_levels) > 5:
-                        q1 = np.percentile(price_levels, 10)
-                        q3 = np.percentile(price_levels, 90)
-                        price_levels = [p for p in price_levels if q1 <= p <= q3]
-                    print(f"✅ Extracted price levels from right side: {price_levels}")
-                    return price_levels
-            except:
-                continue
-        
-        # Try left side
         try:
-            price_region = img[int(height*0.05):int(height*0.95), 5:int(width*0.15)]
-            gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
-            blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-            _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            
-            custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789. --oem 3'
+            custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789.'
             text = pytesseract.image_to_string(thresh, config=custom_config)
             numbers = re.findall(r'\d+\.\d+', text)
             
@@ -225,39 +164,38 @@ class PocketOptionScreenshotReader:
             for num in numbers:
                 try:
                     val = float(num)
-                    if 0.001 < val < 100:
+                    if 0 < val < 100:
                         price_levels.append(val)
                 except:
                     continue
-            if price_levels and len(price_levels) >= 3:
+            
+            if price_levels:
                 price_levels = sorted(set(price_levels))
-                print(f"✅ Extracted price levels from left side: {price_levels}")
+                if len(price_levels) > 5:
+                    q1 = np.percentile(price_levels, 10)
+                    q3 = np.percentile(price_levels, 90)
+                    price_levels = [p for p in price_levels if q1 <= p <= q3]
                 return price_levels
         except:
             pass
         
-        # Try extracting from the entire image
+        # Try left side
         try:
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-            _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            
-            custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789. --oem 3'
+            price_region = img[int(height*0.05):int(height*0.95), 5:int(width*0.10)]
+            gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             text = pytesseract.image_to_string(thresh, config=custom_config)
             numbers = re.findall(r'\d+\.\d+', text)
-            
             price_levels = []
             for num in numbers:
                 try:
                     val = float(num)
-                    if 0.001 < val < 100:
+                    if 0 < val < 100:
                         price_levels.append(val)
                 except:
                     continue
-            if price_levels and len(price_levels) >= 3:
-                price_levels = sorted(set(price_levels))
-                print(f"✅ Extracted price levels from full image: {price_levels}")
-                return price_levels
+            if price_levels:
+                return sorted(set(price_levels))
         except:
             pass
         
@@ -400,21 +338,23 @@ def run_flask():
     app.run(host='0.0.0.0', port=10000, debug=False, threaded=True)
 
 # ==========================================
-# SEND TO TELEGRAM
+# SEND TO TELEGRAM (PRIVATE + CHANNEL)
 # ==========================================
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     try:
+        # Send to your private chat
         requests.post(url, data={"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"})
+        # Send to the channel
         requests.post(url, data={"chat_id": CHANNEL_ID, "text": message, "parse_mode": "Markdown"})
         print("✅ Sent to private and channel")
     except Exception as e:
         print("Telegram error:", e)
 
-# ==========================================
-# 14 STRATEGIES - ALL COMPLETE
-# ==========================================
 
+# ==========================================
+# 14 STRATEGIES WITH FILTERS
+# ==========================================
 def run_strategies(price_data):
     results = []
     close = np.array(price_data['close'])
@@ -445,13 +385,6 @@ def run_strategies(price_data):
 
     ema20 = calculate_ema(close, 20)
 
-    def calculate_atr(high, low, period=14):
-        if len(high) < period:
-            return np.mean(high - low)
-        return np.mean(high[-period:] - low[-period:])
-
-    atr = calculate_atr(high, low)
-
     # --- 1. Candle Reversal Pattern ---
     if len(close) >= 3:
         if (close[-3:] > open_[-3:]).all() and (close[-1] < open_[-1]) and rsi > 70:
@@ -461,10 +394,9 @@ def run_strategies(price_data):
 
     # --- 2. 3-Candle Momentum ---
     if len(close) >= 3:
-        avg_volume = np.mean(volume[-5:]) if len(volume) >= 5 else np.mean(volume)
-        if (close[-3:] > open_[-3:]).all() and volume[-1] > avg_volume:
+        if (close[-3:] > open_[-3:]).all() and volume[-1] > np.mean(volume[-5:]):
             results.append(("3-Candle Momentum", "BUY", 82, 1, 2))
-        elif (close[-3:] < open_[-3:]).all() and volume[-1] > avg_volume:
+        elif (close[-3:] < open_[-3:]).all() and volume[-1] > np.mean(volume[-5:]):
             results.append(("3-Candle Momentum", "SELL", 82, 1, 2))
 
     # --- 3. 2-Minute Reset ---
@@ -483,7 +415,7 @@ def run_strategies(price_data):
 
     # --- 5. Spike Rejection ---
     if len(close) >= 2:
-        avg_range = np.mean(high[-5:] - low[-5:]) if len(high) >= 5 else np.mean(high - low)
+        avg_range = np.mean(high[-5:] - low[-5:])
         if (high[-1] - high[-2]) > 2 * avg_range and (close[-1] < open_[-1]):
             results.append(("Spike Rejection", "SELL", 74, 2, 3))
         elif (low[-2] - low[-1]) > 2 * avg_range and (close[-1] > open_[-1]):
@@ -513,10 +445,9 @@ def run_strategies(price_data):
 
     # --- 9. 60-Second Scalp ---
     if len(close) >= 2:
-        avg_volume = np.mean(volume[-3:]) if len(volume) >= 3 else np.mean(volume)
-        if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > avg_volume:
+        if (close[-1] - open_[-1]) > (close[-2] - open_[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "BUY", 72, 1, 1))
-        elif (open_[-1] - close[-1]) > (open_[-2] - close[-2]) * 1.5 and volume[-1] > avg_volume:
+        elif (open_[-1] - close[-1]) > (open_[-2] - close[-2]) * 1.5 and volume[-1] > np.mean(volume[-3:]):
             results.append(("60-Second Scalp", "SELL", 72, 1, 1))
 
     # --- 10. RSI Divergence ---
@@ -528,6 +459,7 @@ def run_strategies(price_data):
 
     # --- 11. Bollinger Squeeze ---
     if len(close) >= 20:
+        atr = np.mean(high[-20:] - low[-20:])
         current_range = high[-1] - low[-1]
         if current_range < atr * 0.5:
             if close[-1] > open_[-1] and close[-1] > ema20:
@@ -565,15 +497,18 @@ def run_strategies(price_data):
             results.append(("MA Crossover", "SELL", 79, 2, 3))
 
     # ==========================================
-    # 5+ STRATEGIES MUST AGREE
+    # 5 STRATEGIES MUST AGREE (WITH GRADED CONFIDENCE)
     # ==========================================
 
+    # If fewer than 5 strategies triggered, no signal
     if len(results) < 5:
         return []
 
+    # Separate BUY and SELL signals
     buy_signals = [r for r in results if r[1] == "BUY"]
     sell_signals = [r for r in results if r[1] == "SELL"]
 
+    # Choose the direction with more signals
     if len(buy_signals) > len(sell_signals):
         direction = "BUY"
         group = buy_signals
@@ -592,32 +527,94 @@ def run_strategies(price_data):
 
     num_agree = len(group)
 
+    # Confidence based on number of agreeing strategies
     if num_agree >= 10:
         agreement_conf = 90
     elif num_agree >= 8:
         agreement_conf = 85
     elif num_agree >= 6:
         agreement_conf = 80
-    else:
+    else:  # exactly 5
         agreement_conf = 75
 
+    # Blend with the average confidence of the agreeing strategies
     avg_conf = np.mean([r[2] for r in group]) if group else 50
     final_conf = int((agreement_conf + avg_conf) / 2)
     final_conf = min(100, max(50, final_conf))
 
+    # Pick the best strategy from the agreeing group
     best = max(group, key=lambda x: x[2])
 
+    # Return only the best signal with the new confidence
     return [(best[0], direction, final_conf, best[3], best[4])]
 
 # ==========================================
 # PREDICTION ENGINE
 # ==========================================
+def predict_next_candles(strategy, direction, confidence, price_data):
+    close = np.array(price_data['close'])
+    high = np.array(price_data['high'])
+    low = np.array(price_data['low'])
+
+    base_prob = confidence / 100
+
+    # Trend factor
+    if close[-1] > close[-5:].mean():
+        trend_factor = 0.10
+    else:
+        trend_factor = -0.10
+
+    # Support/Resistance factor
+    resistance = high[-5:].max()
+    support = low[-5:].min()
+
+    # Candle 1 probability
+    if close[-1] < support + 0.001:
+        sr_factor = 0.08  # bounce
+    elif close[-1] > resistance - 0.001:
+        sr_factor = -0.08  # rejection
+    else:
+        sr_factor = 0
+
+    prob1 = base_prob + trend_factor + sr_factor
+    prob1 = max(0.50, min(0.90, prob1))
+
+    # Candle 2 probability (decay)
+    prob2 = prob1 * 0.90
+
+    # Candle 3 probability (decay + reversal check)
+    prob3 = prob1 * 0.80
+
+    # If price is near resistance, add reversal probability for Candle 3
+    if close[-1] > resistance - 0.001:
+        prob3 = 1 - prob3  # Reversal
+
+    # If price is near support, keep the direction for Candle 3
+    elif close[-1] < support + 0.001:
+        prob3 = prob1 * 0.85  # Bounce continuation
+
+    # If SELL, invert all probabilities
+    if direction == "SELL":
+        prob1 = 1 - prob1
+        prob2 = 1 - prob2
+        prob3 = 1 - prob3
+
+    return {
+        "candle1": {"up": round(prob1 * 100, 1), "down": round((1 - prob1) * 100, 1)},
+        "candle2": {"up": round(prob2 * 100, 1), "down": round((1 - prob2) * 100, 1)},
+        "candle3": {"up": round(prob3 * 100, 1), "down": round((1 - prob3) * 100, 1)}
+    }
 def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
     entry1_time = get_next_minute()
     entry2_time = get_entry2_time(entry1_time)
 
-    entry1_dir = "🟢 BUY" if direction == "BUY" else "🔴 SELL"
-    entry2_dir = "🟢 BUY" if direction == "BUY" else "🔴 SELL"
+    if direction == "BUY":
+        entry1_dir = "🟢 BUY"
+        entry2_dir = "🟢 BUY"
+    else:
+        entry1_dir = "🔴 SELL"
+        entry2_dir = "🔴 SELL"
+
     entry2_conf = max(confidence - 10, 50)
 
     return {
@@ -636,10 +633,7 @@ screenshot_reader = PocketOptionScreenshotReader()
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "📸 Send a **Pocket Option screenshot**\n"
-        "🤖 I'll extract REAL candlestick data\n"
-        "📈 And run 14 strategies with 5-agreement filter\n\n"
-        "⚠️ **No fake data - only real analysis!**"
+        "Send a screenshot — I'll give you a signal."
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -668,30 +662,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results = run_strategies(price_data)
 
         if not results:
-            await update.message.reply_text(
-                "⛔ **No clear signal — DON'T TRADE.**\n\n"
-                f"📊 Analyzed {len(price_data['close'])} REAL candles\n"
-                "💡 Less than 5 strategies agreed\n"
-                "⏳ Wait for stronger pattern formation"
-            )
+            await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
             return
 
-        # Get best signal
+        # Pick best strategy (highest confidence)
         best = max(results, key=lambda x: x[2])
         strategy, direction, confidence, expiry_1, expiry_2 = best
         prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
 
-        # EXACT FORMAT AS YOUR EXAMPLE
         response = f"📊 **OTC SIGNAL**\n\n"
-        response += f"✅ **Entry 1:**\n"
-        response += f"  {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
-        response += f"✅ **Strategy:** {strategy}\n"
-        response += f"  → Direction: {direction}\n"
-        response += f"  → Confidence: {confidence}%\n"
-        response += f"  → Expiry: {expiry_1} min\n\n"
-        response += f"✅ **Entry 2:**\n"
-        response += f"  {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
-        response += f"  → Expiry: {prediction['entry2']['expiry']} min"
+        response += f"📈 **Entry 1:**\n"
+        response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
+        response += f"🔍 **Strategy:** {strategy}\n"
+        response += f"   → Direction: {direction}\n"
+        response += f"   → Confidence: {confidence}%\n"
+        response += f"   → Expiry: {expiry_1} min\n\n"
+        response += f"📈 **Entry 2:**\n"
+        response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
+        response += f"   → Expiry: {prediction['entry2']['expiry']} min\n"
 
         await context.bot.forward_message(
             chat_id=CHANNEL_ID,
@@ -718,10 +706,6 @@ def run_telegram():
     application.run_polling()
 
 if __name__ == "__main__":
-    if not TOKEN or not CHAT_ID or not CHANNEL_ID:
-        print("❌ Missing Telegram credentials!")
-        exit(1)
-    
     threading.Thread(target=run_flask, daemon=True).start()
     print("✅ Flask server started.")
     print("✅ Starting Telegram bot...")
