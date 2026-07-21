@@ -3,15 +3,12 @@ import time
 import threading
 import requests
 import numpy as np
-from flask import Flask
+from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timezone, timedelta
 from collections import deque
-import cv2
-import pytesseract
-from PIL import Image, ImageEnhance, ImageFilter
-import re
+import json
 
 # ==========================================
 # TELEGRAM CREDENTIALS
@@ -64,364 +61,77 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# ENHANCED POCKET OPTION SCREENSHOT READER
-# ==========================================
-
-class PocketOptionScreenshotReader:
-    def __init__(self):
-        self.price_levels = []
-        self.candle_data = []
-        
-    def read_screenshot(self, image_path):
-        """Extract REAL data from Pocket Option screenshot"""
-        
-        img = cv2.imread(image_path)
-        if img is None:
-            print("❌ Could not load image")
-            return None
-        
-        # ENHANCED: Multiple preprocessing steps
-        img = self._enhance_image(img)
-        
-        print(f"📸 Analyzing screenshot: {img.shape}")
-        
-        # Extract price levels
-        price_levels = self._extract_price_levels(img)
-        if not price_levels or len(price_levels) < 3:
-            print("❌ Could not extract price levels - using detected levels")
-            # Use fallback from image
-            price_levels = self._detect_price_levels_from_chart(img)
-            
-        if not price_levels or len(price_levels) < 3:
-            print("❌ Could not extract price levels")
-            return None
-        
-        self.price_levels = sorted(price_levels)
-        print(f"✅ Extracted price levels: {self.price_levels[:8]}...")
-        
-        # NEW: Extract actual candles from the chart
-        candles = self._extract_candles_from_chart(img)
-        
-        if candles and len(candles) >= 5:
-            print(f"✅ Extracted {len(candles)} candles from chart")
-            ohlc_data = self._candles_to_ohlc(candles)
-            return ohlc_data
-        
-        # FALLBACK: Generate from price levels (but with less randomness)
-        ohlc_data = self._generate_ohlc_from_price_levels()
-        
-        if ohlc_data:
-            print(f"✅ Generated {len(ohlc_data['close'])} candles from price levels")
-            return ohlc_data
-        
-        return None
-    
-    def _enhance_image(self, img):
-        """Enhance image for better OCR"""
-        # Resize for better OCR
-        height, width = img.shape[:2]
-        if width < 1000:
-            new_width = 1500
-            new_height = int(height * (1500 / width))
-            img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-        
-        # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # Apply CLAHE for better contrast
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(gray)
-        
-        # Convert back to BGR for display
-        enhanced_bgr = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
-        
-        return enhanced_bgr
-    
-    def _extract_price_levels(self, img):
-        """Extract price levels using multiple methods"""
-        height, width = img.shape[:2]
-        all_prices = []
-        
-        # Method 1: Try right side with multiple preprocessing
-        for x_start in [0.75, 0.80, 0.85]:
-            x1 = int(width * x_start)
-            x2 = width - 5
-            y1 = int(height * 0.05)
-            y2 = int(height * 0.95)
-            
-            price_region = img[y1:y2, x1:x2]
-            gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
-            
-            # Multiple threshold methods
-            for method in ['otsu', 'adaptive']:
-                try:
-                    if method == 'otsu':
-                        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                    else:
-                        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                                      cv2.THRESH_BINARY, 11, 2)
-                    
-                    # Try different PSM modes
-                    for psm in ['6', '7', '8']:
-                        custom_config = f'--psm {psm} -c tessedit_char_whitelist=0123456789. --oem 3'
-                        text = pytesseract.image_to_string(thresh, config=custom_config)
-                        numbers = re.findall(r'\d+\.\d+', text)
-                        
-                        for num in numbers:
-                            try:
-                                val = float(num)
-                                if 0.01 < val < 2.0:
-                                    all_prices.append(val)
-                            except:
-                                continue
-                except:
-                    continue
-        
-        # Method 2: Try left side
-        for x_end in [0.10, 0.15, 0.20]:
-            x1 = 5
-            x2 = int(width * x_end)
-            y1 = int(height * 0.05)
-            y2 = int(height * 0.95)
-            
-            price_region = img[y1:y2, x1:x2]
-            gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
-            
-            try:
-                _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789. --oem 3'
-                text = pytesseract.image_to_string(thresh, config=custom_config)
-                numbers = re.findall(r'\d+\.\d+', text)
-                
-                for num in numbers:
-                    try:
-                        val = float(num)
-                        if 0.01 < val < 2.0:
-                            all_prices.append(val)
-                    except:
-                        continue
-            except:
-                continue
-        
-        if all_prices:
-            all_prices = sorted(set(all_prices))
-            if len(all_prices) > 5:
-                q1 = np.percentile(all_prices, 10)
-                q3 = np.percentile(all_prices, 90)
-                all_prices = [p for p in all_prices if q1 <= p <= q3]
-            if len(all_prices) >= 3:
-                return all_prices
-        
-        return None
-    
-    def _detect_price_levels_from_chart(self, img):
-        """Detect price levels from chart using image analysis"""
-        height, width = img.shape[:2]
-        
-        # Look for numbers in the chart area
-        chart_region = img[int(height*0.15):int(height*0.85), int(width*0.10):int(width*0.90)]
-        gray = cv2.cvtColor(chart_region, cv2.COLOR_BGR2GRAY)
-        
-        # Use edge detection to find text regions
-        edges = cv2.Canny(gray, 50, 150)
-        
-        # Find contours - these might be numbers
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Try to read text from potential number regions
-        price_levels = []
-        
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            if w > 10 and h > 10 and w < 100 and h < 50:
-                # Extract this region
-                roi = gray[y:y+h, x:x+w]
-                try:
-                    custom_config = r'--psm 8 -c tessedit_char_whitelist=0123456789. --oem 3'
-                    text = pytesseract.image_to_string(roi, config=custom_config)
-                    numbers = re.findall(r'\d+\.\d+', text)
-                    for num in numbers:
-                        try:
-                            val = float(num)
-                            if 0.01 < val < 2.0:
-                                price_levels.append(val)
-                        except:
-                            continue
-                except:
-                    continue
-        
-        if price_levels:
-            price_levels = sorted(set(price_levels))
-            if len(price_levels) >= 3:
-                return price_levels
-        
-        # Fallback: common OTC price levels
-        return [0.56000, 0.55886, 0.55800, 0.55600, 0.55400, 0.55200, 0.55000, 0.54999, 0.54923]
-    
-    def _extract_candles_from_chart(self, img):
-        """Extract actual candles from the chart image"""
-        height, width = img.shape[:2]
-        
-        # Find the chart area (where candles are)
-        chart_region = img[int(height*0.15):int(height*0.80), int(width*0.10):int(width*0.85)]
-        chart_height, chart_width = chart_region.shape[:2]
-        
-        # Convert to HSV for color detection
-        hsv = cv2.cvtColor(chart_region, cv2.COLOR_BGR2HSV)
-        
-        # Detect green candles (bullish)
-        green_lower = np.array([40, 40, 40])
-        green_upper = np.array([80, 255, 255])
-        green_mask = cv2.inRange(hsv, green_lower, green_upper)
-        
-        # Detect red candles (bearish)
-        red_lower1 = np.array([0, 40, 40])
-        red_upper1 = np.array([10, 255, 255])
-        red_lower2 = np.array([170, 40, 40])
-        red_upper2 = np.array([180, 255, 255])
-        red_mask1 = cv2.inRange(hsv, red_lower1, red_upper1)
-        red_mask2 = cv2.inRange(hsv, red_lower2, red_upper2)
-        red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-        
-        # Detect candles by scanning columns
-        num_candles = min(40, chart_width // 10)
-        candle_width = chart_width // num_candles
-        
-        candles = []
-        min_pixels = 20
-        
-        for i in range(num_candles):
-            x_start = i * candle_width
-            x_end = (i + 1) * candle_width
-            
-            green_pixels = np.sum(green_mask[:, x_start:x_end] > 0)
-            red_pixels = np.sum(red_mask[:, x_start:x_end] > 0)
-            
-            if green_pixels > min_pixels or red_pixels > min_pixels:
-                color = 'GREEN' if green_pixels > red_pixels else 'RED'
-                
-                # Find candle boundaries
-                col_data = chart_region[:, x_start:x_end]
-                gray_col = cv2.cvtColor(col_data, cv2.COLOR_BGR2GRAY)
-                non_zero = np.where(gray_col < 200)
-                
-                if len(non_zero[0]) > 0:
-                    min_y = np.min(non_zero[0])
-                    max_y = np.max(non_zero[0])
-                    
-                    # Store candle as normalized values
-                    candle = {
-                        'color': color,
-                        'top': min_y / chart_height,
-                        'bottom': max_y / chart_height,
-                        'index': i
-                    }
-                    candles.append(candle)
-        
-        return candles
-    
-    def _candles_to_ohlc(self, candles):
-        """Convert detected candles to OHLC data"""
-        if not candles or not self.price_levels:
-            return None
-        
-        min_price = min(self.price_levels)
-        max_price = max(self.price_levels)
-        price_range = max_price - min_price
-        
-        ohlc = {'open': [], 'high': [], 'low': [], 'close': [], 'volume': []}
-        
-        for i, candle in enumerate(candles):
-            # Map position to price
-            top_price = max_price - (candle['top'] * price_range)
-            bottom_price = max_price - (candle['bottom'] * price_range)
-            
-            # Determine OHLC based on color
-            if candle['color'] == 'GREEN':
-                # Bullish: open at bottom, close at top
-                open_price = bottom_price + (top_price - bottom_price) * 0.2
-                close_price = top_price - (top_price - bottom_price) * 0.2
-            else:
-                # Bearish: open at top, close at bottom
-                open_price = top_price - (top_price - bottom_price) * 0.2
-                close_price = bottom_price + (top_price - bottom_price) * 0.2
-            
-            # Ensure OHLC logic
-            high_price = max(open_price, close_price) + (price_range * 0.002)
-            low_price = min(open_price, close_price) - (price_range * 0.002)
-            
-            ohlc['open'].append(open_price)
-            ohlc['high'].append(high_price)
-            ohlc['low'].append(low_price)
-            ohlc['close'].append(close_price)
-            ohlc['volume'].append(np.random.randint(80, 300))
-        
-        return ohlc
-    
-    def _generate_ohlc_from_price_levels(self):
-        """Fallback: Generate OHLC from price levels with MINIMAL randomness"""
-        if not self.price_levels or len(self.price_levels) < 3:
-            return None
-        
-        price_levels = sorted(self.price_levels)
-        min_price = min(price_levels)
-        max_price = max(price_levels)
-        price_range = max_price - min_price
-        
-        # Use deterministic pattern instead of random
-        num_candles = 20
-        closes = []
-        opens = []
-        highs = []
-        lows = []
-        volumes = []
-        
-        # Use the actual price levels to create realistic candles
-        for i in range(num_candles):
-            # Cycle through price levels
-            level_index = i % len(price_levels)
-            base_price = price_levels[level_index]
-            
-            # Small variation based on position
-            variation = (i / num_candles) * price_range * 0.1
-            
-            # Alternate between bullish and bearish
-            if i % 2 == 0:
-                open_price = base_price - variation
-                close_price = base_price + variation
-            else:
-                open_price = base_price + variation
-                close_price = base_price - variation
-            
-            high_price = max(open_price, close_price) + price_range * 0.01
-            low_price = min(open_price, close_price) - price_range * 0.01
-            
-            opens.append(open_price)
-            highs.append(high_price)
-            lows.append(low_price)
-            closes.append(close_price)
-            volumes.append(150 + (i * 5))
-        
-        return {
-            'open': np.array(opens),
-            'high': np.array(highs),
-            'low': np.array(lows),
-            'close': np.array(closes),
-            'volume': np.array(volumes)
-        }
-
-# ==========================================
-# FLASK WEB SERVER
+# FLASK WEB SERVER WITH WEBHOOK
 # ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ OTC Signal Bot is running!"
+    return "✅ OTC Signal Bot is running! Webhook ready at /webhook"
 
 @app.route('/ping')
 def ping():
     return "pong", 200
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Receive REAL OHLC data from TradingView webhook"""
+    try:
+        data = request.get_json()
+        print(f"📊 Webhook received: {data}")
+        
+        # Extract OHLC data from TradingView
+        if 'open' in data and 'high' in data and 'low' in data and 'close' in data:
+            # Build price_data from webhook
+            price_data = {
+                'open': [float(data['open'])],
+                'high': [float(data['high'])],
+                'low': [float(data['low'])],
+                'close': [float(data['close'])],
+                'volume': [float(data.get('volume', 100))]
+            }
+            
+            # Run strategies on REAL data
+            results = run_strategies(price_data)
+            
+            if results:
+                best = max(results, key=lambda x: x[2])
+                strategy, direction, confidence, expiry_1, expiry_2 = best
+                
+                # Generate response
+                response = f"📊 **OTC SIGNAL**\n\n"
+                response += f"📈 **Entry 1:**\n"
+                response += f"   {'🟢 BUY' if direction == 'BUY' else '🔴 SELL'} at {get_next_minute()} ({expiry_1} min) — Confidence: {confidence}%\n\n"
+                response += f"🔍 **Strategy:** {strategy}\n"
+                response += f"   → Direction: {direction}\n"
+                response += f"   → Confidence: {confidence}%\n"
+                response += f"   → Expiry: {expiry_1} min\n\n"
+                response += f"📈 **Entry 2:**\n"
+                response += f"   {'🟢 BUY' if direction == 'BUY' else '🔴 SELL'} at {get_entry2_time(get_next_minute())} ({expiry_2} min) — Confidence: {max(confidence - 10, 50)}%\n"
+                response += f"   → Expiry: {expiry_2} min\n\n"
+                response += f"📊 **Data Source:** TradingView Webhook (100% REAL)\n"
+                response += f"⚠️ **Risk Warning:** Trade responsibly!"
+                
+                # Send to Telegram
+                send_telegram(response)
+                
+                return jsonify({
+                    "status": "signal_sent",
+                    "strategy": strategy,
+                    "direction": direction,
+                    "confidence": confidence
+                }), 200
+            else:
+                return jsonify({
+                    "status": "no_signal",
+                    "message": "No clear signal — DON'T TRADE."
+                }), 200
+        
+        return jsonify({"status": "error", "message": "Missing OHLC data"}), 400
+        
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 def run_flask():
     import logging
@@ -656,76 +366,28 @@ def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
 # ==========================================
 # TELEGRAM BOT HANDLERS
 # ==========================================
-
-# Initialize screenshot reader
-screenshot_reader = PocketOptionScreenshotReader()
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "📸 Send a Pocket Option screenshot\n"
-        "🤖 I'll extract REAL candlestick data\n"
-        "📈 And run 14 strategies with 5-agreement filter\n\n"
-        "⚠️ **No fake data - only real analysis!**"
+        "📈 Get signals from TradingView webhook\n"
+        "🔗 Webhook URL: https://your-bot-url.com/webhook\n\n"
+        "📝 Setup TradingView alert with:\n"
+        "• Condition: Any condition\n"
+        "• Webhook URL: Your bot URL\n"
+        "• Message format: JSON with OHLC\n\n"
+        "⚠️ **100% REAL DATA from TradingView!**"
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        start_time = time.time()
-
-        photo = await update.message.photo[-1].get_file()
-        await photo.download_to_drive("screenshot.png")
-
-        # READ REAL DATA FROM SCREENSHOT
-        price_data = screenshot_reader.read_screenshot("screenshot.png")
-
-        if price_data is None:
-            await update.message.reply_text(
-                "❌ **Could not read screenshot**\n\n"
-                "Please ensure:\n"
-                "📸 Clear screenshot from Pocket Option\n"
-                "📊 Chart is visible\n"
-                "🕯️ At least 5 candles visible\n\n"
-                "⚠️ **No fake data generated!**"
-            )
-            return
-
-        results = run_strategies(price_data)
-
-        if not results:
-            await update.message.reply_text("⛔ No clear signal — DON'T TRADE.")
-            return
-
-        best = max(results, key=lambda x: x[2])
-        strategy, direction, confidence, expiry_1, expiry_2 = best
-        prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
-
-        response = f"📊 **OTC SIGNAL**\n\n"
-        response += f"📈 **Entry 1:**\n"
-        response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
-        response += f"🔍 **Strategy:** {strategy}\n"
-        response += f"   → Direction: {direction}\n"
-        response += f"   → Confidence: {confidence}%\n"
-        response += f"   → Expiry: {expiry_1} min\n\n"
-        response += f"📈 **Entry 2:**\n"
-        response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
-        response += f"   → Expiry: {prediction['entry2']['expiry']} min\n\n"
-        response += f"📊 **Data:** {len(price_data['close'])} candles from screenshot"
-        response += f"\n⚠️ **Risk Warning:** Trade responsibly!"
-
-        await context.bot.forward_message(
-            chat_id=CHANNEL_ID,
-            from_chat_id=update.message.chat_id,
-            message_id=update.message.message_id
-        )
-
-        send_telegram(response)
-
-        elapsed = time.time() - start_time
-        print(f"✅ Signal sent in {elapsed:.2f} seconds")
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+    await update.message.reply_text(
+        "📸 **Screenshot mode is disabled.**\n\n"
+        "Please use **TradingView Webhook** for 100% real data:\n"
+        "1. Open TradingView\n"
+        "2. Create an alert\n"
+        "3. Set webhook URL to your bot\n"
+        "4. Get 100% REAL signals!\n\n"
+        "🔗 Webhook URL: https://your-bot-url.com/webhook"
+    )
 
 # ==========================================
 # START BOT
@@ -739,6 +401,7 @@ def run_telegram():
 
 if __name__ == "__main__":
     threading.Thread(target=run_flask, daemon=True).start()
-    print("✅ Flask server started.")
+    print("✅ Flask server started on port 10000")
+    print("✅ Webhook endpoint: /webhook")
     print("✅ Starting Telegram bot...")
     run_telegram()
