@@ -84,6 +84,9 @@ class PocketOptionScreenshotReader:
             
         print(f"📸 Reading REAL data from screenshot")
         
+        # UPSCALE IMAGE FOR BETTER OCR - KEY FIX
+        img = self._upscale_image(img)
+        
         # Detect chart area
         chart = self._detect_chart_area(img)
         if chart is None:
@@ -97,7 +100,7 @@ class PocketOptionScreenshotReader:
             return None
             
         self.price_levels = sorted(price_levels)
-        print(f"💹 Extracted {len(self.price_levels)} price levels")
+        print(f"💹 Extracted {len(self.price_levels)} price levels: {self.price_levels}")
         
         # Detect candlesticks
         candles = self._detect_candlesticks(chart)
@@ -116,6 +119,16 @@ class PocketOptionScreenshotReader:
             return ohlc_data
         
         return None
+    
+    def _upscale_image(self, img):
+        """Enlarge image for better OCR reading - CRITICAL FIX"""
+        height, width = img.shape[:2]
+        # Scale up by 2.5x for better OCR
+        new_width = int(width * 2.5)
+        new_height = int(height * 2.5)
+        upscaled = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+        print(f"📐 Image upscaled from {width}x{height} to {new_width}x{new_height}")
+        return upscaled
     
     def _detect_chart_area(self, img):
         """Detect the chart area"""
@@ -147,16 +160,64 @@ class PocketOptionScreenshotReader:
         return img[margin_h:height-margin_h, margin_w:width-margin_w]
     
     def _extract_price_levels(self, img):
-        """Extract price levels from Y-axis using OCR"""
+        """Extract price levels from Y-axis using OCR with improved detection"""
         height, width = img.shape[:2]
         
-        # Try right side first
-        price_region = img[int(height*0.05):int(height*0.95), int(width*0.90):width-5]
-        gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Try right side first - expand the region
+        price_region = img[int(height*0.05):int(height*0.95), int(width*0.85):width-5]
         
+        # Convert to grayscale and enhance
+        gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
+        
+        # Apply multiple preprocessing techniques
+        # 1. Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        
+        # 2. Adaptive thresholding
+        thresh1 = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                        cv2.THRESH_BINARY, 11, 2)
+        
+        # 3. Otsu thresholding
+        _, thresh2 = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Try both thresholding methods
+        for thresh in [thresh1, thresh2]:
+            try:
+                # Use more permissive OCR config
+                custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789. --oem 3'
+                text = pytesseract.image_to_string(thresh, config=custom_config)
+                numbers = re.findall(r'\d+\.\d+', text)
+                
+                price_levels = []
+                for num in numbers:
+                    try:
+                        val = float(num)
+                        # Accept wider price range (0.001 to 100)
+                        if 0.001 < val < 100:
+                            price_levels.append(val)
+                    except:
+                        continue
+                
+                if price_levels and len(price_levels) >= 3:
+                    price_levels = sorted(set(price_levels))
+                    # Remove outliers
+                    if len(price_levels) > 5:
+                        q1 = np.percentile(price_levels, 10)
+                        q3 = np.percentile(price_levels, 90)
+                        price_levels = [p for p in price_levels if q1 <= p <= q3]
+                    print(f"✅ Extracted price levels from right side: {price_levels}")
+                    return price_levels
+            except:
+                continue
+        
+        # Try left side
         try:
-            custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789.'
+            price_region = img[int(height*0.05):int(height*0.95), 5:int(width*0.15)]
+            gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+            _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789. --oem 3'
             text = pytesseract.image_to_string(thresh, config=custom_config)
             numbers = re.findall(r'\d+\.\d+', text)
             
@@ -164,38 +225,39 @@ class PocketOptionScreenshotReader:
             for num in numbers:
                 try:
                     val = float(num)
-                    if 0 < val < 100:
+                    if 0.001 < val < 100:
                         price_levels.append(val)
                 except:
                     continue
-            
-            if price_levels:
+            if price_levels and len(price_levels) >= 3:
                 price_levels = sorted(set(price_levels))
-                if len(price_levels) > 5:
-                    q1 = np.percentile(price_levels, 10)
-                    q3 = np.percentile(price_levels, 90)
-                    price_levels = [p for p in price_levels if q1 <= p <= q3]
+                print(f"✅ Extracted price levels from left side: {price_levels}")
                 return price_levels
         except:
             pass
         
-        # Try left side
+        # Try extracting from the entire image
         try:
-            price_region = img[int(height*0.05):int(height*0.95), 5:int(width*0.10)]
-            gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
-            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+            _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789. --oem 3'
             text = pytesseract.image_to_string(thresh, config=custom_config)
             numbers = re.findall(r'\d+\.\d+', text)
+            
             price_levels = []
             for num in numbers:
                 try:
                     val = float(num)
-                    if 0 < val < 100:
+                    if 0.001 < val < 100:
                         price_levels.append(val)
                 except:
                     continue
-            if price_levels:
-                return sorted(set(price_levels))
+            if price_levels and len(price_levels) >= 3:
+                price_levels = sorted(set(price_levels))
+                print(f"✅ Extracted price levels from full image: {price_levels}")
+                return price_levels
         except:
             pass
         
@@ -350,9 +412,7 @@ def send_telegram(message):
         print("Telegram error:", e)
 
 # ==========================================
-# ==========================================
 # 14 STRATEGIES - ALL COMPLETE
-# ==========================================
 # ==========================================
 
 def run_strategies(price_data):
@@ -552,50 +612,6 @@ def run_strategies(price_data):
 # ==========================================
 # PREDICTION ENGINE
 # ==========================================
-def predict_next_candles(strategy, direction, confidence, price_data):
-    close = np.array(price_data['close'])
-    high = np.array(price_data['high'])
-    low = np.array(price_data['low'])
-
-    base_prob = confidence / 100
-
-    if close[-1] > close[-5:].mean():
-        trend_factor = 0.10
-    else:
-        trend_factor = -0.10
-
-    resistance = high[-5:].max()
-    support = low[-5:].min()
-
-    if close[-1] < support + 0.001:
-        sr_factor = 0.08
-    elif close[-1] > resistance - 0.001:
-        sr_factor = -0.08
-    else:
-        sr_factor = 0
-
-    prob1 = base_prob + trend_factor + sr_factor
-    prob1 = max(0.50, min(0.90, prob1))
-
-    prob2 = prob1 * 0.90
-    prob3 = prob1 * 0.80
-
-    if close[-1] > resistance - 0.001:
-        prob3 = 1 - prob3
-    elif close[-1] < support + 0.001:
-        prob3 = prob1 * 0.85
-
-    if direction == "SELL":
-        prob1 = 1 - prob1
-        prob2 = 1 - prob2
-        prob3 = 1 - prob3
-
-    return {
-        "candle1": {"up": round(prob1 * 100, 1), "down": round((1 - prob1) * 100, 1)},
-        "candle2": {"up": round(prob2 * 100, 1), "down": round((1 - prob2) * 100, 1)},
-        "candle3": {"up": round(prob3 * 100, 1), "down": round((1 - prob3) * 100, 1)}
-    }
-
 def predict_entries(strategy, direction, confidence, expiry_1, expiry_2):
     entry1_time = get_next_minute()
     entry2_time = get_entry2_time(entry1_time)
@@ -664,27 +680,18 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         best = max(results, key=lambda x: x[2])
         strategy, direction, confidence, expiry_1, expiry_2 = best
         prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
-        candle_pred = predict_next_candles(strategy, direction, confidence, price_data)
 
+        # EXACT FORMAT AS YOUR EXAMPLE
         response = f"📊 **OTC SIGNAL**\n\n"
-        response += f"📈 **Entry 1:**\n"
-        response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
-        response += f"🔍 **Strategy:** {strategy}\n"
-        response += f"   → Direction: {direction}\n"
-        response += f"   → Confidence: {confidence}%\n"
-        response += f"   → Expiry: {expiry_1} min\n\n"
-        response += f"📈 **Entry 2:**\n"
-        response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n\n"
-        response += f"📊 **Next 3 Candles (Probability):**\n"
-        
-        for i, candle in enumerate([candle_pred['candle1'], candle_pred['candle2'], candle_pred['candle3']], 1):
-            if candle['up'] > candle['down']:
-                response += f"   - Candle {i}: ⬆️ UP {candle['up']}%\n"
-            else:
-                response += f"   - Candle {i}: ⬇️ DOWN {candle['down']}%\n"
-        
-        response += f"\n📊 **Data:** {len(price_data['close'])} REAL candles from screenshot"
-        response += f"\n⚠️ **Risk Warning:** Trade responsibly!"
+        response += f"✅ **Entry 1:**\n"
+        response += f"  {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
+        response += f"✅ **Strategy:** {strategy}\n"
+        response += f"  → Direction: {direction}\n"
+        response += f"  → Confidence: {confidence}%\n"
+        response += f"  → Expiry: {expiry_1} min\n\n"
+        response += f"✅ **Entry 2:**\n"
+        response += f"  {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
+        response += f"  → Expiry: {prediction['entry2']['expiry']} min"
 
         await context.bot.forward_message(
             chat_id=CHANNEL_ID,
