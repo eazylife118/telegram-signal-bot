@@ -628,7 +628,7 @@ def run_strategies(price_data):
     # 5 STRATEGIES MUST AGREE (WITH GRADED CONFIDENCE)
     # ==========================================
 
-    if len(results) < 5:
+    if len(results) < 1:
         return []
 
     buy_signals = [r for r in results if r[1] == "BUY"]
