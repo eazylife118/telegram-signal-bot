@@ -64,88 +64,6 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# ENHANCED PAIR DETECTION - MAXIMUM SIZE & CONTRAST
-# ==========================================
-def detect_pair_from_image(image_path):
-    try:
-        # Open image
-        img = Image.open(image_path)
-        
-        # ENLARGE IMAGE 4x for better text reading
-        width, height = img.size
-        new_size = (width * 4, height * 4)
-        img = img.resize(new_size, Image.Resampling.LANCZOS)
-        
-        # Convert to grayscale
-        img = img.convert('L')
-        
-        # Crop to top portion where pair name is
-        width, height = img.size
-        crop_box = (0, 0, width, height // 3)
-        cropped_img = img.crop(crop_box)
-        
-        # MAXIMUM CONTRAST
-        enhancer = ImageEnhance.Contrast(cropped_img)
-        cropped_img = enhancer.enhance(4.0)
-        
-        # Sharpening for better text
-        cropped_img = cropped_img.filter(ImageFilter.SHARPEN)
-        cropped_img = cropped_img.filter(ImageFilter.SHARPEN)
-        cropped_img = cropped_img.filter(ImageFilter.SHARPEN)
-        
-        # Increase brightness
-        enhancer = ImageEnhance.Brightness(cropped_img)
-        cropped_img = enhancer.enhance(1.5)
-        
-        # Try multiple OCR configurations
-        configs = [
-            r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/',
-            r'--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/',
-            r'--oem 3 --psm 8 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/',
-        ]
-        
-        for config in configs:
-            text = pytesseract.image_to_string(cropped_img, config=config)
-            print(f"🔍 OCR Text (config):", text[:100])
-            
-            # Look for patterns
-            patterns = [
-                r'([A-Z]{3}/[A-Z]{3}\s+OTC)',
-                r'([A-Z]{3}/[A-Z]{3}\s+OTC\s+\d+)',
-                r'([A-Z]{3}/[A-Z]{3})',
-                r'([A-Z]{3}/[A-Z]{3}\s+\d+\.\d+)',
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, text.upper())
-                if match:
-                    pair = match.group(1)
-                    if "OTC" not in pair and "/" in pair:
-                        pair = pair + " OTC"
-                    print(f"✅ Detected pair: {pair}")
-                    return pair
-        
-        # Try searching the whole image
-        img_full = Image.open(image_path)
-        img_full = img_full.resize((width * 3, height * 3), Image.Resampling.LANCZOS)
-        img_full = img_full.convert('L')
-        enhancer = ImageEnhance.Contrast(img_full)
-        img_full = enhancer.enhance(3.0)
-        text = pytesseract.image_to_string(img_full, config=r'--oem 3 --psm 6')
-        match = re.search(r'([A-Z]{3}/[A-Z]{3})', text.upper())
-        if match:
-            pair = match.group(1)
-            if "OTC" not in pair:
-                pair = pair + " OTC"
-            print(f"✅ Detected pair from full image: {pair}")
-            return pair
-            
-    except Exception as e:
-        print("OCR error:", e)
-    
-    return None
-
-# ==========================================
 # ENHANCED POCKET OPTION SCREENSHOT READER
 # ==========================================
 
@@ -153,7 +71,6 @@ class PocketOptionScreenshotReader:
     def __init__(self):
         self.price_levels = []
         self.candle_data = []
-        self.pair_name = None
         
     def read_screenshot(self, image_path):
         """Extract REAL data from Pocket Option screenshot"""
@@ -677,7 +594,7 @@ def run_strategies(price_data):
     # 5 STRATEGIES MUST AGREE (WITH GRADED CONFIDENCE)
     # ==========================================
 
-    if len(results) <1:
+    if len(results) < 5:
         return []
 
     buy_signals = [r for r in results if r[1] == "BUY"]
@@ -763,14 +680,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # ENHANCED PAIR DETECTION
-        pair_name = detect_pair_from_image("screenshot.png")
-        if pair_name:
-            print(f"✅ Detected pair: {pair_name}")
-        else:
-            pair_name = "Unknown Pair"
-            print("⚠️ Could not detect pair from screenshot")
-
         # READ REAL DATA FROM SCREENSHOT
         price_data = screenshot_reader.read_screenshot("screenshot.png")
 
@@ -796,7 +705,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
 
         response = f"📊 **OTC SIGNAL**\n\n"
-        response += f"🔍 **Pair:** {pair_name}\n\n"
         response += f"📈 **Entry 1:**\n"
         response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
         response += f"🔍 **Strategy:** {strategy}\n"
