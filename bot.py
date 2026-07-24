@@ -654,4 +654,4 @@ if __name__ == "__main__":
 
     # Start Telegram bot
     print("✅ Starting Telegram bot...")
-    run_telegram() I should use this one bcus it beter right now
+    run_telegram()
