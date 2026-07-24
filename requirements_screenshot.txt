@@ -2,6 +2,6 @@ flask
 python-telegram-bot
 requests
 numpy
+opencv-python
 pytesseract
 Pillow
-opencv-python
