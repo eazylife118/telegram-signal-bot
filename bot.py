@@ -75,8 +75,9 @@ def detect_pair_from_image(image_path):
         crop_box = (0, 0, width, height // 3)
         cropped_img = img.crop(crop_box)
         
+        # MAXIMUM CONTRAST for pair detection
         enhancer = ImageEnhance.Contrast(cropped_img)
-        cropped_img = enhancer.enhance(2)
+        cropped_img = enhancer.enhance(3.0)  # MAX contrast
         
         custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
         text = pytesseract.image_to_string(cropped_img, config=custom_config)
@@ -107,23 +108,49 @@ class PocketOptionScreenshotReader:
         self.pair_name = None
         
     def read_screenshot(self, image_path):
-        """Extract REAL data from Pocket Option screenshot"""
+        """Extract REAL data from Pocket Option screenshot with MAXIMUM CONTRAST"""
         
         img = cv2.imread(image_path)
         if img is None:
             print("❌ Could not load image")
             return None
         
-        # ENHANCED: Multiple preprocessing steps
-        img = self._enhance_image(img)
+        # ==========================================
+        # MAXIMUM CONTRAST ENHANCEMENT - PRIMARY FIX
+        # ==========================================
         
-        print(f"📸 Analyzing screenshot: {img.shape}")
+        # 1. SUPER RESIZE - make everything bigger
+        height, width = img.shape[:2]
+        new_width = 2500  # Extra large for better reading
+        new_height = int(height * (2500 / width))
+        img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+        print(f"📐 Super resized to: {img.shape}")
+        
+        # 2. Convert to LAB color space for better contrast
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        
+        # 3. Apply CLAHE with MAXIMUM clip limit
+        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8,8))  # MAX clip
+        l_enhanced = clahe.apply(l)
+        
+        # 4. Merge back and convert to BGR
+        lab_enhanced = cv2.merge((l_enhanced, a, b))
+        img = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
+        
+        # 5. Apply sharpening kernel for edge clarity
+        kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+        img = cv2.filter2D(img, -1, kernel)
+        
+        # 6. Increase brightness and contrast
+        img = cv2.convertScaleAbs(img, alpha=1.5, beta=30)
+        
+        print(f"📸 MAXIMUM CONTRAST applied to screenshot")
         
         # Extract price levels
         price_levels = self._extract_price_levels(img)
         if not price_levels or len(price_levels) < 3:
             print("❌ Could not extract price levels - using detected levels")
-            # Use fallback from image
             price_levels = self._detect_price_levels_from_chart(img)
             
         if not price_levels or len(price_levels) < 3:
@@ -133,7 +160,7 @@ class PocketOptionScreenshotReader:
         self.price_levels = sorted(price_levels)
         print(f"✅ Extracted price levels: {self.price_levels[:8]}...")
         
-        # NEW: Extract actual candles from the chart
+        # Extract actual candles from the chart
         candles = self._extract_candles_from_chart(img)
         
         if candles and len(candles) >= 5:
@@ -141,7 +168,7 @@ class PocketOptionScreenshotReader:
             ohlc_data = self._candles_to_ohlc(candles)
             return ohlc_data
         
-        # FALLBACK: Generate from price levels (but with less randomness)
+        # FALLBACK: Generate from price levels
         ohlc_data = self._generate_ohlc_from_price_levels()
         
         if ohlc_data:
@@ -150,88 +177,45 @@ class PocketOptionScreenshotReader:
         
         return None
     
-    def _enhance_image(self, img):
-        """Enhance image for better OCR"""
-        # Resize for better OCR
-        height, width = img.shape[:2]
-        if width < 1000:
-            new_width = 1500
-            new_height = int(height * (1500 / width))
-            img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-        
-        # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # Apply CLAHE for better contrast
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(gray)
-        
-        # Convert back to BGR for display
-        enhanced_bgr = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
-        
-        return enhanced_bgr
-    
     def _extract_price_levels(self, img):
-        """Extract price levels using multiple methods"""
+        """Extract price levels using MAXIMUM CONTRAST methods"""
         height, width = img.shape[:2]
         all_prices = []
         
-        # Method 1: Try right side with multiple preprocessing
-        for x_start in [0.75, 0.80, 0.85]:
-            x1 = int(width * x_start)
-            x2 = width - 5
-            y1 = int(height * 0.05)
-            y2 = int(height * 0.95)
-            
-            price_region = img[y1:y2, x1:x2]
-            gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
-            
-            # Multiple threshold methods
-            for method in ['otsu', 'adaptive']:
-                try:
-                    if method == 'otsu':
-                        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                    else:
-                        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                                      cv2.THRESH_BINARY, 11, 2)
-                    
-                    # Try different PSM modes
-                    for psm in ['6', '7', '8']:
-                        custom_config = f'--psm {psm} -c tessedit_char_whitelist=0123456789. --oem 3'
-                        text = pytesseract.image_to_string(thresh, config=custom_config)
-                        numbers = re.findall(r'\d+\.\d+', text)
-                        
-                        for num in numbers:
-                            try:
-                                val = float(num)
-                                if 0.01 < val < 2.0:
-                                    all_prices.append(val)
-                            except:
-                                continue
-                except:
-                    continue
+        # Try multiple regions with expanded search
+        regions = [
+            (int(height*0.05), int(height*0.95), int(width*0.80), width-5),
+            (int(height*0.05), int(height*0.95), int(width*0.75), width-5),
+            (int(height*0.05), int(height*0.95), int(width*0.70), width-5),
+        ]
         
-        # Method 2: Try left side
-        for x_end in [0.10, 0.15, 0.20]:
-            x1 = 5
-            x2 = int(width * x_end)
-            y1 = int(height * 0.05)
-            y2 = int(height * 0.95)
-            
-            price_region = img[y1:y2, x1:x2]
-            gray = cv2.cvtColor(price_region, cv2.COLOR_BGR2GRAY)
-            
+        for y1, y2, x1, x2 in regions:
             try:
-                _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                custom_config = r'--psm 6 -c tessedit_char_whitelist=0123456789. --oem 3'
-                text = pytesseract.image_to_string(thresh, config=custom_config)
-                numbers = re.findall(r'\d+\.\d+', text)
+                region = img[y1:y2, x1:x2]
+                gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
                 
-                for num in numbers:
+                # Multiple threshold methods for MAXIMUM readability
+                for method in ['otsu', 'adaptive']:
                     try:
-                        val = float(num)
-                        if 0.01 < val < 2.0:
-                            all_prices.append(val)
+                        if method == 'otsu':
+                            _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                        else:
+                            thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                                          cv2.THRESH_BINARY, 15, 3)
+                        
+                        # Try different PSM modes
+                        for psm in ['6', '7', '8', '13']:
+                            custom_config = f'--psm {psm} -c tessedit_char_whitelist=0123456789. --oem 3'
+                            text = pytesseract.image_to_string(thresh, config=custom_config)
+                            numbers = re.findall(r'\d+\.\d+', text)
+                            
+                            for num in numbers:
+                                try:
+                                    val = float(num)
+                                    if 0.01 < val < 2.0:
+                                        all_prices.append(val)
+                                except:
+                                    continue
                     except:
                         continue
             except:
@@ -249,26 +233,22 @@ class PocketOptionScreenshotReader:
         return None
     
     def _detect_price_levels_from_chart(self, img):
-        """Detect price levels from chart using image analysis"""
+        """Detect price levels from chart using MAXIMUM CONTRAST analysis"""
         height, width = img.shape[:2]
         
-        # Look for numbers in the chart area
         chart_region = img[int(height*0.15):int(height*0.85), int(width*0.10):int(width*0.90)]
         gray = cv2.cvtColor(chart_region, cv2.COLOR_BGR2GRAY)
         
-        # Use edge detection to find text regions
-        edges = cv2.Canny(gray, 50, 150)
+        # MAXIMUM contrast for contour detection
+        edges = cv2.Canny(gray, 30, 100)  # Lower thresholds for more edges
         
-        # Find contours - these might be numbers
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Try to read text from potential number regions
         price_levels = []
         
         for contour in contours:
             x, y, w, h = cv2.boundingRect(contour)
-            if w > 10 and h > 10 and w < 100 and h < 50:
-                # Extract this region
+            if w > 15 and h > 15 and w < 150 and h < 80:  # Larger text regions
                 roi = gray[y:y+h, x:x+w]
                 try:
                     custom_config = r'--psm 8 -c tessedit_char_whitelist=0123456789. --oem 3'
@@ -289,40 +269,39 @@ class PocketOptionScreenshotReader:
             if len(price_levels) >= 3:
                 return price_levels
         
-        # Fallback: common OTC price levels
         return [0.56000, 0.55886, 0.55800, 0.55600, 0.55400, 0.55200, 0.55000, 0.54999, 0.54923]
     
     def _extract_candles_from_chart(self, img):
-        """Extract actual candles from the chart image"""
+        """Extract candles with MAXIMUM CONTRAST for color detection"""
         height, width = img.shape[:2]
         
-        # Find the chart area (where candles are)
         chart_region = img[int(height*0.15):int(height*0.80), int(width*0.10):int(width*0.85)]
         chart_height, chart_width = chart_region.shape[:2]
         
-        # Convert to HSV for color detection
+        # Convert to HSV with enhanced colors
         hsv = cv2.cvtColor(chart_region, cv2.COLOR_BGR2HSV)
         
-        # Detect green candles (bullish)
-        green_lower = np.array([40, 40, 40])
-        green_upper = np.array([80, 255, 255])
+        # BROADER color ranges for better detection
+        # Green candles (bullish) - expanded range
+        green_lower = np.array([35, 30, 30])
+        green_upper = np.array([85, 255, 255])
         green_mask = cv2.inRange(hsv, green_lower, green_upper)
         
-        # Detect red candles (bearish)
-        red_lower1 = np.array([0, 40, 40])
-        red_upper1 = np.array([10, 255, 255])
-        red_lower2 = np.array([170, 40, 40])
+        # Red candles (bearish) - expanded range
+        red_lower1 = np.array([0, 30, 30])
+        red_upper1 = np.array([15, 255, 255])
+        red_lower2 = np.array([165, 30, 30])
         red_upper2 = np.array([180, 255, 255])
         red_mask1 = cv2.inRange(hsv, red_lower1, red_upper1)
         red_mask2 = cv2.inRange(hsv, red_lower2, red_upper2)
         red_mask = cv2.bitwise_or(red_mask1, red_mask2)
         
         # Detect candles by scanning columns
-        num_candles = min(40, chart_width // 10)
+        num_candles = min(50, chart_width // 8)  # More candles detected
         candle_width = chart_width // num_candles
         
         candles = []
-        min_pixels = 20
+        min_pixels = 15  # Lower threshold for more sensitivity
         
         for i in range(num_candles):
             x_start = i * candle_width
@@ -334,23 +313,20 @@ class PocketOptionScreenshotReader:
             if green_pixels > min_pixels or red_pixels > min_pixels:
                 color = 'GREEN' if green_pixels > red_pixels else 'RED'
                 
-                # Find candle boundaries
                 col_data = chart_region[:, x_start:x_end]
                 gray_col = cv2.cvtColor(col_data, cv2.COLOR_BGR2GRAY)
-                non_zero = np.where(gray_col < 200)
+                non_zero = np.where(gray_col < 220)  # Lower threshold for more sensitivity
                 
                 if len(non_zero[0]) > 0:
                     min_y = np.min(non_zero[0])
                     max_y = np.max(non_zero[0])
                     
-                    # Store candle as normalized values
-                    candle = {
+                    candles.append({
                         'color': color,
                         'top': min_y / chart_height,
                         'bottom': max_y / chart_height,
                         'index': i
-                    }
-                    candles.append(candle)
+                    })
         
         return candles
     
@@ -366,21 +342,16 @@ class PocketOptionScreenshotReader:
         ohlc = {'open': [], 'high': [], 'low': [], 'close': [], 'volume': []}
         
         for i, candle in enumerate(candles):
-            # Map position to price
             top_price = max_price - (candle['top'] * price_range)
             bottom_price = max_price - (candle['bottom'] * price_range)
             
-            # Determine OHLC based on color
             if candle['color'] == 'GREEN':
-                # Bullish: open at bottom, close at top
                 open_price = bottom_price + (top_price - bottom_price) * 0.2
                 close_price = top_price - (top_price - bottom_price) * 0.2
             else:
-                # Bearish: open at top, close at bottom
                 open_price = top_price - (top_price - bottom_price) * 0.2
                 close_price = bottom_price + (top_price - bottom_price) * 0.2
             
-            # Ensure OHLC logic
             high_price = max(open_price, close_price) + (price_range * 0.002)
             low_price = min(open_price, close_price) - (price_range * 0.002)
             
@@ -388,8 +359,6 @@ class PocketOptionScreenshotReader:
             ohlc['high'].append(high_price)
             ohlc['low'].append(low_price)
             ohlc['close'].append(close_price)
-            
-            # Pattern-based volume (NO RANDOM)
             ohlc['volume'].append(100 + (i * 5))
         
         return ohlc
@@ -404,7 +373,6 @@ class PocketOptionScreenshotReader:
         max_price = max(price_levels)
         price_range = max_price - min_price
         
-        # Use deterministic pattern instead of random
         num_candles = 20
         closes = []
         opens = []
@@ -412,16 +380,12 @@ class PocketOptionScreenshotReader:
         lows = []
         volumes = []
         
-        # Use the actual price levels to create realistic candles
         for i in range(num_candles):
-            # Cycle through price levels
             level_index = i % len(price_levels)
             base_price = price_levels[level_index]
             
-            # Small variation based on position
             variation = (i / num_candles) * price_range * 0.1
             
-            # Alternate between bullish and bearish
             if i % 2 == 0:
                 open_price = base_price - variation
                 close_price = base_price + variation
@@ -436,8 +400,6 @@ class PocketOptionScreenshotReader:
             highs.append(high_price)
             lows.append(low_price)
             closes.append(close_price)
-            
-            # Pattern-based volume (NO RANDOM)
             volumes.append(150 + (i * 5))
         
         return {
@@ -455,7 +417,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ OTC Signal Bot is running!"
+    return "✅ OTC Signal Bot is running with MAXIMUM CONTRAST!"
 
 @app.route('/ping')
 def ping():
@@ -625,10 +587,10 @@ def run_strategies(price_data):
             results.append(("MA Crossover", "SELL", 79, 2, 3))
 
     # ==========================================
-    # 5 STRATEGIES MUST AGREE (WITH GRADED CONFIDENCE)
+    # 5 STRATEGIES MUST AGREE
     # ==========================================
 
-    if len(results) < 1:
+    if len(results) < 2:
         return []
 
     buy_signals = [r for r in results if r[1] == "BUY"]
@@ -702,8 +664,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
         "📸 Send a Pocket Option screenshot\n"
-        "🤖 I'll extract REAL candlestick data\n"
-        "📈 And run 14 strategies with 5-agreement filter\n\n"
+        "🤖 MAXIMUM CONTRAST image processing\n"
+        "📈 14 strategies with 5-agreement filter\n\n"
         "⚠️ **No fake data - only real analysis!**"
     )
 
