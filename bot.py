@@ -226,7 +226,7 @@ class ScreenshotReader:
         return ohlc
 
 # ==========================================
-# FIXED: INDICATORS WITH CORRECT PATTERN DETECTION
+# CORRECTED INDICATORS FUNCTION
 # ==========================================
 def calculate_indicators(price_data):
     close = np.array(price_data['close'])
@@ -235,7 +235,6 @@ def calculate_indicators(price_data):
     low = np.array(price_data['low'])
     volume = np.array(price_data.get('volume', []))
 
-    indicators = {}
     bullish_count = 0
     bearish_count = 0
 
@@ -289,19 +288,7 @@ def calculate_indicators(price_data):
     elif bb_position < 0.2:
         bullish_count += 1
 
-    # 4. Trend (FIXED: More accurate)
-    if len(close) >= 5:
-        # Check if price is making higher highs and higher lows
-        if close[-1] > close[-2] and close[-2] > close[-3] and close[-1] > close[-5]:
-            bullish_count += 2  # Strong uptrend
-        elif close[-1] < close[-2] and close[-2] < close[-3] and close[-1] < close[-5]:
-            bearish_count += 2  # Strong downtrend
-        elif close[-1] > close[-5]:
-            bullish_count += 1
-        elif close[-1] < close[-5]:
-            bearish_count += 1
-
-    # 5. VWAP
+    # 4. VWAP
     if len(volume) > 0 and len(close) > 0:
         vwap = np.sum(close * volume) / np.sum(volume) if np.sum(volume) > 0 else close[-1]
         if close[-1] > vwap:
@@ -309,7 +296,31 @@ def calculate_indicators(price_data):
         else:
             bearish_count += 1
 
-    # 6. Candle Pattern (FIXED: Only label if it matches the direction)
+    # 5. Trend (CORRECTLY PLACED OUTSIDE DICTIONARY)
+    if len(close) >= 5:
+        if close[-1] > close[-5]:
+            trend = "Uptrend"
+            bullish_count += 2
+        elif close[-1] < close[-5]:
+            trend = "Downtrend"
+            bearish_count += 2
+        else:
+            trend = "Sideways"
+    else:
+        trend = "Sideways"
+
+    # Determine direction and confidence
+    if bearish_count > bullish_count and bearish_count >= 3:
+        direction = "SELL"
+        confidence = min(92, 80 + (bearish_count - bullish_count) * 2)
+    elif bullish_count > bearish_count and bullish_count >= 3:
+        direction = "BUY"
+        confidence = min(92, 80 + (bullish_count - bearish_count) * 2)
+    else:
+        direction = "NEUTRAL"
+        confidence = 0
+
+    # Candle pattern detection
     current_close = close[-1]
     current_open = open_[-1]
     current_high = high[-1]
@@ -320,12 +331,9 @@ def calculate_indicators(price_data):
     lower_wick = min(current_open, current_close) - current_low
 
     pattern = "Unknown"
-
-    # Determine if candle is bullish or bearish
     is_bullish_candle = current_close > current_open
     is_bearish_candle = current_close < current_open
 
-    # Only label patterns that match the candle direction
     if is_bearish_candle and upper_wick > body * 2:
         pattern = "Shooting Star"
     elif is_bullish_candle and lower_wick > body * 2:
@@ -339,24 +347,8 @@ def calculate_indicators(price_data):
     elif is_bullish_candle:
         pattern = "Bullish Candle"
 
-    # Determine direction based on indicators and candle
-    if bearish_count > bullish_count and bearish_count >= 3:
-        direction = "SELL"
-        confidence = min(92, 80 + (bearish_count - bullish_count) * 2)
-        # If candle is bullish but indicators say SELL, it's a potential reversal
-        if is_bullish_candle:
-            pattern = "Bullish Rejection (Potential Reversal)"
-    elif bullish_count > bearish_count and bullish_count >= 3:
-        direction = "BUY"
-        confidence = min(92, 80 + (bullish_count - bearish_count) * 2)
-        # If candle is bearish but indicators say BUY, it's a potential reversal
-        if is_bearish_candle:
-            pattern = "Bearish Rejection (Potential Reversal)"
-    else:
-        direction = "NEUTRAL"
-        confidence = 0
-
-    return {
+    # Build indicators dictionary (this is where the trend variable is used)
+    indicators = {
         'Direction': direction,
         'Confidence': confidence,
         'Bullish_Count': bullish_count,
@@ -366,16 +358,11 @@ def calculate_indicators(price_data):
         'RSI_Signal': "Overbought" if rsi > 70 else "Oversold" if rsi < 30 else "Neutral",
         'Stochastic_Signal': "Overbought" if stoch > 80 else "Oversold" if stoch < 20 else "Neutral",
         'BB_Signal': "Overbought" if bb_position > 0.8 else "Oversold" if bb_position < 0.2 else "Neutral",
-        if len(close) >= 5:
-            if close[-1] > close[-5]:
-                trend = "Uptrend"
-            elif close[-1] < close[-5]:
-                trend = "Downtrend"
-            else:
-                trend = "Sideways"
-        else:
-            trend = "Sideways"
-        }
+        'Trend': trend,  # <-- The trend variable is now correctly used here
+        'VWAP': "Bullish" if close[-1] > vwap else "Bearish" if len(volume) > 0 else "Neutral"
+    }
+
+    return indicators
 
 # ==========================================
 # TELEGRAM BOT HANDLERS
