@@ -366,8 +366,15 @@ def calculate_indicators(price_data):
         'RSI_Signal': "Overbought" if rsi > 70 else "Oversold" if rsi < 30 else "Neutral",
         'Stochastic_Signal': "Overbought" if stoch > 80 else "Oversold" if stoch < 20 else "Neutral",
         'BB_Signal': "Overbought" if bb_position > 0.8 else "Oversold" if bb_position < 0.2 else "Neutral",
-        'Trend': "Uptrend" if close[-1] > close[-5] if len(close) >= 5 else "Sideways"
-    }
+        if len(close) >= 5:
+            if close[-1] > close[-5]:
+                trend = "Uptrend"
+            elif close[-1] < close[-5]:
+                trend = "Downtrend"
+            else:
+                trend = "Sideways"
+        else:
+            trend = "Sideways"}
 
 # ==========================================
 # TELEGRAM BOT HANDLERS
