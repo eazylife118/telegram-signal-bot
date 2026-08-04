@@ -1,33 +1,28 @@
 import os
+import re
 import time
 import threading
 import requests
 import numpy as np
 import cv2
 import pytesseract
-import re
+from PIL import Image, ImageEnhance
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timezone, timedelta
-from collections import deque
-from PIL import Image
 
 # ==========================================
-# TELEGRAM CREDENTIALS (DO NOT TOUCH)
+# TELEGRAM CREDENTIALS
 # ==========================================
-TOKEN = "8846196749:AAHxqCpbH9MUQmXUWPmsYI_ktRDYT8mxndc"
+TOKEN = "8608138546:AAEetCz5xKlQlIRc0eZ3gVzvs046dPb86UI"
 CHAT_ID = "6280535707"
-CHANNEL_ID = "-1004324805205"
+CHANNEL_ID = "-1004324805205"  # Added channel ID
 
 # ==========================================
-# TIME ZONE (UTC+1) (DO NOT TOUCH)
+# TIME ZONE (UTC+1)
 # ==========================================
 LOCAL_TZ = timezone(timedelta(hours=1))
-
-# ==========================================
-# TIME FUNCTIONS (NEXT CANDLE OPEN + 15s EXPIRY)
-# ==========================================
 
 def get_next_candle_open_time():
     now = datetime.now(LOCAL_TZ)
@@ -40,9 +35,30 @@ def get_15s_expiry_from_next():
     expiry = next_minute + timedelta(seconds=15)
     return expiry.strftime("%H:%M:%S")
 
-def get_current_candle_open():
-    now = datetime.now(LOCAL_TZ)
-    return now.replace(second=0, microsecond=0).strftime("%H:%M:%S")
+# ==========================================
+# OCR: DETECT PAIR FROM SCREENSHOT (YOUR FAST VERSION)
+# ==========================================
+def detect_pair_from_image(image_path):
+    try:
+        img = Image.open(image_path)
+        img = img.convert('L')
+        width, height = img.size
+        crop_box = (0, 0, width, height // 3)
+        cropped_img = img.crop(crop_box)
+        enhancer = ImageEnhance.Contrast(cropped_img)
+        cropped_img = enhancer.enhance(2)
+        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
+        text = pytesseract.image_to_string(cropped_img, config=custom_config)
+        print("🔍 OCR Raw Text (cropped):", text)
+        match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
+        if match:
+            return match.group(1)
+        match = re.search(r'([A-Z]{3}/[A-Z]{3})', text)
+        if match:
+            return match.group(1) + " OTC"
+    except Exception as e:
+        print("OCR error:", e)
+    return "AUD/CAD OTC"
 
 # ==========================================
 # FLASK WEB SERVER
@@ -51,7 +67,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ OTC Signal Bot is running!"
+    return "✅ Bot is running!"
 
 @app.route('/ping')
 def ping():
@@ -70,29 +86,33 @@ def send_telegram(message):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     try:
         requests.post(url, data={"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"})
-        requests.post(url, data={"chat_id": CHANNEL_ID, "text": message, "parse_mode": "Markdown"})
+        if CHANNEL_ID:
+            requests.post(url, data={"chat_id": CHANNEL_ID, "text": message, "parse_mode": "Markdown"})
         print("✅ Sent to private and channel")
     except Exception as e:
         print("Telegram error:", e)
 
 # ==========================================
-# SCREENSHOT READER - READS REAL DATA
+# SCREENSHOT READER - READS REAL DATA (YOUR FAST VERSION)
 # ==========================================
-
 class ScreenshotReader:
     def __init__(self):
         self.price_levels = []
-        self.candle_data = []
-        self.pair_name = "CHF/JPY OTC"  # Default pair
+        self.pair_name = ""
 
     def read_screenshot(self, image_path):
         img = cv2.imread(image_path)
         if img is None:
             return None
 
-        img = self._enhance_image(img)
-        print(f"📸 Analyzing screenshot: {img.shape}")
+        # Resize for better reading
+        height, width = img.shape[:2]
+        if width < 1000:
+            new_width = 2000
+            new_height = int(height * (2000 / width))
+            img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
 
+        # Extract price levels
         price_levels = self._extract_price_levels(img)
         if not price_levels or len(price_levels) < 3:
             return None
@@ -100,6 +120,7 @@ class ScreenshotReader:
         self.price_levels = sorted(price_levels)
         print(f"✅ Extracted price levels: {self.price_levels[:6]}")
 
+        # Detect candles
         candles = self._extract_candles(img)
         if not candles or len(candles) < 1:
             return None
@@ -108,21 +129,6 @@ class ScreenshotReader:
 
         ohlc_data = self._generate_ohlc(candles)
         return ohlc_data
-
-    def _enhance_image(self, img):
-        height, width = img.shape[:2]
-        if width < 1000:
-            new_width = 2000
-            new_height = int(height * (2000 / width))
-            img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-
-        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        l_enhanced = clahe.apply(l)
-        lab_enhanced = cv2.merge((l_enhanced, a, b))
-        img = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
-        return img
 
     def _extract_price_levels(self, img):
         height, width = img.shape[:2]
@@ -242,9 +248,8 @@ class ScreenshotReader:
         return ohlc
 
 # ==========================================
-# TRADE ALGO INDICATORS
+# TRADE ALGO INDICATORS (NEW)
 # ==========================================
-
 def calculate_indicators(price_data):
     close = np.array(price_data['close'])
     open_ = np.array(price_data['open'])
@@ -319,8 +324,6 @@ def calculate_indicators(price_data):
         near_resistance = False
         near_support = False
 
-    indicators['Resistance_Level'] = resistance
-    indicators['Support_Level'] = support
     indicators['Near_Resistance'] = near_resistance
     indicators['Near_Support'] = near_support
 
@@ -388,9 +391,9 @@ def calculate_indicators(price_data):
     if indicators['Near_Support']: bullish_count += 1
 
     if indicators['Volume'] == "High":
-        if close[-1] > close[-2]:
+        if len(close) >= 2 and close[-1] > close[-2]:
             bullish_count += 1
-        else:
+        elif len(close) >= 2:
             bearish_count += 1
 
     indicators['Bullish_Count'] = bullish_count
@@ -409,32 +412,37 @@ def calculate_indicators(price_data):
 
     indicators['Direction'] = direction
     indicators['Confidence'] = confidence
+    indicators['bullish_count'] = bullish_count
+    indicators['bearish_count'] = bearish_count
 
     return indicators
 
 # ==========================================
 # TELEGRAM BOT HANDLERS
 # ==========================================
-
 screenshot_reader = ScreenshotReader()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
-        "Send a screenshot of your Pocket Option chart.\n\n"
-        "✅ Trade Algo indicators\n"
+        "Send a screenshot of your OTC chart.\n\n"
         "✅ Entry at next candle open\n"
-        "✅ Expiry 15s after entry\n"
-        "✅ RSI, Stochastic, Bollinger Bands, OBV, VWAP, Ichimoku, Support/Resistance, Volume Profile"
+        "✅ Expiry 15s later\n"
+        "✅ Trade Algo indicators"
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        start_time = time.time()
+        await update.message.reply_text("⏳ Analyzing screenshot...")
 
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
+        # Detect pair (YOUR FAST VERSION)
+        pair_name = detect_pair_from_image("screenshot.png")
+        print(f"✅ Detected pair: {pair_name}")
+
+        # Read real data (YOUR FAST VERSION)
         price_data = screenshot_reader.read_screenshot("screenshot.png")
 
         if price_data is None:
@@ -447,6 +455,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # Calculate Trade Algo indicators
         indicators = calculate_indicators(price_data)
 
         direction = indicators['Direction']
@@ -455,10 +464,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if direction == "NEUTRAL" or confidence < 50:
             await update.message.reply_text(
                 f"⛔ **No clear signal — DON'T TRADE.**\n\n"
-                f"Bullish indicators: {indicators['Bullish_Count']}\n"
-                f"Bearish indicators: {indicators['Bearish_Count']}\n"
-                f"Confidence: {confidence}%\n"
-                f"💡 Not enough confirmation"
+                f"Bullish indicators: {indicators['bullish_count']}\n"
+                f"Bearish indicators: {indicators['bearish_count']}\n"
+                f"Confidence: {confidence}%"
             )
             return
 
@@ -518,7 +526,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if indicators['Stochastic_Signal'] == "Overbought":
                 reason_parts.append("Stochastic RSI overbought")
             if indicators['Near_Resistance']:
-                reason_parts.append("Price near resistance level")
+                reason_parts.append("Price near resistance")
             if indicators['Trend'] == "Downtrend":
                 reason_parts.append("Downtrend confirmed")
             if not reason_parts:
@@ -531,7 +539,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if indicators['Stochastic_Signal'] == "Oversold":
                 reason_parts.append("Stochastic RSI oversold")
             if indicators['Near_Support']:
-                reason_parts.append("Price near support level")
+                reason_parts.append("Price near support")
             if indicators['Trend'] == "Uptrend":
                 reason_parts.append("Uptrend confirmed")
             if not reason_parts:
@@ -539,7 +547,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         reason = " → ".join(reason_parts)
 
-        # Build active indicators list
+        # Build active indicators
         active_indicators = []
         if indicators['RSI_Signal'] != "Neutral":
             active_indicators.append(f"RSI ({indicators['RSI_Signal']})")
@@ -573,8 +581,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             direction_emoji = "🟢"
             direction_text = "UP"
 
-        pair_name = screenshot_reader.pair_name if screenshot_reader.pair_name else "CHF/JPY OTC"
-
         response = f"📊 **OTC SIGNAL**\n\n"
         response += f"🔍 Pair: {pair_name} (1m)\n"
         response += f"📈 Your signal is {direction_emoji} **{direction_text}**\n"
@@ -588,16 +594,17 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"\n⏰ Entry: {entry_time} (next candle open)\n"
         response += f"⏰ Expiry: {expiry_time} (15s later)"
 
-        await context.bot.forward_message(
-            chat_id=CHANNEL_ID,
-            from_chat_id=update.message.chat_id,
-            message_id=update.message.message_id
-        )
+        # Forward and send
+        try:
+            await context.bot.forward_message(
+                chat_id=CHANNEL_ID,
+                from_chat_id=update.message.chat_id,
+                message_id=update.message.message_id
+            )
+        except:
+            pass
 
         send_telegram(response)
-
-        elapsed = time.time() - start_time
-        print(f"✅ Signal sent in {elapsed:.2f} seconds")
 
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
@@ -605,16 +612,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================================
 # START BOT
 # ==========================================
-
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
-    application.bot.delete_webhook()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.run_polling()
 
 if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
     print("✅ Flask server started.")
     print("✅ Starting Telegram bot...")
     run_telegram()
