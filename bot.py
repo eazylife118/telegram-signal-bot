@@ -374,7 +374,8 @@ def calculate_indicators(price_data):
             else:
                 trend = "Sideways"
         else:
-            trend = "Sideways"}
+            trend = "Sideways"
+            }
 
 # ==========================================
 # TELEGRAM BOT HANDLERS
