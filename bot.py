@@ -386,7 +386,11 @@ def calculate_indicators(price_data):
     if indicators['Ichimoku'] == "Bearish": bearish_count += 1
     if indicators['Near_Resistance']: bearish_count += 1
     if indicators['Near_Support']: bullish_count += 1
-    if indicators['Volume'] == "High": bullish_count += 1 if close[-1] > close[-2] else bearish_count += 1
+    if indicators['Volume'] == "High":
+    if close[-1] > close[-2]:
+        bullish_count += 1
+    else:
+        bearish_count += 1
 
     indicators['Bullish_Count'] = bullish_count
     indicators['Bearish_Count'] = bearish_count
