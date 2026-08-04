@@ -35,9 +35,6 @@ def get_15s_expiry_from_next():
     expiry = next_minute + timedelta(seconds=15)
     return expiry.strftime("%H:%M:%S")
 
-# ==========================================
-# FAST PAIR DETECTION
-# ==========================================
 def detect_pair_from_image(image_path):
     try:
         img = Image.open(image_path)
@@ -57,11 +54,8 @@ def detect_pair_from_image(image_path):
             return match.group(1) + " OTC"
     except:
         pass
-    return "AUD/CAD OTC"
+    return "AUD/CNY OTC"
 
-# ==========================================
-# FLASK WEB SERVER
-# ==========================================
 app = Flask(__name__)
 
 @app.route('/')
@@ -100,7 +94,7 @@ class ScreenshotReader:
             return None
 
         height, width = img.shape[:2]
-        if width < 1000:
+        if width > 1200:
             new_width = 1200
             new_height = int(height * (1200 / width))
             img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
@@ -168,7 +162,7 @@ class ScreenshotReader:
         num_candles = min(30, chart_width // 8)
         candle_width = chart_width // num_candles
         candles = []
-        min_pixels = 10
+        min_pixels = 8
 
         for i in range(num_candles):
             x_start = i * candle_width
@@ -226,7 +220,7 @@ class ScreenshotReader:
         return ohlc
 
 # ==========================================
-# TRADE ALGO STYLE INDICATORS (FAST & SIMPLE)
+# FINAL FIX: TREND-BASED SIGNALS
 # ==========================================
 def calculate_indicators(price_data):
     close = np.array(price_data['close'])
@@ -234,66 +228,62 @@ def calculate_indicators(price_data):
     high = np.array(price_data['high'])
     low = np.array(price_data['low'])
 
-    # Current candle
     current_close = close[-1]
     current_open = open_[-1]
     current_high = high[-1]
     current_low = low[-1]
 
-    # 1. Candle Pattern
     body = abs(current_close - current_open)
     upper_wick = current_high - max(current_open, current_close)
     lower_wick = min(current_open, current_close) - current_low
 
-    pattern = "Unknown"
-    direction = "NEUTRAL"
-    confidence = 0
+    # ==========================================
+    # STEP 1: DETECT TREND (MOST IMPORTANT)
+    # ==========================================
+    is_bullish = current_close > current_open
+    is_bearish = current_close < current_open
 
-    # Detect patterns
-    if upper_wick > body * 2 and current_close < current_open:
-        pattern = "Shooting Star"
-        direction = "SELL"
-        confidence = 77
-    elif lower_wick > body * 2 and current_close > current_open:
-        pattern = "Hammer"
-        direction = "BUY"
-        confidence = 77
-    elif current_close > current_open:
-        # Bullish candle
-        if len(close) >= 2:
-            prev_close = close[-2]
-            prev_open = open_[-2]
-            if prev_close < prev_open and current_close > current_open and current_close > prev_open and current_open < prev_close:
-                pattern = "Bullish Engulfing"
-                direction = "BUY"
-                confidence = 82
-            else:
-                pattern = "Bullish Candle"
-                direction = "BUY"
-                confidence = 65
-        else:
-            pattern = "Bullish Candle"
-            direction = "BUY"
-            confidence = 65
+    # Check last 3 candles for trend confirmation
+    if len(close) >= 3:
+        green_count = sum(1 for i in range(-3, 0) if close[i] > open_[i])
+        red_count = 3 - green_count
+        trend_bullish = green_count >= 2
+        trend_bearish = red_count >= 2
     else:
-        # Bearish candle
-        if len(close) >= 2:
-            prev_close = close[-2]
-            prev_open = open_[-2]
-            if prev_close > prev_open and current_close < current_open and current_close < prev_open and current_open > prev_close:
-                pattern = "Bearish Engulfing"
-                direction = "SELL"
-                confidence = 82
-            else:
-                pattern = "Bearish Candle"
-                direction = "SELL"
-                confidence = 65
-        else:
-            pattern = "Bearish Candle"
-            direction = "SELL"
-            confidence = 65
+        trend_bullish = is_bullish
+        trend_bearish = is_bearish
 
-    # 2. RSI (Confirmation)
+    # ==========================================
+    # STEP 2: DETECT PATTERN
+    # ==========================================
+    pattern = "Unknown"
+
+    if lower_wick > body * 2 and is_bullish:
+        pattern = "Hammer"
+    elif upper_wick > body * 2 and is_bearish:
+        pattern = "Shooting Star"
+    elif lower_wick > body * 1.5 and is_bullish:
+        pattern = "Bullish Rejection"
+    elif upper_wick > body * 1.5 and is_bearish:
+        pattern = "Bearish Rejection"
+    elif is_bullish:
+        pattern = "Bullish Candle"
+    else:
+        pattern = "Bearish Candle"
+
+    # Check engulfing
+    if len(close) >= 2:
+        prev_close = close[-2]
+        prev_open = open_[-2]
+
+        if prev_close < prev_open and current_close > current_open and current_close > prev_open and current_open < prev_close:
+            pattern = "Bullish Engulfing"
+        elif prev_close > prev_open and current_close < current_open and current_close < prev_open and current_open > prev_close:
+            pattern = "Bearish Engulfing"
+
+    # ==========================================
+    # STEP 3: RSI
+    # ==========================================
     if len(close) >= 14:
         deltas = np.diff(close)
         gains = np.where(deltas > 0, deltas, 0)
@@ -307,40 +297,80 @@ def calculate_indicators(price_data):
     else:
         rsi = 50
 
-    # Adjust confidence based on RSI
-    if direction == "SELL" and rsi > 70:
+    # ==========================================
+    # STEP 4: FINAL DECISION (TREND FIRST)
+    # ==========================================
+    # TREND OVERRIDES EVERYTHING
+    if trend_bullish:
+        direction = "BUY"
+        confidence = 85 if rsi < 70 else 75
+        if pattern == "Shooting Star" or pattern == "Bearish Engulfing":
+            pattern = "Bullish Reversal (Trend Up)"
+    elif trend_bearish:
+        direction = "SELL"
+        confidence = 85 if rsi > 30 else 75
+        if pattern == "Hammer" or pattern == "Bullish Engulfing":
+            pattern = "Bearish Reversal (Trend Down)"
+    else:
+        # If trend is neutral, use candle direction
+        if is_bullish:
+            direction = "BUY"
+            confidence = 70
+        else:
+            direction = "SELL"
+            confidence = 70
+
+    # Confidence adjustment
+    if direction == "BUY" and rsi < 30:
         confidence = min(95, confidence + 10)
-    elif direction == "BUY" and rsi < 30:
+    elif direction == "SELL" and rsi > 70:
         confidence = min(95, confidence + 10)
 
-    # 3. Support/Resistance
-    if len(high) >= 10 and len(low) >= 10:
-        resistance = np.max(high[-10:])
-        support = np.min(low[-10:])
-        near_resistance = (resistance - current_close) / resistance < 0.002
-        near_support = (current_close - support) / current_close < 0.002
+    confidence = max(60, min(95, confidence))
 
-        if direction == "SELL" and near_resistance:
-            confidence = min(95, confidence + 8)
-        elif direction == "BUY" and near_support:
-            confidence = min(95, confidence + 8)
+    # ==========================================
+    # BUILD REASON
+    # ==========================================
+    reason_parts = []
+    if direction == "BUY":
+        if trend_bullish:
+            reason_parts.append("Uptrend confirmed")
+        if rsi < 30:
+            reason_parts.append(f"RSI oversold ({rsi:.1f})")
+        if pattern in ["Hammer", "Bullish Engulfing", "Bullish Candle"]:
+            reason_parts.append(f"Pattern: {pattern}")
+    else:
+        if trend_bearish:
+            reason_parts.append("Downtrend confirmed")
+        if rsi > 70:
+            reason_parts.append(f"RSI overbought ({rsi:.1f})")
+        if pattern in ["Shooting Star", "Bearish Engulfing", "Bearish Candle"]:
+            reason_parts.append(f"Pattern: {pattern}")
 
-    # 4. Trend
-    if len(close) >= 5:
-        if direction == "BUY" and close[-1] > close[-5]:
-            confidence = min(95, confidence + 5)
-        elif direction == "SELL" and close[-1] < close[-5]:
-            confidence = min(95, confidence + 5)
+    reason = " → ".join(reason_parts) if reason_parts else "Price action detected"
 
-    # Ensure confidence is reasonable
-    confidence = max(50, min(95, confidence))
+    # ==========================================
+    # ACTIVE INDICATORS
+    # ==========================================
+    active_indicators = []
+    if rsi > 70 or rsi < 30:
+        active_indicators.append(f"RSI ({'Overbought' if rsi > 70 else 'Oversold'})")
+    if trend_bullish:
+        active_indicators.append("Trend (Uptrend)")
+    elif trend_bearish:
+        active_indicators.append("Trend (Downtrend)")
+    active_indicators.append(f"Pattern ({pattern})")
 
     return {
         'Direction': direction,
         'Confidence': confidence,
         'Pattern': pattern,
         'RSI': round(rsi, 1),
-        'Trend': "Uptrend" if len(close) >= 5 and close[-1] > close[-5] else "Downtrend" if len(close) >= 5 and close[-1] < close[-5] else "Sideways"
+        'Trend': "Uptrend" if trend_bullish else "Downtrend" if trend_bearish else "Sideways",
+        'Reason': reason,
+        'Active_Indicators': active_indicators,
+        'Buy_Score': 0,
+        'Sell_Score': 0
     }
 
 # ==========================================
@@ -352,10 +382,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📊 **OTC Signal Bot**\n\n"
         "Send a screenshot of your OTC chart.\n\n"
-        "✅ Fast analysis\n"
-        "✅ Clear BUY/SELL signals\n"
-        "✅ Entry at next candle open\n"
-        "✅ Expiry 15s later"
+        "✅ Trend-based signals\n"
+        "✅ BUY on uptrends\n"
+        "✅ SELL on downtrends\n"
+        "✅ Fast analysis (~2-3s)"
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -385,38 +415,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entry_time = get_next_candle_open_time()
         expiry_time = get_15s_expiry_from_next()
 
-        # Build reason
-        reason_parts = []
-        if direction == "SELL":
-            if indicators['RSI'] > 70:
-                reason_parts.append(f"RSI overbought ({indicators['RSI']})")
-            if pattern in ["Shooting Star", "Bearish Engulfing"]:
-                reason_parts.append(f"Pattern: {pattern}")
-            if indicators['Trend'] == "Downtrend":
-                reason_parts.append("Downtrend confirmed")
-            if not reason_parts:
-                reason_parts.append("Bearish price action detected")
-        else:
-            if indicators['RSI'] < 30:
-                reason_parts.append(f"RSI oversold ({indicators['RSI']})")
-            if pattern in ["Hammer", "Bullish Engulfing"]:
-                reason_parts.append(f"Pattern: {pattern}")
-            if indicators['Trend'] == "Uptrend":
-                reason_parts.append("Uptrend confirmed")
-            if not reason_parts:
-                reason_parts.append("Bullish price action detected")
-
-        reason = " → ".join(reason_parts)
-
-        # Active indicators
-        active_indicators = []
-        if indicators['RSI'] > 70 or indicators['RSI'] < 30:
-            active_indicators.append(f"RSI ({'Overbought' if indicators['RSI'] > 70 else 'Oversold'})")
-        if indicators['Trend'] != "Sideways":
-            active_indicators.append(f"Trend ({indicators['Trend']})")
-        active_indicators.append(f"Pattern ({pattern})")
-
-        # Build response (Trade Algo style)
+        # Build response
         direction_emoji = "🔴" if direction == "SELL" else "🟢"
         direction_text = "DOWN" if direction == "SELL" else "UP"
 
@@ -426,9 +425,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"📊 Pattern: {pattern}\n"
         response += f"⏱️ Expiry: 15s\n"
         response += f"🎯 Confidence: {confidence}%\n\n"
-        response += f"🔍 Reason:\n{reason}\n\n"
+        response += f"🔍 Reason:\n{indicators['Reason']}\n\n"
         response += f"📊 **Active Indicators:**\n"
-        for ind in active_indicators:
+        for ind in indicators['Active_Indicators']:
             response += f"✅ {ind}\n"
         response += f"\n⏰ Entry: {entry_time} (next candle open)\n"
         response += f"⏰ Expiry: {expiry_time} (15s later)"
