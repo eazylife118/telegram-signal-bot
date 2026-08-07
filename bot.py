@@ -64,39 +64,6 @@ def get_entry2_time(entry1_time):
     return (datetime.strptime(entry1_time, "%H:%M:%S") + timedelta(minutes=1)).strftime("%H:%M:%S")
 
 # ==========================================
-# PAIR DETECTION - OCR FROM SCREENSHOT
-# ==========================================
-def detect_pair_from_image(image_path):
-    try:
-        img = Image.open(image_path)
-        img = img.convert('L')
-        
-        width, height = img.size
-        crop_box = (0, 0, width, height // 3)
-        cropped_img = img.crop(crop_box)
-        
-        enhancer = ImageEnhance.Contrast(cropped_img)
-        cropped_img = enhancer.enhance(2)
-        
-        custom_config = r'--oem 3 --psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ/'
-        text = pytesseract.image_to_string(cropped_img, config=custom_config)
-        
-        print("🔍 OCR Raw Text (cropped):", text)
-        
-        match = re.search(r'([A-Z]{3}/[A-Z]{3}\s+OTC)', text)
-        if match:
-            return match.group(1)
-        
-        match = re.search(r'([A-Z]{3}/[A-Z]{3})', text)
-        if match:
-            return match.group(1) + " OTC"
-            
-    except Exception as e:
-        print("OCR error:", e)
-    
-    return None
-
-# ==========================================
 # ENHANCED POCKET OPTION SCREENSHOT READER
 # ==========================================
 
@@ -104,7 +71,6 @@ class PocketOptionScreenshotReader:
     def __init__(self):
         self.price_levels = []
         self.candle_data = []
-        self.pair_name = None
         
     def read_screenshot(self, image_path):
         """Extract REAL data from Pocket Option screenshot"""
@@ -355,7 +321,7 @@ class PocketOptionScreenshotReader:
         return candles
     
     def _candles_to_ohlc(self, candles):
-        """Convert detected candles to OHLC data - NO RANDOM"""
+        """Convert detected candles to OHLC data"""
         if not candles or not self.price_levels:
             return None
         
@@ -388,14 +354,12 @@ class PocketOptionScreenshotReader:
             ohlc['high'].append(high_price)
             ohlc['low'].append(low_price)
             ohlc['close'].append(close_price)
-            
-            # Pattern-based volume (NO RANDOM)
             ohlc['volume'].append(100 + (i * 5))
         
         return ohlc
     
     def _generate_ohlc_from_price_levels(self):
-        """Fallback: Generate OHLC from price levels - NO RANDOM"""
+        """Fallback: Generate OHLC from price levels with MINIMAL randomness"""
         if not self.price_levels or len(self.price_levels) < 3:
             return None
         
@@ -436,8 +400,6 @@ class PocketOptionScreenshotReader:
             highs.append(high_price)
             lows.append(low_price)
             closes.append(close_price)
-            
-            # Pattern-based volume (NO RANDOM)
             volumes.append(150 + (i * 5))
         
         return {
@@ -714,14 +676,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = await update.message.photo[-1].get_file()
         await photo.download_to_drive("screenshot.png")
 
-        # DETECT PAIR FROM SCREENSHOT
-        pair_name = detect_pair_from_image("screenshot.png")
-        if pair_name:
-            print(f"✅ Detected pair: {pair_name}")
-        else:
-            pair_name = "Unknown Pair"
-            print("⚠️ Could not detect pair from screenshot")
-
         # READ REAL DATA FROM SCREENSHOT
         price_data = screenshot_reader.read_screenshot("screenshot.png")
 
@@ -747,7 +701,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prediction = predict_entries(strategy, direction, confidence, expiry_1, expiry_2)
 
         response = f"📊 **OTC SIGNAL**\n\n"
-        response += f"🔍 **Pair:** {pair_name}\n\n"
         response += f"📈 **Entry 1:**\n"
         response += f"   {prediction['entry1']['dir']} at {prediction['entry1']['time']} ({prediction['entry1']['expiry']} min) — Confidence: {prediction['entry1']['conf']}%\n\n"
         response += f"🔍 **Strategy:** {strategy}\n"
@@ -756,7 +709,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"   → Expiry: {expiry_1} min\n\n"
         response += f"📈 **Entry 2:**\n"
         response += f"   {prediction['entry2']['dir']} at {prediction['entry2']['time']} ({prediction['entry2']['expiry']} min) — Confidence: {prediction['entry2']['conf']}%\n"
-        response += f"   → Expiry: {prediction['entry2']['expiry']} min"
+        response += f"   → Expiry: {prediction['entry2']['expiry']} min\n\n"
+        response += f"📊 **Data:** {len(price_data['close'])} candles from screenshot"
+        response += f"\n⚠️ **Risk Warning:** Trade responsibly!"
 
         await context.bot.forward_message(
             chat_id=CHANNEL_ID,
@@ -778,10 +733,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def run_telegram():
     application = Application.builder().token(TOKEN).build()
     application.bot.delete_webhook()
-
-
-
-
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.run_polling()
