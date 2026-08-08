@@ -6,7 +6,7 @@ import pytesseract
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, MessageHandler, ContextTypes, filters
-TOKEN = os.getenv("8937673241:AAHIb8yOEPj38vCPsS2Nir9b0CtCtsEfsaM")
+TOKEN = os.getenv"8937673241:AAHIb8yOEPj38vCPsS2Nir9b0CtCtsEfsaM"
 app = Flask(__name__)
 @app.route("/")
 def home():
