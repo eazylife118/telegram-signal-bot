@@ -1,7 +1,1 @@
-flask
-python-telegram-bot
-requests
-numpy
-opencv-python-headless
-pytesseract
-Pillow
+pip install opencv-python pyTelegramBotAPI numpy
