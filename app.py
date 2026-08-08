@@ -3,8 +3,7 @@ import re
 import time
 import threading
 import cv2
-import pytesseract
-import requests
+import easyocr
 from flask import Flask
 from telegram import Update
 from telegram.ext import (
@@ -18,12 +17,12 @@ from telegram.ext import (
 # ==========================================
 TOKEN = os.getenv("8937673241:AAHIb8yOEPj38vCPsS2Nir9b0CtCtsEfsaM")
 # ==========================================
-# FLASK SERVER
+# FLASK
 # ==========================================
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return "✅ Python 3 Screenshot Pair Detector is running!"
+    return "✅ Python 3 + EasyOCR Pair Detector is running!"
 @app.route("/ping")
 def ping():
     return "pong", 200
@@ -34,18 +33,35 @@ def run_flask():
         debug=False
     )
 # ==========================================
+# OCR
+# ==========================================
+print("🔎 Loading EasyOCR...")
+reader = easyocr.Reader(
+    ["en"],
+    gpu=False
+)
+print("✅ EasyOCR loaded.")
+# ==========================================
 # CURRENCY PAIR DETECTION
 # ==========================================
-KNOWN_CURRENCIES = [
-    "EUR", "USD", "GBP", "JPY", "AUD",
-    "CAD", "CHF", "NZD", "SGD", "HKD"
+CURRENCIES = [
+    "EUR",
+    "USD",
+    "GBP",
+    "JPY",
+    "AUD",
+    "CAD",
+    "CHF",
+    "NZD",
+    "SGD",
+    "HKD",
 ]
 def detect_currency_pair(image_path):
     image = cv2.imread(image_path)
     if image is None:
         return None, "Could not load screenshot."
-    # Make the image larger for OCR
     height, width = image.shape[:2]
+    # Enlarge small screenshots
     if width < 1500:
         scale = 1500 / width
         image = cv2.resize(
@@ -55,86 +71,55 @@ def detect_currency_pair(image_path):
             fy=scale,
             interpolation=cv2.INTER_CUBIC
         )
-    # Several OCR attempts
-    images_to_read = []
-    # Original enlarged image
-    images_to_read.append(image)
-    # Grayscale
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    images_to_read.append(gray)
-    # Threshold
-    _, threshold = cv2.threshold(
-        gray,
-        0,
-        255,
-        cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
-    images_to_read.append(threshold)
-    # Inverted threshold
-    inverted = cv2.bitwise_not(threshold)
-    images_to_read.append(inverted)
-    all_text = []
-    for img in images_to_read:
-        try:
-            text = pytesseract.image_to_string(
-                img,
-                config="--psm 6"
-            )
+    print("📸 Running OCR...")
+    try:
+        results = reader.readtext(image)
+    except Exception as e:
+        return None, f"OCR error: {e}"
+    detected_text = []
+    for result in results:
+        if len(result) >= 2:
+            text = result[1]
             if text:
-                all_text.append(text)
-        except Exception as e:
-            print("OCR error:", e)
-    combined_text = "\n".join(all_text)
+                detected_text.append(text)
     print("========== OCR TEXT ==========")
-    print(combined_text)
+    for text in detected_text:
+        print(text)
     print("================================")
-    # Normalize OCR text
-    text = combined_text.upper()
-    # Remove common OCR spacing problems
-    text = text.replace(" ", "")
-    text = text.replace("\n", "")
-    text = text.replace("|", "/")
-    # Search for standard currency pairs
-    currencies = "|".join(KNOWN_CURRENCIES)
-    patterns = [
-        rf"\b({currencies})[/\-]({currencies})\b",
-        rf"\b({currencies})({currencies})\b"
-    ]
-    for pattern in patterns:
-        matches = re.findall(pattern, text)
-        for match in matches:
-            base = match[0]
-            quote = match[1]
-            if base != quote:
+    # Combine OCR text
+    combined = " ".join(detected_text).upper()
+    # Normalize common OCR problems
+    normalized = combined
+    normalized = normalized.replace(" ", "")
+    normalized = normalized.replace("|", "/")
+    normalized = normalized.replace("\\", "/")
+    # Search for EUR/USD etc.
+    currency_pattern = (
+        r"(EUR|USD|GBP|JPY|AUD|CAD|CHF|NZD|SGD|HKD)"
+        r"[/\-]"
+        r"(EUR|USD|GBP|JPY|AUD|CAD|CHF|NZD|SGD|HKD)"
+    )
+    match = re.search(currency_pattern, normalized)
+    if match:
+        base = match.group(1)
+        quote = match.group(2)
+        if base != quote:
+            pair = f"{base}/{quote}"
+            if "OTC" in normalized:
+                pair += " OTC"
+            return pair, combined
+    # Try pair without slash
+    for base in CURRENCIES:
+        for quote in CURRENCIES:
+            if base == quote:
+                continue
+            pair_without_slash = base + quote
+            if pair_without_slash in normalized:
                 pair = f"{base}/{quote}"
-                # Check nearby original text for OTC
-                if "OTC" in text:
+                if "OTC" in normalized:
                     pair += " OTC"
-                return pair, combined_text
-    # Additional OCR cleanup for common mistakes
-    corrections = {
-        "EURSUD": "EURUSD",
-        "EURIUSD": "EURUSD",
-        "EUR/USO": "EUR/USD",
-        "GBP/USO": "GBP/USD",
-        "USO/JPY": "USD/JPY",
-        "AUD/USO": "AUD/USD",
-        "USD/JFV": "USD/JPY",
-    }
-    cleaned = text
-    for wrong, correct in corrections.items():
-        cleaned = cleaned.replace(wrong, correct)
-    for pattern in patterns:
-        matches = re.findall(pattern, cleaned)
-        for match in matches:
-            base = match[0]
-            quote = match[1]
-            if base != quote:
-                pair = f"{base}/{quote}"
-                if "OTC" in cleaned:
-                    pair += " OTC"
-                return pair, combined_text
-    return None, combined_text
+                return pair, combined
+    return None, combined
 # ==========================================
 # TELEGRAM PHOTO HANDLER
 # ==========================================
@@ -142,52 +127,57 @@ async def handle_photo(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+    filename = "test_screenshot.png"
     try:
         await update.message.reply_text(
             "📸 Screenshot received.\n"
-            "🔎 Reading currency pair..."
+            "🔎 Detecting currency pair..."
         )
         photo = await update.message.photo[-1].get_file()
-        filename = "test_screenshot.png"
         await photo.download_to_drive(filename)
         start_time = time.time()
-        pair, raw_text = detect_currency_pair(filename)
+        pair, ocr_text = detect_currency_pair(filename)
         elapsed = time.time() - start_time
         if pair:
             await update.message.reply_text(
-                f"✅ PAIR DETECTED\n\n"
+                f"✅ CURRENCY PAIR DETECTED\n\n"
                 f"💱 {pair}\n\n"
-                f"⏱ OCR time: {elapsed:.2f}s\n\n"
-                f"Python 3 screenshot test successful."
+                f"⏱ OCR time: {elapsed:.2f} seconds\n\n"
+                f"✅ Python 3 screenshot test successful."
             )
         else:
-            # Send the OCR text so we can see what Python actually read
-            preview = raw_text.strip()
-            if len(preview) > 1000:
-                preview = preview[:1000]
+            preview = ocr_text.strip()
+            if len(preview) > 1500:
+                preview = preview[:1500]
+            if not preview:
+                preview = "[No readable text detected]"
             await update.message.reply_text(
-                "❌ Currency pair was not detected.\n\n"
-                "Python DID receive and read the screenshot, "
+                "❌ CURRENCY PAIR NOT DETECTED\n\n"
+                "Python received the screenshot, "
                 "but the pair was not recognized.\n\n"
-                "OCR text detected:\n"
-                f"{preview if preview else '[No text detected]'}"
+                "OCR READ:\n"
+                f"{preview}"
             )
-        # Remove test screenshot
-        try:
-            os.remove(filename)
-        except:
-            pass
     except Exception as e:
-        print("ERROR:", e)
+        print("❌ ERROR:", e)
         await update.message.reply_text(
             f"❌ Test error:\n{str(e)}"
         )
+    finally:
+        try:
+            if os.path.exists(filename):
+                os.remove(filename)
+        except:
+            pass
 # ==========================================
 # TELEGRAM BOT
 # ==========================================
 def run_telegram():
     if not TOKEN:
-        print("❌ BOT_TOKEN environment variable is missing.")
+        print(
+            "❌ BOT_TOKEN environment variable "
+            "is missing."
+        )
         return
     application = (
         Application
@@ -201,7 +191,10 @@ def run_telegram():
             handle_photo
         )
     )
-    print("✅ Telegram screenshot detector started.")
+    print(
+        "✅ Telegram screenshot "
+        "pair detector started."
+    )
     application.run_polling()
 # ==========================================
 # START
