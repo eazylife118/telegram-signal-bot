@@ -1,9 +1,7 @@
 import os
 import re
-import random
 import time
-import cv2
-import pytesseract
+import threading
 from flask import Flask
 from telegram import Update
 from telegram.ext import (
@@ -13,20 +11,29 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+import pytesseract
+from PIL import Image, ImageEnhance, ImageFilter
+
 # ============================================================
 # TELEGRAM SETTINGS
 # ============================================================
+
 TOKEN = "8937673241:AAGvyTA-G12xfwMlhif3Nh4_2Ag8OStq3tU"
+
 # ============================================================
 # FLASK SERVER FOR RENDER
 # ============================================================
+
 app = Flask(__name__)
+
 @app.route("/")
 def home():
-    return "Screenshot Pair Detection Test Bot is running!"
+    return "Screenshot OCR Test Bot is running!"
+
 @app.route("/ping")
 def ping():
     return "pong", 200
+
 def run_flask():
     app.run(
         host="0.0.0.0",
@@ -34,204 +41,237 @@ def run_flask():
         debug=False,
         threaded=True
     )
+
 # ============================================================
-# CURRENCY PAIR DETECTION
+# FAST SCREENSHOT OCR
 # ============================================================
-CURRENCY_CODES = [
-    "USD", "EUR", "GBP", "JPY", "AUD",
-    "CAD", "CHF", "NZD", "SGD", "HKD",
-    "CNY", "TRY", "ZAR", "MXN", "BRL"
-]
-def detect_currency_pair(image_path):
-    image = cv2.imread(image_path)
-    if image is None:
-        return None, "Could not load screenshot."
-    height, width = image.shape[:2]
-    if width < 1500:
-        scale = 1500 / width
-        image = cv2.resize(
-            image,
-            (1500, int(height * scale)),
-            interpolation=cv2.INTER_CUBIC
-        )
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    normal = gray
-    _, otsu = cv2.threshold(
-        gray,
-        0,
-        255,
-        cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
-    adaptive = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        11,
-        2
-    )
-    images = [normal, otsu, adaptive]
-    all_text = []
-    for img in images:
-        try:
-            text = pytesseract.image_to_string(
-                img,
-                config="--psm 6"
+
+def read_screenshot(image_path):
+
+    try:
+        image = Image.open(image_path)
+
+        # ----------------------------------------------------
+        # Resize only when necessary
+        # ----------------------------------------------------
+
+        width, height = image.size
+
+        if width < 1200:
+            scale = 1200 / width
+            image = image.resize(
+                (
+                    int(width * scale),
+                    int(height * scale)
+                )
             )
-            if text:
-                all_text.append(text)
-        except Exception as e:
-            print("OCR error:", e)
-    combined_text = "\n".join(all_text)
-    print("\n========== OCR TEXT ==========")
-    print(combined_text)
-    print("================================\n")
-    text = combined_text.upper()
-    replacements = {
-        "USO": "USD",
-        "EURO": "EUR",
-        "EUP": "EUR",
-        "6BP": "GBP",
-        "G8P": "GBP",
-        "JPV": "JPY",
-    }
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-    pair_pattern = re.compile(
-        r"\b("
-        + "|".join(CURRENCY_CODES)
-        + r")"
-        r"\s*[/\\\-_:]?\s*"
-        r"\b("
-        + "|".join(CURRENCY_CODES)
-        + r")\b"
-    )
-    matches = pair_pattern.findall(text)
-    detected_pairs = []
-    for base, quote in matches:
-        if base == quote:
-            continue
-        pair = f"{base}/{quote}"
-        if pair not in detected_pairs:
-            detected_pairs.append(pair)
-    if detected_pairs:
-        pair = detected_pairs[0]
-        print("✅ CURRENCY PAIR DETECTED:", pair)
-        return pair, combined_text
-    print("❌ NO CURRENCY PAIR DETECTED")
-    return None, combined_text
+
+        # ----------------------------------------------------
+        # Improve contrast
+        # ----------------------------------------------------
+
+        image = ImageEnhance.Contrast(image).enhance(1.5)
+        image = ImageEnhance.Sharpness(image).enhance(1.5)
+
+        # ----------------------------------------------------
+        # OCR the COMPLETE screenshot
+        # ----------------------------------------------------
+
+        text = pytesseract.image_to_string(
+            image,
+            config="--psm 11"
+        )
+
+        # ----------------------------------------------------
+        # Clean OCR output
+        # ----------------------------------------------------
+
+        lines = []
+
+        for line in text.splitlines():
+
+            line = line.strip()
+
+            if line:
+                lines.append(line)
+
+        cleaned_text = "\n".join(lines)
+
+        return cleaned_text
+
+    except Exception as e:
+
+        print("OCR ERROR:", e)
+
+        return None
+
 # ============================================================
-# RANDOM TEST RESULT
+# TELEGRAM START
 # ============================================================
-def random_test_result(pair):
-    return random.choice([
-        "🟢 BUY",
-        "🔴 SELL"
-    ])
-# ============================================================
-# TELEGRAM /START
-# ============================================================
+
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
     await update.message.reply_text(
-        "📸 SCREENSHOT PAIR DETECTION TEST\n\n"
-        "Send a Pocket Option screenshot.\n\n"
-        "The bot will ONLY try to detect the currency pair.\n\n"
-        "No strategy.\n"
-        "No candle analysis.\n"
-        "No prediction.\n"
-        "No real trading signal."
+        "📸 SCREENSHOT OCR TEST\n\n"
+        "Send ANY screenshot.\n\n"
+        "The bot will try to read ANY visible text.\n\n"
+        "It does NOT require USD/CHF.\n"
+        "It does NOT require EUR/USD.\n"
+        "It does NOT require a currency pair.\n\n"
+        "It can attempt to read:\n"
+        "• OTC names\n"
+        "• Currency pairs\n"
+        "• Asset names\n"
+        "• Prices\n"
+        "• Buttons\n"
+        "• Chart text\n"
+        "• Other visible text"
     )
+
 # ============================================================
-# TELEGRAM PHOTO HANDLER
+# PHOTO HANDLER
 # ============================================================
+
 async def handle_photo(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
     start_time = time.time()
+
     try:
+
         await update.message.reply_text(
             "📸 Screenshot received.\n"
-            "🔎 Reading currency pair..."
+            "🔎 Reading screenshot..."
         )
+
+        # ----------------------------------------------------
+        # Download screenshot
+        # ----------------------------------------------------
+
         photo = await update.message.photo[-1].get_file()
-        file_path = "test_screenshot.png"
+
+        file_path = "screenshot_test.png"
+
         await photo.download_to_drive(file_path)
-        print("\n📸 Screenshot downloaded.")
-        print("🔎 Starting OCR pair detection...\n")
-        pair, ocr_text = detect_currency_pair(file_path)
-        if pair:
-            random_result = random_test_result(pair)
-            elapsed = time.time() - start_time
-            response = (
-                "✅ SCREENSHOT TEST RESULT\n\n"
-                f"💱 Currency Pair: {pair}\n"
-                f"🧪 Random Test: {random_result}\n\n"
-                "📸 Screenshot was successfully received.\n"
-                "🔎 Currency pair was detected by Python OCR.\n\n"
-                f"⚡ Processing time: {elapsed:.2f}s\n\n"
-                "⚠️ RANDOM TEST ONLY — NOT A TRADING SIGNAL."
-            )
-            await update.message.reply_text(response)
-            print("================================")
-            print("✅ TEST PASSED")
-            print("PAIR:", pair)
-            print("RANDOM RESULT:", random_result)
-            print(f"TIME: {elapsed:.2f}s")
-            print("================================")
-        else:
+
+        print("📸 Screenshot downloaded.")
+
+        # ----------------------------------------------------
+        # OCR
+        # ----------------------------------------------------
+
+        detected_text = read_screenshot(file_path)
+
+        elapsed = time.time() - start_time
+
+        # ----------------------------------------------------
+        # Nothing detected
+        # ----------------------------------------------------
+
+        if not detected_text:
+
             await update.message.reply_text(
-                "❌ CURRENCY PAIR NOT DETECTED\n\n"
-                "Python received the screenshot, but "
-                "the OCR could not identify a supported "
-                "currency pair.\n\n"
-                "Try sending a clearer screenshot with "
-                "the pair name visible."
+                "❌ NO TEXT DETECTED\n\n"
+                "The screenshot was received, but "
+                "OCR could not find readable text.\n\n"
+                f"⚡ Processing time: {elapsed:.2f}s"
             )
-            print("❌ TEST FAILED: PAIR NOT DETECTED")
+
+            return
+
+        # ----------------------------------------------------
+        # Limit Telegram message size
+        # ----------------------------------------------------
+
+        if len(detected_text) > 3500:
+            detected_text = detected_text[:3500] + "\n..."
+
+        # ----------------------------------------------------
+        # Send result
+        # ----------------------------------------------------
+
+        response = (
+            "✅ SCREENSHOT OCR RESULT\n\n"
+            "🔎 TEXT DETECTED:\n"
+            "────────────────────\n"
+            f"{detected_text}\n"
+            "────────────────────\n\n"
+            f"⚡ Processing time: {elapsed:.2f}s\n\n"
+            "🧪 TEST ONLY — NO TRADING SIGNAL."
+        )
+
+        await update.message.reply_text(response)
+
+        print("\n========================================")
+        print("✅ OCR TEST PASSED")
+        print("========================================")
+        print(detected_text)
+        print("----------------------------------------")
+        print(f"⚡ Time: {elapsed:.2f}s")
+        print("========================================\n")
+
     except Exception as e:
-        print("ERROR:", str(e))
+
+        print("ERROR:", e)
+
         await update.message.reply_text(
             f"❌ TEST ERROR\n\n{str(e)}"
         )
+
 # ============================================================
-# START TELEGRAM BOT
+# TELEGRAM BOT
 # ============================================================
+
 def run_bot():
+
     application = (
         Application.builder()
         .token(TOKEN)
         .build()
     )
+
     application.add_handler(
         CommandHandler("start", start)
     )
+
     application.add_handler(
         MessageHandler(
             filters.PHOTO,
             handle_photo
         )
     )
+
+    print("========================================")
+    print("📸 FAST SCREENSHOT OCR TEST BOT")
+    print("========================================")
     print("✅ Telegram bot started.")
-    print("📸 Waiting for screenshot...")
+    print("📸 Waiting for screenshots...")
+
     application.run_polling(
         drop_pending_updates=True
     )
+
 # ============================================================
 # MAIN
 # ============================================================
+
 if __name__ == "__main__":
-    import threading
+
     print("========================================")
-    print("📸 SCREENSHOT PAIR DETECTION TEST")
+    print("📸 SCREENSHOT OCR TEST")
     print("========================================")
+
     threading.Thread(
         target=run_flask,
         daemon=True
     ).start()
+
     print("✅ Flask server started.")
     print("✅ Starting Telegram bot...")
+
     run_bot()
