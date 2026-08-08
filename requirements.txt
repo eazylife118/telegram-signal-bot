@@ -1,1 +1,3 @@
-pip install opencv-python pyTelegramBotAPI numpy
+opencv-python
+pyTelegramBotAPI
+numpy
