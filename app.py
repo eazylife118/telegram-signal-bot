@@ -3,504 +3,163 @@ import re
 import time
 import cv2
 import pytesseract
-import threading
-
+import numpy as np
 from flask import Flask
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 # ============================================================
-# TELEGRAM TOKEN
+# TELEGRAM SETTINGS
 # ============================================================
-
 TOKEN = "8937673241:AAGvyTA-G12xfwMlhif3Nh4_2Ag8OStq3tU"
 
 # ============================================================
-# FLASK SERVER FOR RENDER
+# FLASK SERVER (LIGHTWEIGHT)
 # ============================================================
-
 app = Flask(__name__)
-
 
 @app.route("/")
 def home():
-    return "Fast Screenshot OCR Test Bot is running!"
-
+    return "Screenshot Pair Detection Bot is running!"
 
 @app.route("/ping")
 def ping():
     return "pong", 200
 
-
 def run_flask():
-    app.run(
-        host="0.0.0.0",
-        port=10000,
-        debug=False,
-        threaded=True
-    )
-
+    app.run(host="0.0.0.0", port=10000, debug=False, threaded=True)
 
 # ============================================================
-# FAST SCREENSHOT OCR
+# FAST CURRENCY PAIR DETECTION
 # ============================================================
+CURRENCY_CODES = [
+    "USD", "EUR", "GBP", "JPY", "AUD",
+    "CAD", "CHF", "NZD", "SGD", "HKD",
+    "CNY", "TRY", "ZAR", "MXN", "BRL"
+]
 
-def analyze_screenshot(image_path):
+# Pre-compile regex pattern for speed
+PAIR_PATTERN = re.compile(
+    r"\b(" + "|".join(CURRENCY_CODES) + r")\s*[/\\\-_:]?\s*(" + "|".join(CURRENCY_CODES) + r")\b"
+)
 
-    start = time.time()
-
-    image = cv2.imread(image_path)
-
-    if image is None:
-        return None, "Could not load screenshot."
-
-    original_height, original_width = image.shape[:2]
-
-    # --------------------------------------------------------
-    # Resize only when necessary
-    # --------------------------------------------------------
-
-    max_width = 1400
-
-    if original_width > max_width:
-
-        scale = max_width / original_width
-
-        image = cv2.resize(
-            image,
-            (
-                max_width,
-                int(original_height * scale)
-            ),
-            interpolation=cv2.INTER_AREA
-        )
-
-    # --------------------------------------------------------
-    # Grayscale
-    # --------------------------------------------------------
-
-    gray = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2GRAY
-    )
-
-    # --------------------------------------------------------
-    # Light sharpening
-    # --------------------------------------------------------
-
-    gray = cv2.GaussianBlur(
-        gray,
-        (3, 3),
-        0
-    )
-
-    # --------------------------------------------------------
-    # ONE FAST OCR PASS
-    #
-    # psm 11 works well for screenshots containing
-    # scattered text such as Pocket Option.
-    # --------------------------------------------------------
-
-    text = pytesseract.image_to_string(
-        gray,
-        config="--psm 11"
-    )
-
-    elapsed = time.time() - start
-
-    if not text.strip():
-        return None, f"OCR found no readable text. Time: {elapsed:.2f}s"
-
-    # --------------------------------------------------------
-    # Clean OCR text
-    # --------------------------------------------------------
-
-    lines = []
-
-    for line in text.splitlines():
-
-        line = line.strip()
-
-        if line:
-            lines.append(line)
-
-    cleaned_text = "\n".join(lines)
-
-    # --------------------------------------------------------
-    # Detect asset / pair
-    #
-    # This DOES NOT require USDCHF.
-    # It searches for common Pocket Option style names.
-    # --------------------------------------------------------
-
-    asset = detect_asset(cleaned_text)
-
-    return {
-        "text": cleaned_text,
-        "asset": asset,
-        "time": elapsed,
-        "width": image.shape[1],
-        "height": image.shape[0]
-    }, None
-
-
-# ============================================================
-# ASSET DETECTION
-# ============================================================
-
-def detect_asset(text):
-
-    upper = text.upper()
-
-    # --------------------------------------------------------
-    # Common OTC / Pocket Option assets
-    # --------------------------------------------------------
-
-    known_assets = [
-
-        # Major currencies
-        "EUR/USD",
-        "GBP/USD",
-        "USD/JPY",
-        "USD/CHF",
-        "AUD/USD",
-        "USD/CAD",
-        "NZD/USD",
-        "EUR/GBP",
-        "EUR/JPY",
-        "GBP/JPY",
-
-        # Metals
-        "GOLD",
-        "SILVER",
-
-        # Crypto
-        "BTC/USD",
-        "ETH/USD",
-
-        # Stocks / assets
-        "AMERICAN EXPRESS",
-        "APPLE",
-        "AMAZON",
-        "TESLA",
-        "MICROSOFT",
-        "GOOGLE",
-        "META",
-        "NVIDIA",
-        "MCDONALD",
-        "COCA-COLA",
-        "NIKE",
-
-        # Common Pocket Option wording
-        "OTC"
-    ]
-
-    # --------------------------------------------------------
-    # Direct name detection
-    # --------------------------------------------------------
-
-    for asset in known_assets:
-
-        if asset in upper:
-
-            return asset
-
-    # --------------------------------------------------------
-    # Try to detect currency pairs without slash
-    #
-    # USDCHF
-    # EURUSD
-    # GBPJPY
-    # --------------------------------------------------------
-
-    pair_pattern = re.compile(
-        r"\b("
-        r"USD|EUR|GBP|JPY|AUD|CAD|CHF|NZD"
-        r")"
-        r"\s*"
-        r"[/\\\-_:]?"
-        r"\s*"
-        r"(USD|EUR|GBP|JPY|AUD|CAD|CHF|NZD)"
-        r"\b"
-    )
-
-    match = pair_pattern.search(upper)
-
-    if match:
-
-        base = match.group(1)
-        quote = match.group(2)
-
+def detect_pair_fast(image_path):
+    """ULTRA FAST pair detection - optimized for speed"""
+    
+    # Read image
+    img = cv2.imread(image_path)
+    if img is None:
+        return None
+    
+    # Quick resize (faster than full processing)
+    height, width = img.shape[:2]
+    if width > 1000:
+        scale = 1000 / width
+        new_width = 1000
+        new_height = int(height * scale)
+        img = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+    
+    # Convert to grayscale (fast)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Single threshold pass (fastest)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # OCR - single pass
+    try:
+        text = pytesseract.image_to_string(thresh, config="--psm 6 --oem 3")
+    except:
+        return None
+    
+    # Quick cleanup
+    text = text.upper()
+    
+    # Quick replacements
+    replacements = {"USO": "USD", "EURO": "EUR", "EUP": "EUR", "6BP": "GBP", "G8P": "GBP", "JPV": "JPY"}
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    
+    # Find pair
+    matches = PAIR_PATTERN.findall(text)
+    for base, quote in matches:
         if base != quote:
-
             return f"{base}/{quote}"
-
-    # --------------------------------------------------------
-    # If no known asset is found, look for an OTC line.
-    #
-    # Example:
-    # American Express OTC
-    # --------------------------------------------------------
-
-    for line in upper.splitlines():
-
-        if "OTC" in line:
-
-            line = line.strip()
-
-            if len(line) > 3:
-
-                return line
-
-    # --------------------------------------------------------
-    # Last fallback:
-    # search lines that look like an asset name.
-    # --------------------------------------------------------
-
-    for line in upper.splitlines():
-
-        line = line.strip()
-
-        if (
-            3 <= len(line) <= 40
-            and any(c.isalpha() for c in line)
-            and not line.isdigit()
-        ):
-
-            # Ignore common interface words
-            ignored = [
-                "TRADES",
-                "SIGNALS",
-                "SOCIAL TRADING",
-                "MORE",
-                "AMOUNT",
-                "TIME",
-                "EXPIRATION TIME",
-                "PROFIT",
-                "PAYOUT",
-                "USD",
-                "DEMO"
-            ]
-
-            if line not in ignored:
-
-                return line
-
+    
     return None
 
-
 # ============================================================
-# TELEGRAM /START
+# TELEGRAM HANDLERS
 # ============================================================
-
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📸 FAST SCREENSHOT OCR TEST\n\n"
-        "Send ANY Pocket Option screenshot.\n\n"
-        "The bot will:\n"
-        "🔎 Read visible text\n"
-        "💱 Try to identify the asset/pair\n"
-        "📊 Detect OTC names such as American Express OTC\n"
-        "⚡ Return the result as quickly as possible\n\n"
-        "⚠️ TEST ONLY — NO TRADING SIGNAL."
+        "📸 **Screenshot Pair Detection**\n\n"
+        "Send a Pocket Option screenshot.\n"
+        "I'll detect the currency pair **instantly**.\n\n"
+        "⚡ **Extremely fast** processing!"
     )
 
-
-# ============================================================
-# PHOTO HANDLER
-# ============================================================
-
-async def handle_photo(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start_time = time.time()
-
+    
     try:
-
-        await update.message.reply_text(
-            "📸 Screenshot received.\n"
-            "⚡ Fast OCR analysis started..."
-        )
-
-        # ----------------------------------------------------
-        # Download image
-        # ----------------------------------------------------
-
+        # Download photo (fast)
         photo = await update.message.photo[-1].get_file()
-
         file_path = "screenshot.png"
-
         await photo.download_to_drive(file_path)
-
-        download_time = time.time() - start_time
-
-        print(
-            f"📸 Screenshot downloaded "
-            f"({download_time:.2f}s)"
-        )
-
-        # ----------------------------------------------------
-        # Analyze
-        # ----------------------------------------------------
-
-        result, error = analyze_screenshot(
-            file_path
-        )
-
-        if result is None:
-
-            await update.message.reply_text(
-                "❌ OCR FAILED\n\n"
-                f"{error}\n\n"
-                "Try another clear screenshot."
+        
+        # Detect pair (fast)
+        pair = detect_pair_fast(file_path)
+        
+        elapsed = time.time() - start_time
+        
+        if pair:
+            response = (
+                f"✅ **PAIR DETECTED!**\n\n"
+                f"💱 **Pair:** `{pair}`\n"
+                f"⚡ **Time:** `{elapsed:.2f}s`\n\n"
+                "📸 Screenshot processed successfully.\n"
+                "🔎 Currency pair detected by OCR."
             )
-
-            return
-
-        # ----------------------------------------------------
-        # Results
-        # ----------------------------------------------------
-
-        ocr_text = result["text"]
-        asset = result["asset"]
-        ocr_time = result["time"]
-
-        total_time = time.time() - start_time
-
-        if asset:
-
-            asset_text = (
-                f"💱 DETECTED ASSET:\n"
-                f"**{asset}**"
-            )
-
         else:
-
-            asset_text = (
-                "💱 DETECTED ASSET:\n"
-                "❌ Could not confidently identify the asset"
+            response = (
+                f"❌ **PAIR NOT DETECTED**\n\n"
+                f"⚡ **Time:** `{elapsed:.2f}s`\n\n"
+                "📸 Screenshot received.\n"
+                "🔎 No currency pair found.\n\n"
+                "💡 Try a clearer screenshot with the pair visible."
             )
-
-        # ----------------------------------------------------
-        # Limit displayed OCR text
-        # ----------------------------------------------------
-
-        display_text = ocr_text
-
-        if len(display_text) > 5000:
-
-            display_text = display_text[:5000]
-
-            display_text += "\n...[TEXT TRIMMED]"
-
-        response = (
-            "✅ SCREENSHOT OCR RESULT\n\n"
-
-            f"{asset_text}\n\n"
-
-            "🔎 TEXT DETECTED:\n"
-            "────────────────────\n"
-            f"{display_text}\n"
-            "────────────────────\n\n"
-
-            f"⚡ OCR processing: {ocr_time:.2f}s\n"
-            f"⚡ Total processing: {total_time:.2f}s\n\n"
-
-            "🧪 TEST ONLY — NO TRADING SIGNAL."
-        )
-
-        await update.message.reply_text(
-            response,
-            parse_mode="Markdown"
-        )
-
-        print("\n========================================")
-        print("✅ SCREENSHOT TEST COMPLETE")
-        print("========================================")
-        print("ASSET:", asset)
-        print(f"OCR TIME: {ocr_time:.2f}s")
-        print(f"TOTAL TIME: {total_time:.2f}s")
-        print("========================================\n")
-
+        
+        await update.message.reply_text(response)
+        
+        # Clean up
+        try:
+            os.remove(file_path)
+        except:
+            pass
+            
     except Exception as e:
-
-        print(
-            "❌ ERROR:",
-            str(e)
-        )
-
-        await update.message.reply_text(
-            "❌ TEST ERROR\n\n"
-            f"{str(e)}"
-        )
-
+        await update.message.reply_text(f"❌ Error: {str(e)}")
 
 # ============================================================
-# TELEGRAM BOT
+# START BOT
 # ============================================================
-
 def run_bot():
-
-    application = (
-        Application.builder()
-        .token(TOKEN)
-        .build()
-    )
-
-    application.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
-    )
-
-    application.add_handler(
-        MessageHandler(
-            filters.PHOTO,
-            handle_photo
-        )
-    )
-
-    print("========================================")
-    print("⚡ FAST SCREENSHOT OCR BOT")
-    print("========================================")
-    print("✅ Telegram bot started")
-    print("📸 Waiting for screenshots...")
-    print("========================================")
-
-    application.run_polling(
-        drop_pending_updates=True
-    )
-
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.run_polling(drop_pending_updates=True)
 
 # ============================================================
 # MAIN
 # ============================================================
-
 if __name__ == "__main__":
-
+    import threading
+    
     print("========================================")
-    print("📸 FAST SCREENSHOT OCR TEST")
+    print("⚡ SCREENSHOT PAIR DETECTION (ULTRA FAST)")
     print("========================================")
-
-    threading.Thread(
-        target=run_flask,
-        daemon=True
-    ).start()
-
+    
+    threading.Thread(target=run_flask, daemon=True).start()
     print("✅ Flask server started.")
     print("✅ Starting Telegram bot...")
-
     run_bot()
