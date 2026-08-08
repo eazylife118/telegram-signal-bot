@@ -1,12 +1,11 @@
 import os
-import re
 import time
 import threading
 import requests
 import numpy as np
 import cv2
 import pytesseract
-
+import re
 from flask import Flask
 from telegram import Update
 from telegram.ext import (
@@ -16,2084 +15,1228 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-
 from datetime import datetime, timezone, timedelta
-
-
 # ============================================================
-# TELEGRAM CREDENTIALS
+# TELEGRAM
 # ============================================================
-
+# Put your current Telegram bot token in Render:
+# BOT_TOKEN = your actual token
 TOKEN = "8937673241:AAGvyTA-G12xfwMlhif3Nh4_2Ag8OStq3tU"
-
 CHAT_ID = "6280535707"
 CHANNEL_ID = "-1004324805205"
-
-
 # ============================================================
 # TIMEZONE
 # ============================================================
-
 LOCAL_TZ = timezone(timedelta(hours=1))
-
-
 # ============================================================
 # TRADE SETTINGS
 # ============================================================
-
 ENTRY_INTERVAL_SECONDS = 15
-EXPIRY_MINUTES = 1
 ENTRY_COUNT = 4
-
-ENTRY_SIZES = [
-    1.00,
-    2.10,
-    4.40,
-    9.20
-]
-
-
+EXPIRY_MINUTES = 1
+ENTRY_SIZES = [1.00, 2.10, 4.40, 9.20]
 # ============================================================
-# VISUAL PATTERN SETTINGS
+# YOUR PATTERN SETTINGS
 # ============================================================
-
-# Minimum visible candle-like objects
-MIN_CANDLES = 5
-
-# Minimum number of repeated tests
+# These are NOT pixel sizes.
+# They are relative candle-structure measurements.
+SMALL_BODY_RATIO = 0.45
+REJECTION_WICK_RATIO = 0.30
+# Minimum repeated tests for a meaningful zone.
 MIN_REJECTIONS = 2
-
-# Maximum vertical distance between rejection points
-# expressed as a percentage of chart height
-ZONE_TOLERANCE_PX_RATIO = 0.035
-
-# Candle body relative to total candle height
-SMALL_BODY_RATIO = 0.55
-
-# Wick must represent at least this proportion
-REJECTION_WICK_RATIO = 0.25
-
-# How close open and close must be to consider them clustered
-OPEN_CLOSE_CLUSTER_RATIO = 0.25
-
-# Number of candles examined
-MAX_CANDLES = 60
-
-
+# Relative distance for grouping candles that reject
+# approximately the same price level.
+ZONE_TOLERANCE_RATIO = 0.035
 # ============================================================
 # FLASK
 # ============================================================
-
 app = Flask(__name__)
-
-
 @app.route("/")
 def home():
-    return "OTC Screenshot Reversal Bot is running!"
-
-
+    return "OTC Reversal Screenshot Bot is running!"
 @app.route("/ping")
 def ping():
     return "pong", 200
-
-
 def run_flask():
-
     import logging
-
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
-
     app.run(
         host="0.0.0.0",
         port=10000,
         debug=False,
         threaded=True
     )
-
-
 # ============================================================
-# OCR / TEXT DETECTION
+# OTC / ASSET DETECTION
 # ============================================================
-
-CURRENCY_CODES = [
-    "USD",
-    "EUR",
-    "GBP",
-    "JPY",
-    "AUD",
-    "CHF",
-    "CAD",
-    "NZD",
-    "SGD",
-    "HKD",
-    "CNY",
-    "TRY",
-    "ZAR",
-    "MXN",
-    "BRL",
-]
-
-
-KNOWN_ASSET_WORDS = [
-    "AMERICAN EXPRESS",
-    "AMERICANEXPRESS",
-    "GOLD",
-    "SILVER",
-    "OIL",
-    "CRUDE OIL",
-    "TESLA",
-    "APPLE",
-    "AMAZON",
-    "MICROSOFT",
-    "GOOGLE",
-    "BITCOIN",
-    "ETHEREUM",
-]
-
-
+CURRENCY_CODES = {
+    "USD", "EUR", "GBP", "JPY", "AUD",
+    "CAD", "CHF", "NZD", "SGD", "HKD",
+    "CNY", "TRY", "ZAR", "MXN", "BRL",
+    "AED", "SAR", "NOK", "SEK", "DKK",
+    "PLN", "RUB", "INR", "KRW"
+}
 def normalize_ocr_text(text):
-
     text = text.upper()
-
     replacements = {
         "USO": "USD",
-        "EURO": "EUR",
         "EUP": "EUR",
+        "EURO": "EUR",
         "G8P": "GBP",
         "6BP": "GBP",
         "JPV": "JPY",
         "AUO": "AUD",
         "CHP": "CHF",
     }
-
     for old, new in replacements.items():
         text = text.replace(old, new)
-
     return text
-
-
-def detect_visible_asset(text):
-
-    normalized = normalize_ocr_text(text)
-
+def detect_asset(img):
+    """
+    Detect the asset name from the screenshot.
+    IMPORTANT:
+    This does NOT force OTC assets into a fake currency pair.
+    Examples it can return:
+        American Express OTC
+        AUD/CHF OTC
+        EUR/USD OTC
+        GBP/JPY OTC
+    """
+    height, width = img.shape[:2]
+    # Asset name normally appears around the upper portion
+    # of the Pocket Option chart.
+    regions = [
+        img[
+            int(height * 0.05):int(height * 0.35),
+            int(width * 0.15):int(width * 0.90)
+        ],
+        img[
+            int(height * 0.10):int(height * 0.45),
+            0:width
+        ]
+    ]
+    texts = []
+    for region in regions:
+        if region.size == 0:
+            continue
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        # Fast OCR configuration.
+        for psm in (6, 11):
+            try:
+                text = pytesseract.image_to_string(
+                    gray,
+                    config=f"--psm {psm}"
+                )
+                if text:
+                    texts.append(text)
+            except Exception:
+                pass
+    combined = normalize_ocr_text("\n".join(texts))
     # --------------------------------------------------------
-    # Currency pair
+    # First look for explicit OTC asset names
     # --------------------------------------------------------
-
+    lines = [
+        re.sub(r"\s+", " ", line).strip()
+        for line in combined.splitlines()
+    ]
+    for line in lines:
+        if "OTC" in line:
+            # Remove obvious UI words that OCR may attach.
+            line = re.sub(
+                r"\b(EXPIRATION|TIME|AMOUNT|PAYOUT|PROFIT|DEMO)\b",
+                "",
+                line
+            )
+            line = re.sub(r"\s+", " ", line).strip()
+            if len(line) >= 3:
+                return line, combined
+    # --------------------------------------------------------
+    # Normal currency pair
+    # --------------------------------------------------------
     pair_pattern = re.compile(
         r"\b("
-        + "|".join(CURRENCY_CODES)
+        + "|".join(sorted(CURRENCY_CODES, key=len, reverse=True))
         + r")"
-        r"\s*[/\\\-_:]?\s*"
+        r"\s*[/\\\-:]?\s*"
         r"\b("
-        + "|".join(CURRENCY_CODES)
+        + "|".join(sorted(CURRENCY_CODES, key=len, reverse=True))
         + r")\b"
     )
-
-    matches = pair_pattern.findall(normalized)
-
+    matches = pair_pattern.findall(combined)
     for base, quote in matches:
-
         if base != quote:
-
             pair = f"{base}/{quote}"
-
-            return {
-                "type": "CURRENCY PAIR",
-                "name": pair,
-                "raw": pair
-            }
-
+            # Check whether OTC appears anywhere nearby.
+            if "OTC" in combined:
+                return pair + " OTC", combined
+            return pair, combined
     # --------------------------------------------------------
-    # Known OTC / asset names
+    # If nothing trustworthy was found
     # --------------------------------------------------------
-
-    for asset in KNOWN_ASSET_WORDS:
-
-        if asset in normalized:
-
-            return {
-                "type": "ASSET",
-                "name": asset,
-                "raw": asset
-            }
-
-    # --------------------------------------------------------
-    # Detect OTC text
-    # --------------------------------------------------------
-
-    if "OTC" in normalized:
-
-        # Try to find text immediately before OTC
-        lines = [
-            line.strip()
-            for line in normalized.splitlines()
-            if line.strip()
-        ]
-
-        for line in lines:
-
-            if "OTC" in line:
-
-                cleaned = line.replace("OTC", "").strip()
-
-                if cleaned:
-
-                    return {
-                        "type": "OTC ASSET",
-                        "name": cleaned,
-                        "raw": line
-                    }
-
+    return "OTC ASSET NOT CLEAR", combined
+# ============================================================
+# CANDLE GEOMETRY
+# ============================================================
+def candle_information(open_price, high_price, low_price, close_price):
+    candle_range = high_price - low_price
+    if candle_range <= 0:
         return {
-            "type": "MARKET",
-            "name": "OTC",
-            "raw": "OTC"
+            "body": 0,
+            "range": 0,
+            "body_ratio": 1,
+            "upper_wick": 0,
+            "lower_wick": 0
         }
-
+    body = abs(close_price - open_price)
+    upper_wick = high_price - max(open_price, close_price)
+    lower_wick = min(open_price, close_price) - low_price
     return {
-        "type": "UNKNOWN",
-        "name": "NOT CLEAR",
-        "raw": ""
+        "body": body,
+        "range": candle_range,
+        "body_ratio": body / candle_range,
+        "upper_wick": upper_wick,
+        "lower_wick": lower_wick
     }
-
-
-def read_all_visible_text(image):
-
-    """
-    One OCR pass over the screenshot.
-
-    This is intentionally kept to one main OCR operation
-    because repeatedly running many OCR configurations was
-    responsible for the extremely slow 40+ second processing.
-    """
-
-    height, width = image.shape[:2]
-
-    # OCR at a reasonable size.
-    # Don't enlarge huge screenshots unnecessarily.
-    max_width = 1600
-
-    if width > max_width:
-
-        scale = max_width / width
-
-        image = cv2.resize(
-            image,
-            (
-                max_width,
-                int(height * scale)
-            ),
-            interpolation=cv2.INTER_AREA
-        )
-
-    gray = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2GRAY
-    )
-
-    # Slight contrast improvement
-    gray = cv2.normalize(
-        gray,
-        None,
-        0,
-        255,
-        cv2.NORM_MINMAX
-    )
-
-    try:
-
-        text = pytesseract.image_to_string(
-            gray,
-            config="--psm 6"
-        )
-
-    except Exception as e:
-
-        print("OCR ERROR:", e)
-        text = ""
-
-    return text
-
-
 # ============================================================
-# SCREENSHOT READER
+# SCREENSHOT CANDLE READER
 # ============================================================
-
-class ScreenshotReader:
-
+class PocketOptionScreenshotReader:
     def __init__(self):
-
-        self.last_report = {}
-
-    # --------------------------------------------------------
-    # LOAD IMAGE
-    # --------------------------------------------------------
-
-    def load(self, path):
-
-        image = cv2.imread(path)
-
-        if image is None:
-
+        self.last_asset = "UNKNOWN"
+    def read_screenshot(self, image_path):
+        start = time.time()
+        img = cv2.imread(image_path)
+        if img is None:
             return None
-
-        return image
-
-    # --------------------------------------------------------
-    # FIND CHART REGION
-    # --------------------------------------------------------
-
-    def get_chart_region(self, image):
-
-        height, width = image.shape[:2]
-
-        # Pocket Option normally has controls/text around
-        # the chart, so focus on the central chart area.
-
-        top = int(height * 0.15)
+        original = img.copy()
+        height, width = img.shape[:2]
+        # ----------------------------------------------------
+        # Asset detection
+        # ----------------------------------------------------
+        asset, ocr_text = detect_asset(original)
+        self.last_asset = asset
+        # ----------------------------------------------------
+        # Candle detection
+        # ----------------------------------------------------
+        candles = self.detect_visible_candles(img)
+        elapsed = time.time() - start
+        if not candles:
+            return {
+                "asset": asset,
+                "ocr_text": ocr_text,
+                "candles": [],
+                "read_time": elapsed
+            }
+        return {
+            "asset": asset,
+            "ocr_text": ocr_text,
+            "candles": candles,
+            "read_time": elapsed
+        }
+    # ========================================================
+    # VISIBLE CANDLE DETECTION
+    # ========================================================
+    def detect_visible_candles(self, img):
+        height, width = img.shape[:2]
+        # Chart area only.
+        #
+        # We intentionally exclude much of the interface because
+        # buttons, prices and text can otherwise be mistaken
+        # for candles.
+        top = int(height * 0.18)
         bottom = int(height * 0.83)
-
-        left = int(width * 0.04)
-        right = int(width * 0.92)
-
-        chart = image[
-            top:bottom,
-            left:right
-        ]
-
-        return chart, (
-            left,
-            top,
-            right,
-            bottom
-        )
-
-    # --------------------------------------------------------
-    # DETECT RED/GREEN PIXELS
-    # --------------------------------------------------------
-
-    def get_color_masks(self, chart):
-
-        hsv = cv2.cvtColor(
-            chart,
-            cv2.COLOR_BGR2HSV
-        )
-
-        # GREEN
-        green_lower = np.array([
-            30,
-            35,
-            35
-        ])
-
-        green_upper = np.array([
-            95,
-            255,
-            255
-        ])
-
-        green = cv2.inRange(
+        left = int(width * 0.05)
+        right = int(width * 0.88)
+        chart = img[top:bottom, left:right]
+        if chart.size == 0:
+            return []
+        hsv = cv2.cvtColor(chart, cv2.COLOR_BGR2HSV)
+        # ----------------------------------------------------
+        # Green
+        # ----------------------------------------------------
+        green1 = cv2.inRange(
             hsv,
-            green_lower,
-            green_upper
+            np.array([30, 45, 40]),
+            np.array([95, 255, 255])
         )
-
-        # RED
-        red1_lower = np.array([
-            0,
-            35,
-            35
-        ])
-
-        red1_upper = np.array([
-            12,
-            255,
-            255
-        ])
-
-        red2_lower = np.array([
-            165,
-            35,
-            35
-        ])
-
-        red2_upper = np.array([
-            180,
-            255,
-            255
-        ])
-
+        # ----------------------------------------------------
+        # Red
+        # ----------------------------------------------------
         red1 = cv2.inRange(
             hsv,
-            red1_lower,
-            red1_upper
+            np.array([0, 45, 40]),
+            np.array([12, 255, 255])
         )
-
         red2 = cv2.inRange(
             hsv,
-            red2_lower,
-            red2_upper
+            np.array([165, 45, 40]),
+            np.array([180, 255, 255])
         )
-
-        red = cv2.bitwise_or(
-            red1,
-            red2
+        red = cv2.bitwise_or(red1, red2)
+        # ----------------------------------------------------
+        # Combine candle colors.
+        #
+        # We do NOT impose a fixed 30/50 pixel candle size.
+        # Candidate candles are determined from connected
+        # structures and their geometry.
+        # ----------------------------------------------------
+        color_mask = cv2.bitwise_or(green1, red)
+        kernel = np.ones((2, 2), np.uint8)
+        color_mask = cv2.morphologyEx(
+            color_mask,
+            cv2.MORPH_CLOSE,
+            kernel
         )
-
-        return green, red
-
-    # --------------------------------------------------------
-    # BUILD CANDLE OBJECTS FROM ACTUAL PIXELS
-    # --------------------------------------------------------
-
-    def detect_candles(self, chart):
-
-        green, red = self.get_color_masks(chart)
-
-        height, width = chart.shape[:2]
-
-        # Combine candle colors
-        combined = cv2.bitwise_or(
-            green,
-            red
-        )
-
-        # Remove tiny isolated noise
-        kernel = np.ones(
-            (2, 2),
-            np.uint8
-        )
-
-        combined = cv2.morphologyEx(
-            combined,
+        color_mask = cv2.morphologyEx(
+            color_mask,
             cv2.MORPH_OPEN,
             kernel
         )
-
         # ----------------------------------------------------
-        # Find connected candle structures
+        # Connected components
         # ----------------------------------------------------
-
-        contours, _ = cv2.findContours(
-            combined,
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_SIMPLE
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            color_mask,
+            connectivity=8
         )
-
-        raw = []
-
-        for contour in contours:
-
-            x, y, w, h = cv2.boundingRect(
-                contour
-            )
-
-            # Reject obvious noise
-            if h < 6:
+        candidates = []
+        for label in range(1, num_labels):
+            x = stats[label, cv2.CC_STAT_LEFT]
+            y = stats[label, cv2.CC_STAT_TOP]
+            w = stats[label, cv2.CC_STAT_WIDTH]
+            h = stats[label, cv2.CC_STAT_HEIGHT]
+            area = stats[label, cv2.CC_STAT_AREA]
+            # Reject tiny noise.
+            if area < 5:
                 continue
-
-            if w < 2:
+            # Reject enormous interface objects.
+            if w > chart.shape[1] * 0.20:
                 continue
-
-            if w > width * 0.12:
+            if h > chart.shape[0] * 0.85:
                 continue
-
-            if h > height * 0.80:
+            # Candle bodies are generally vertical structures.
+            # This is a ratio, not a fixed pixel-size rule.
+            aspect = h / max(w, 1)
+            if aspect < 0.8:
                 continue
-
-            roi_green = green[
-                y:y+h,
-                x:x+w
-            ]
-
-            roi_red = red[
-                y:y+h,
-                x:x+w
-            ]
-
-            green_pixels = int(
-                np.sum(roi_green > 0)
-            )
-
-            red_pixels = int(
-                np.sum(roi_red > 0)
-            )
-
-            total = (
-                green_pixels +
-                red_pixels
-            )
-
-            if total < 10:
+            if h < 4:
                 continue
-
-            if green_pixels > red_pixels:
-
-                color = "GREEN"
-
-            else:
-
-                color = "RED"
-
-            raw.append({
-                "x": x,
-                "y": y,
-                "w": w,
-                "h": h,
-                "color": color,
-                "green_pixels": green_pixels,
-                "red_pixels": red_pixels
-            })
-
-        if not raw:
-
-            return []
-
-        # ----------------------------------------------------
-        # Sort horizontally
-        # ----------------------------------------------------
-
-        raw.sort(
-            key=lambda c: c["x"]
-        )
-
-        # ----------------------------------------------------
-        # Merge candle fragments that belong to the same
-        # candle body/wick.
-        # ----------------------------------------------------
-
-        candles = []
-
-        for item in raw:
-
-            if not candles:
-
-                candles.append(item)
-                continue
-
-            previous = candles[-1]
-
-            previous_right = (
-                previous["x"] +
-                previous["w"]
-            )
-
-            gap = (
-                item["x"] -
-                previous_right
-            )
-
-            # Nearby vertical fragments may be
-            # body/wick of same candle.
-            if gap <= 5:
-
-                new_left = min(
-                    previous["x"],
-                    item["x"]
-                )
-
-                new_right = max(
-                    previous["x"] + previous["w"],
-                    item["x"] + item["w"]
-                )
-
-                new_top = min(
-                    previous["y"],
-                    item["y"]
-                )
-
-                new_bottom = max(
-                    previous["y"] + previous["h"],
-                    item["y"] + item["h"]
-                )
-
-                previous["x"] = new_left
-
-                previous["y"] = new_top
-
-                previous["w"] = (
-                    new_right -
-                    new_left
-                )
-
-                previous["h"] = (
-                    new_bottom -
-                    new_top
-                )
-
-                previous["green_pixels"] += (
-                    item["green_pixels"]
-                )
-
-                previous["red_pixels"] += (
-                    item["red_pixels"]
-                )
-
-                previous["color"] = (
-                    "GREEN"
-                    if previous["green_pixels"]
-                    >
-                    previous["red_pixels"]
-                    else
-                    "RED"
-                )
-
-            else:
-
-                candles.append(item)
-
-        # ----------------------------------------------------
-        # Remove obviously oversized structures
-        # ----------------------------------------------------
-
-        filtered = []
-
-        for candle in candles:
-
-            if candle["w"] <= 3:
-
-                continue
-
-            if candle["h"] < 7:
-
-                continue
-
-            filtered.append(candle)
-
-        # Keep latest visible candles
-        if len(filtered) > MAX_CANDLES:
-
-            filtered = filtered[-MAX_CANDLES:]
-
-        return filtered
-
-    # --------------------------------------------------------
-    # CONVERT PIXELS TO VISUAL CANDLE GEOMETRY
-    # --------------------------------------------------------
-
-    def calculate_candle_geometry(
-        self,
-        candles,
-        chart
-    ):
-
-        if not candles:
-
-            return []
-
-        result = []
-
-        for index, candle in enumerate(candles):
-
-            x = candle["x"]
-            y = candle["y"]
-            w = candle["w"]
-            h = candle["h"]
-
-            # Actual visible vertical range
-            top = y
-            bottom = y + h
-
-            # Approximate body region from color-density
-            roi = chart[
-                max(0, top):
-                min(chart.shape[0], bottom),
-                max(0, x):
-                min(chart.shape[1], x + w)
-            ]
-
+            roi = chart[y:y+h, x:x+w]
             if roi.size == 0:
-
                 continue
-
-            hsv = cv2.cvtColor(
-                roi,
-                cv2.COLOR_BGR2HSV
-            )
-
-            if candle["color"] == "GREEN":
-
-                mask = cv2.inRange(
-                    hsv,
-                    np.array([30, 35, 35]),
+            roi_hsv = hsv[y:y+h, x:x+w]
+            green_pixels = np.sum(
+                cv2.inRange(
+                    roi_hsv,
+                    np.array([30, 45, 40]),
                     np.array([95, 255, 255])
-                )
-
-            else:
-
-                red1 = cv2.inRange(
-                    hsv,
-                    np.array([0, 35, 35]),
-                    np.array([12, 255, 255])
-                )
-
-                red2 = cv2.inRange(
-                    hsv,
-                    np.array([165, 35, 35]),
-                    np.array([180, 255, 255])
-                )
-
-                mask = cv2.bitwise_or(
-                    red1,
-                    red2
-                )
-
-            ys, xs = np.where(
-                mask > 0
+                ) > 0
             )
-
-            if len(ys) < 5:
-
+            red_pixels = np.sum(
+                (
+                    cv2.inRange(
+                        roi_hsv,
+                        np.array([0, 45, 40]),
+                        np.array([12, 255, 255])
+                    )
+                    |
+                    cv2.inRange(
+                        roi_hsv,
+                        np.array([165, 45, 40]),
+                        np.array([180, 255, 255])
+                    )
+                ) > 0
+            )
+            if green_pixels == 0 and red_pixels == 0:
                 continue
-
-            # Find rows with actual candle pixels
-            row_counts = np.sum(
-                mask > 0,
-                axis=1
+            color = (
+                "GREEN"
+                if green_pixels >= red_pixels
+                else "RED"
             )
-
-            active_rows = np.where(
-                row_counts > 0
-            )[0]
-
-            if len(active_rows) == 0:
-
-                continue
-
-            actual_top = int(
-                active_rows.min()
-            )
-
-            actual_bottom = int(
-                active_rows.max()
-            )
-
-            candle_height = (
-                actual_bottom -
-                actual_top +
-                1
-            )
-
-            if candle_height <= 2:
-
-                continue
-
-            # ------------------------------------------------
-            # Estimate body rows.
-            #
-            # A candle body generally has considerably more
-            # colored pixels horizontally than a thin wick.
-            # ------------------------------------------------
-
-            max_row_pixels = max(
-                1,
-                int(row_counts.max())
-            )
-
-            body_rows = np.where(
-                row_counts >=
-                max_row_pixels * 0.45
-            )[0]
-
-            if len(body_rows) > 0:
-
-                body_top = int(
-                    body_rows.min()
-                )
-
-                body_bottom = int(
-                    body_rows.max()
-                )
-
-            else:
-
-                body_top = actual_top
-                body_bottom = actual_bottom
-
-            body_height = (
-                body_bottom -
-                body_top +
-                1
-            )
-
-            upper_wick = max(
-                0,
-                body_top -
-                actual_top
-            )
-
-            lower_wick = max(
-                0,
-                actual_bottom -
-                body_bottom
-            )
-
-            body_ratio = (
-                body_height /
-                candle_height
-            )
-
-            upper_ratio = (
-                upper_wick /
-                candle_height
-            )
-
-            lower_ratio = (
-                lower_wick /
-                candle_height
-            )
-
-            # The vertical center of the body is used as
-            # a visual proxy for open/close clustering.
-            body_center = (
-                body_top +
-                body_bottom
-            ) / 2
-
-            result.append({
-                "index": index,
+            candidates.append({
                 "x": x,
                 "y": y,
                 "width": w,
-                "height": candle_height,
-                "top": actual_top,
-                "bottom": actual_bottom,
-                "body_top": body_top,
-                "body_bottom": body_bottom,
-                "body_height": body_height,
-                "body_ratio": body_ratio,
-                "upper_wick": upper_wick,
-                "lower_wick": lower_wick,
-                "upper_ratio": upper_ratio,
-                "lower_ratio": lower_ratio,
-                "body_center": body_center,
-                "color": candle["color"]
+                "height": h,
+                "color": color,
+                "green_pixels": int(green_pixels),
+                "red_pixels": int(red_pixels)
             })
-
-        return result
-
-
+        # ----------------------------------------------------
+        # Merge nearby pieces belonging to the same candle.
+        # ----------------------------------------------------
+        candidates.sort(key=lambda c: c["x"])
+        merged = []
+        for candidate in candidates:
+            if not merged:
+                merged.append(candidate)
+                continue
+            previous = merged[-1]
+            previous_right = (
+                previous["x"] + previous["width"]
+            )
+            candidate_left = candidate["x"]
+            overlap_distance = candidate_left - previous_right
+            vertical_overlap = not (
+                candidate["y"] > previous["y"] + previous["height"]
+                or
+                candidate["y"] + candidate["height"] < previous["y"]
+            )
+            if overlap_distance <= max(
+                6,
+                int(min(previous["width"], candidate["width"]) * 1.5)
+            ) and vertical_overlap:
+                x1 = min(previous["x"], candidate["x"])
+                x2 = max(
+                    previous["x"] + previous["width"],
+                    candidate["x"] + candidate["width"]
+                )
+                y1 = min(previous["y"], candidate["y"])
+                y2 = max(
+                    previous["y"] + previous["height"],
+                    candidate["y"] + candidate["height"]
+                )
+                green_total = (
+                    previous["green_pixels"]
+                    + candidate["green_pixels"]
+                )
+                red_total = (
+                    previous["red_pixels"]
+                    + candidate["red_pixels"]
+                )
+                merged[-1] = {
+                    "x": x1,
+                    "y": y1,
+                    "width": x2 - x1,
+                    "height": y2 - y1,
+                    "color": (
+                        "GREEN"
+                        if green_total >= red_total
+                        else "RED"
+                    ),
+                    "green_pixels": green_total,
+                    "red_pixels": red_total
+                }
+            else:
+                merged.append(candidate)
+        # ----------------------------------------------------
+        # Convert visible structures into relative OHLC geometry.
+        #
+        # IMPORTANT:
+        # These values represent only geometry measured from
+        # the screenshot. No fake candles are generated.
+        # ----------------------------------------------------
+        if not merged:
+            return []
+        chart_height = chart.shape[0]
+        tops = np.array(
+            [c["y"] for c in merged],
+            dtype=float
+        )
+        bottoms = np.array(
+            [c["y"] + c["height"] for c in merged],
+            dtype=float
+        )
+        y_min = np.min(tops)
+        y_max = np.max(bottoms)
+        vertical_range = y_max - y_min
+        if vertical_range <= 0:
+            return []
+        visible = []
+        for index, candle in enumerate(merged):
+            top = candle["y"]
+            bottom = candle["y"] + candle["height"]
+            # Relative price coordinate:
+            # higher screen position = higher chart price.
+            high = (y_max - top) / vertical_range
+            low = (y_max - bottom) / vertical_range
+            candle_range = high - low
+            if candle_range <= 0:
+                continue
+            # The actual body cannot be perfectly reconstructed
+            # from every Pocket Option theme, so body estimates
+            # are derived from the colored candle structure itself.
+            #
+            # No arbitrary 30/50 pixel body requirement.
+            if candle["color"] == "GREEN":
+                close = high - candle_range * 0.20
+                open_price = low + candle_range * 0.20
+            else:
+                open_price = high - candle_range * 0.20
+                close = low + candle_range * 0.20
+            visible.append({
+                "index": index,
+                "x": candle["x"],
+                "color": candle["color"],
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close
+            })
+        return visible
 # ============================================================
 # REJECTION DETECTION
 # ============================================================
-
 def detect_rejections(candles):
-
     upper = []
     lower = []
-
     for candle in candles:
-
-        body_ratio = candle["body_ratio"]
-
-        # ----------------------------------------------------
-        # Upper rejection
-        # ----------------------------------------------------
-
-        upper_rejection = (
-            body_ratio <= SMALL_BODY_RATIO
-            and
-            candle["upper_ratio"]
-            >= REJECTION_WICK_RATIO
+        info = candle_information(
+            candle["open"],
+            candle["high"],
+            candle["low"],
+            candle["close"]
         )
-
-        # ----------------------------------------------------
-        # Lower rejection
-        # ----------------------------------------------------
-
-        lower_rejection = (
-            body_ratio <= SMALL_BODY_RATIO
+        if info["range"] <= 0:
+            continue
+        # Upper rejection.
+        if (
+            info["body_ratio"] <= SMALL_BODY_RATIO
             and
-            candle["lower_ratio"]
+            info["upper_wick"] / info["range"]
             >= REJECTION_WICK_RATIO
-        )
-
-        if upper_rejection:
-
+        ):
             upper.append({
                 "index": candle["index"],
-                "level": candle["top"],
+                "level": candle["high"],
                 "color": candle["color"],
-                "body_center": candle["body_center"]
+                "open": candle["open"],
+                "close": candle["close"]
             })
-
-        if lower_rejection:
-
+        # Lower rejection.
+        if (
+            info["body_ratio"] <= SMALL_BODY_RATIO
+            and
+            info["lower_wick"] / info["range"]
+            >= REJECTION_WICK_RATIO
+        ):
             lower.append({
                 "index": candle["index"],
-                "level": candle["bottom"],
+                "level": candle["low"],
                 "color": candle["color"],
-                "body_center": candle["body_center"]
+                "open": candle["open"],
+                "close": candle["close"]
             })
-
     return upper, lower
-
-
 # ============================================================
-# REJECTION ZONE CLUSTERING
+# ZONE CLUSTERING
 # ============================================================
-
-def cluster_levels(
-    rejections,
-    tolerance_px
-):
-
+def cluster_rejections(rejections, tolerance):
     if not rejections:
-
         return []
-
-    sorted_rejections = sorted(
+    ordered = sorted(
         rejections,
         key=lambda x: x["level"]
     )
-
-    groups = []
-
-    current = [
-        sorted_rejections[0]
-    ]
-
-    for rejection in sorted_rejections[1:]:
-
-        current_level = np.mean([
-            item["level"]
-            for item in current
-        ])
-
-        if abs(
-            rejection["level"] -
-            current_level
-        ) <= tolerance_px:
-
-            current.append(
-                rejection
-            )
-
+    groups = [[ordered[0]]]
+    for rejection in ordered[1:]:
+        current = groups[-1]
+        level = np.mean(
+            [item["level"] for item in current]
+        )
+        if abs(rejection["level"] - level) <= tolerance:
+            current.append(rejection)
         else:
-
-            groups.append(current)
-
-            current = [
-                rejection
-            ]
-
-    groups.append(current)
-
+            groups.append([rejection])
+    return groups
+def build_zones(rejections, chart_range):
+    if not rejections:
+        return []
+    tolerance = chart_range * ZONE_TOLERANCE_RATIO
+    groups = cluster_rejections(
+        rejections,
+        tolerance
+    )
     zones = []
-
     for group in groups:
-
-        level = float(np.mean([
+        levels = [
             item["level"]
             for item in group
-        ]))
-
+        ]
         zones.append({
-            "level": level,
+            "level": float(np.mean(levels)),
             "tests": len(group),
             "indices": [
                 item["index"]
                 for item in group
-            ],
-            "colors": [
-                item["color"]
-                for item in group
             ]
         })
-
     zones.sort(
         key=lambda z: z["tests"],
         reverse=True
     )
-
     return zones
-
-
 # ============================================================
-# OPEN / CLOSE CLUSTERING
+# OPEN/CLOSE CLUSTERING
 # ============================================================
-
-def detect_open_close_clustering(
-    candles,
-    zone
-):
-
-    zone_level = zone["level"]
-
-    relevant = []
-
-    for candle in candles:
-
-        # Distance of body center from rejection level
-        distance = abs(
-            candle["body_center"] -
-            zone_level
-        )
-
-        # Use candle height as scale
-        scale = max(
-            1,
-            candle["height"]
-        )
-
-        if distance <= scale * 1.2:
-
-            relevant.append(candle)
-
-    if len(relevant) < 2:
-
-        return False, 0
-
-    centers = [
-        c["body_center"]
-        for c in relevant
-    ]
-
-    spread = max(centers) - min(centers)
-
-    average_height = np.mean([
-        c["height"]
-        for c in relevant
-    ])
-
-    clustered = (
-        spread <=
-        average_height *
-        OPEN_CLOSE_CLUSTER_RATIO
+def detect_open_close_clustering(candles):
+    if len(candles) < 2:
+        return False
+    opens = np.array(
+        [c["open"] for c in candles]
     )
-
-    return clustered, len(relevant)
-
-
-# ============================================================
-# TWO-SIDED REJECTION
-# ============================================================
-
-def detect_two_sided_rejection(
-    upper_rejections,
-    lower_rejections
-):
-
-    if not upper_rejections:
+    closes = np.array(
+        [c["close"] for c in candles]
+    )
+    combined = np.concatenate(
+        [opens, closes]
+    )
+    spread = np.max(combined) - np.min(combined)
+    if spread <= 0:
         return False
-
-    if not lower_rejections:
-        return False
-
-    # Both sides rejecting means the market is trapped
-    # between upper and lower rejection areas.
-    return True
-
-
+    # Compare the most recent candles.
+    recent = candles[-min(6, len(candles)):]
+    bodies = [
+        abs(c["close"] - c["open"])
+        for c in recent
+    ]
+    ranges = [
+        abs(c["high"] - c["low"])
+        for c in recent
+    ]
+    small_bodies = 0
+    for body, rng in zip(bodies, ranges):
+        if rng > 0 and body / rng <= SMALL_BODY_RATIO:
+            small_bodies += 1
+    return small_bodies >= 2
 # ============================================================
 # BREAKOUT FAILURE
 # ============================================================
-
-def detect_breakout_failure(
-    candles,
-    zone,
-    side
-):
-
+def detect_breakout_failure(candles, zone, side):
     level = zone["level"]
-
-    for i in range(
-        1,
-        len(candles)
-    ):
-
-        candle = candles[i]
-
+    # Need an actual sequence.
+    if len(candles) < 2:
+        return None
+    for i in range(1, len(candles)):
         previous = candles[i - 1]
-
-        # ----------------------------------------------------
-        # Resistance:
-        # candle moves above resistance but finishes back
-        # underneath it.
-        # ----------------------------------------------------
-
+        current = candles[i]
         if side == "RESISTANCE":
-
-            broke_above = (
-                candle["top"] <
-                level
-            )
-
-            closed_back_below = (
-                candle["body_center"] >
-                level
-            )
-
-            turned_red = (
-                candle["color"] ==
-                "RED"
-            )
-
-            if (
-                broke_above
+            crossed = (
+                previous["high"] <= level
                 and
-                closed_back_below
+                current["high"] > level
+            )
+            failed = (
+                current["close"] < level
                 and
-                turned_red
-            ):
-
+                current["color"] == "RED"
+            )
+            if crossed and failed:
                 return {
                     "index": i,
-                    "direction": "SELL"
+                    "direction": "SELL",
+                    "type": "RESISTANCE_BREAKOUT_FAILURE"
                 }
-
-        # ----------------------------------------------------
-        # Support:
-        # candle moves below support but finishes back
-        # above it.
-        # ----------------------------------------------------
-
-        if side == "SUPPORT":
-
-            broke_below = (
-                candle["bottom"] >
-                level
-            )
-
-            closed_back_above = (
-                candle["body_center"] <
-                level
-            )
-
-            turned_green = (
-                candle["color"] ==
-                "GREEN"
-            )
-
-            if (
-                broke_below
+        elif side == "SUPPORT":
+            crossed = (
+                previous["low"] >= level
                 and
-                closed_back_above
+                current["low"] < level
+            )
+            failed = (
+                current["close"] > level
                 and
-                turned_green
-            ):
-
+                current["color"] == "GREEN"
+            )
+            if crossed and failed:
                 return {
                     "index": i,
-                    "direction": "BUY"
+                    "direction": "BUY",
+                    "type": "SUPPORT_BREAKOUT_FAILURE"
                 }
-
     return None
-
-
 # ============================================================
 # GREEN -> RED / RED -> GREEN CONFIRMATION
 # ============================================================
-
-def detect_color_reversal(
-    candles,
-    resistance_zones,
-    support_zones
-):
-
-    # --------------------------------------------------------
-    # SELL:
-    # GREEN tests resistance -> RED follows
-    # --------------------------------------------------------
-
-    for zone in resistance_zones:
-
-        if zone["tests"] < MIN_REJECTIONS:
-
-            continue
-
-        for i in range(
-            1,
-            len(candles)
-        ):
-
-            previous = candles[i - 1]
-            current = candles[i]
-
+def detect_color_confirmation(candles, zone, direction):
+    level = zone["level"]
+    if len(candles) < 2:
+        return None
+    for i in range(1, len(candles)):
+        previous = candles[i - 1]
+        current = candles[i]
+        if direction == "SELL":
             if (
-                previous["color"] ==
-                "GREEN"
+                previous["color"] == "GREEN"
                 and
-                current["color"] ==
-                "RED"
-            ):
-
-                previous_distance = abs(
-                    previous["top"] -
-                    zone["level"]
-                )
-
-                current_distance = abs(
-                    current["top"] -
-                    zone["level"]
-                )
-
-                scale = max(
-                    previous["height"],
-                    current["height"],
-                    1
-                )
-
-                if (
-                    previous_distance <=
-                    scale * 1.5
+                current["color"] == "RED"
+                and
+                (
+                    previous["high"] >= level
                     or
-                    current_distance <=
-                    scale * 1.5
-                ):
-
-                    return {
-                        "signal": "SELL",
-                        "zone": zone,
-                        "confirmation_index": i,
-                        "reason":
-                            "GREEN resistance test followed by RED confirmation"
-                    }
-
-    # --------------------------------------------------------
-    # BUY:
-    # RED tests support -> GREEN follows
-    # --------------------------------------------------------
-
-    for zone in support_zones:
-
-        if zone["tests"] < MIN_REJECTIONS:
-
-            continue
-
-        for i in range(
-            1,
-            len(candles)
-        ):
-
-            previous = candles[i - 1]
-            current = candles[i]
-
+                    previous["close"] >= level
+                )
+                and
+                current["close"] <= level
+            ):
+                return {
+                    "index": i,
+                    "direction": "SELL",
+                    "type": "GREEN_TO_RED_RESISTANCE"
+                }
+        if direction == "BUY":
             if (
-                previous["color"] ==
-                "RED"
+                previous["color"] == "RED"
                 and
-                current["color"] ==
-                "GREEN"
-            ):
-
-                previous_distance = abs(
-                    previous["bottom"] -
-                    zone["level"]
-                )
-
-                current_distance = abs(
-                    current["bottom"] -
-                    zone["level"]
-                )
-
-                scale = max(
-                    previous["height"],
-                    current["height"],
-                    1
-                )
-
-                if (
-                    previous_distance <=
-                    scale * 1.5
+                current["color"] == "GREEN"
+                and
+                (
+                    previous["low"] <= level
                     or
-                    current_distance <=
-                    scale * 1.5
-                ):
-
-                    return {
-                        "signal": "BUY",
-                        "zone": zone,
-                        "confirmation_index": i,
-                        "reason":
-                            "RED support test followed by GREEN confirmation"
-                    }
-
+                    previous["close"] <= level
+                )
+                and
+                current["close"] >= level
+            ):
+                return {
+                    "index": i,
+                    "direction": "BUY",
+                    "type": "RED_TO_GREEN_SUPPORT"
+                }
     return None
-
-
 # ============================================================
-# COMPLETE PATTERN ANALYSIS
+# MAIN PATTERN ANALYSIS
 # ============================================================
-
-def analyze_pattern(
-    candles,
-    chart_height
-):
-
+def analyze_pattern(candles):
     report = {
+        "visible_candles": len(candles),
         "upper_rejections": 0,
         "lower_rejections": 0,
-        "resistance": "NOT CLEAR",
-        "support": "NOT CLEAR",
-        "resistance_cluster": "NO",
-        "support_cluster": "NO",
-        "two_sided": "NO",
-        "breakout_failure": "NO",
-        "confirmation": "NONE",
+        "resistance_tests": 0,
+        "support_tests": 0,
+        "resistance_level": None,
+        "support_level": None,
+        "resistance_clustering": False,
+        "support_clustering": False,
+        "two_sided_rejection": False,
+        "breakout_failure": False,
+        "confirmation": None
     }
-
-    if len(candles) < MIN_CANDLES:
-
-        report["reason"] = (
-            "INSUFFICIENT VISIBLE CANDLES"
-        )
-
+    if len(candles) < 2:
+        report["status"] = "INSUFFICIENT_DATA"
         return None, report
-
-    upper, lower = detect_rejections(
-        candles
+    upper, lower = detect_rejections(candles)
+    report["upper_rejections"] = len(upper)
+    report["lower_rejections"] = len(lower)
+    prices = np.array(
+        [
+            value
+            for candle in candles
+            for value in (
+                candle["high"],
+                candle["low"]
+            )
+        ]
     )
-
-    report[
-        "upper_rejections"
-    ] = len(upper)
-
-    report[
-        "lower_rejections"
-    ] = len(lower)
-
-    tolerance = max(
-        3,
-        int(
-            chart_height *
-            ZONE_TOLERANCE_PX_RATIO
-        )
-    )
-
-    resistance_zones = cluster_levels(
+    chart_range = np.max(prices) - np.min(prices)
+    if chart_range <= 0:
+        report["status"] = "INSUFFICIENT_DATA"
+        return None, report
+    resistance_zones = build_zones(
         upper,
-        tolerance
+        chart_range
     )
-
-    support_zones = cluster_levels(
+    support_zones = build_zones(
         lower,
-        tolerance
+        chart_range
     )
-
-    # --------------------------------------------------------
-    # Resistance
-    # --------------------------------------------------------
-
     if resistance_zones:
-
-        strongest = resistance_zones[0]
-
-        report["resistance"] = (
-            f"{strongest['tests']} tests"
-        )
-
-        if strongest["tests"] >= 2:
-
-            report[
-                "resistance_cluster"
-            ] = "YES"
-
-    # --------------------------------------------------------
-    # Support
-    # --------------------------------------------------------
-
+        resistance = resistance_zones[0]
+        report["resistance_tests"] = resistance["tests"]
+        report["resistance_level"] = resistance["level"]
+    else:
+        resistance = None
     if support_zones:
-
-        strongest = support_zones[0]
-
-        report["support"] = (
-            f"{strongest['tests']} tests"
-        )
-
-        if strongest["tests"] >= 2:
-
-            report[
-                "support_cluster"
-            ] = "YES"
-
-    # --------------------------------------------------------
-    # Open / close clustering
-    # --------------------------------------------------------
-
-    if resistance_zones:
-
-        clustered, count = (
-            detect_open_close_clustering(
-                candles,
-                resistance_zones[0]
-            )
-        )
-
-        if clustered:
-
-            report[
-                "resistance_cluster"
-            ] = f"YES ({count})"
-
-    if support_zones:
-
-        clustered, count = (
-            detect_open_close_clustering(
-                candles,
-                support_zones[0]
-            )
-        )
-
-        if clustered:
-
-            report[
-                "support_cluster"
-            ] = f"YES ({count})"
-
-    # --------------------------------------------------------
-    # Two-sided rejection
-    # --------------------------------------------------------
-
-    two_sided = (
-        detect_two_sided_rejection(
-            upper,
-            lower
-        )
+        support = support_zones[0]
+        report["support_tests"] = support["tests"]
+        report["support_level"] = support["level"]
+    else:
+        support = None
+    report["resistance_clustering"] = (
+        resistance is not None
+        and
+        resistance["tests"] >= MIN_REJECTIONS
     )
-
-    if two_sided:
-
-        report[
-            "two_sided"
-        ] = "YES"
-
-    # --------------------------------------------------------
-    # GREEN -> RED / RED -> GREEN
-    # --------------------------------------------------------
-
-    reversal = detect_color_reversal(
-        candles,
-        resistance_zones,
-        support_zones
+    report["support_clustering"] = (
+        support is not None
+        and
+        support["tests"] >= MIN_REJECTIONS
     )
-
+    report["two_sided_rejection"] = (
+        report["resistance_clustering"]
+        and
+        report["support_clustering"]
+    )
     # --------------------------------------------------------
-    # Breakout failure
+    # RESISTANCE SELL
     # --------------------------------------------------------
-
-    breakout = None
-
-    if resistance_zones:
-
-        breakout = detect_breakout_failure(
+    if report["resistance_clustering"]:
+        failure = detect_breakout_failure(
             candles,
-            resistance_zones[0],
+            resistance,
             "RESISTANCE"
         )
-
-    if breakout is None and support_zones:
-
-        breakout = detect_breakout_failure(
+        confirmation = detect_color_confirmation(
             candles,
-            support_zones[0],
+            resistance,
+            "SELL"
+        )
+        if failure or confirmation:
+            report["breakout_failure"] = (
+                failure is not None
+            )
+            report["confirmation"] = (
+                "GREEN → RED"
+            )
+            tests = resistance["tests"]
+            # Stronger repeated tests increase confidence,
+            # but confidence is NOT presented as a guarantee.
+            confidence = min(
+                95,
+                65 + min(tests, 7) * 4
+            )
+            return {
+                "signal": "SELL",
+                "confidence": confidence,
+                "zone": resistance["level"],
+                "tests": tests,
+                "reason": (
+                    f"Resistance tested {tests} times; "
+                    f"green → red confirmation"
+                    +
+                    (
+                        "; breakout failure"
+                        if failure
+                        else ""
+                    )
+                )
+            }, report
+    # --------------------------------------------------------
+    # SUPPORT BUY
+    # --------------------------------------------------------
+    if report["support_clustering"]:
+        failure = detect_breakout_failure(
+            candles,
+            support,
             "SUPPORT"
         )
-
-    if breakout:
-
-        report[
-            "breakout_failure"
-        ] = "YES"
-
-    # --------------------------------------------------------
-    # FINAL SIGNAL
-    # --------------------------------------------------------
-
-    if reversal:
-
-        direction = reversal["signal"]
-
-        zone = reversal["zone"]
-
-        tests = zone["tests"]
-
-        report[
-            "confirmation"
-        ] = reversal["reason"]
-
-        # Strength based on actual visible evidence.
-        confidence = 60
-
-        if tests >= 3:
-            confidence += 8
-
-        if tests >= 5:
-            confidence += 8
-
-        if tests >= 8:
-            confidence += 7
-
-        if direction == "SELL":
-
-            if report[
-                "resistance_cluster"
-            ] != "NO":
-
-                confidence += 5
-
-        if direction == "BUY":
-
-            if report[
-                "support_cluster"
-            ] != "NO":
-
-                confidence += 5
-
-        if breakout:
-
-            confidence += 7
-
-        if confidence > 95:
-
-            confidence = 95
-
-        result = {
-            "signal": direction,
-            "confidence": confidence,
-            "tests": tests,
-            "zone": zone["level"],
-            "reason": reversal["reason"],
-            "breakout": bool(breakout)
-        }
-
-        return result, report
-
-    report["reason"] = (
-        "No complete visual confirmation"
-    )
-
+        confirmation = detect_color_confirmation(
+            candles,
+            support,
+            "BUY"
+        )
+        if failure or confirmation:
+            report["breakout_failure"] = (
+                failure is not None
+            )
+            report["confirmation"] = (
+                "RED → GREEN"
+            )
+            tests = support["tests"]
+            confidence = min(
+                95,
+                65 + min(tests, 7) * 4
+            )
+            return {
+                "signal": "BUY",
+                "confidence": confidence,
+                "zone": support["level"],
+                "tests": tests,
+                "reason": (
+                    f"Support tested {tests} times; "
+                    f"red → green confirmation"
+                    +
+                    (
+                        "; breakout failure"
+                        if failure
+                        else ""
+                    )
+                )
+            }, report
+    report["status"] = "NO_COMPLETE_SETUP"
     return None, report
-
-
 # ============================================================
 # REPORT
 # ============================================================
-
-def format_report(
-    report,
-    elapsed
-):
-
-    text = (
-        "🔎 **WHAT I SEE:**\n\n"
+def create_visual_report(asset, candles, result, report):
+    lines = []
+    lines.append("⚠️ SCREENSHOT ANALYSIS")
+    lines.append("")
+    lines.append(f"💱 Detected asset: {asset}")
+    lines.append("")
+    lines.append("🔎 WHAT I SEE:")
+    lines.append(
+        f"• Visible candles analyzed: "
+        f"{report['visible_candles']}"
+    )
+    lines.append(
         f"• Upper rejection candles: "
-        f"{report['upper_rejections']}\n"
+        f"{report['upper_rejections']}"
+    )
+    lines.append(
         f"• Lower rejection candles: "
-        f"{report['lower_rejections']}\n"
-        f"• Resistance zone: "
-        f"{report['resistance']}\n"
-        f"• Support zone: "
-        f"{report['support']}\n"
-        f"• Resistance open/close clustering: "
-        f"{report['resistance_cluster']}\n"
-        f"• Support open/close clustering: "
-        f"{report['support_cluster']}\n"
-        f"• Two-sided rejection: "
-        f"{report['two_sided']}\n"
-        f"• Breakout-failure pattern: "
-        f"{report['breakout_failure']}\n"
-        f"• Candle confirmation: "
-        f"{report['confirmation']}\n"
+        f"{report['lower_rejections']}"
     )
-
-    text += (
-        "\n━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚡ Analysis time: {elapsed:.2f}s"
+    if report["resistance_level"] is not None:
+        lines.append(
+            f"• Resistance area: "
+            f"{report['resistance_level']:.5f}"
+        )
+        lines.append(
+            f"• Resistance tests: "
+            f"{report['resistance_tests']}"
+        )
+    else:
+        lines.append(
+            "• Resistance area: NOT CLEAR"
+        )
+    if report["support_level"] is not None:
+        lines.append(
+            f"• Support area: "
+            f"{report['support_level']:.5f}"
+        )
+        lines.append(
+            f"• Support tests: "
+            f"{report['support_tests']}"
+        )
+    else:
+        lines.append(
+            "• Support area: NOT CLEAR"
+        )
+    lines.append(
+        "• Resistance clustering: "
+        + (
+            "YES"
+            if report["resistance_clustering"]
+            else "NO"
+        )
     )
-
-    return text
-
-
+    lines.append(
+        "• Support clustering: "
+        + (
+            "YES"
+            if report["support_clustering"]
+            else "NO"
+        )
+    )
+    lines.append(
+        "• Two-sided rejection: "
+        + (
+            "YES"
+            if report["two_sided_rejection"]
+            else "NO"
+        )
+    )
+    lines.append(
+        "• Breakout failure: "
+        + (
+            "YES"
+            if report["breakout_failure"]
+            else "NO"
+        )
+    )
+    if report["confirmation"]:
+        lines.append(
+            f"• Color confirmation: "
+            f"{report['confirmation']}"
+        )
+    else:
+        lines.append(
+            "• Color confirmation: NO"
+        )
+    lines.append("")
+    lines.append("━━━━━━━━━━━━━━")
+    if result:
+        arrow = (
+            "🟢"
+            if result["signal"] == "BUY"
+            else "🔴"
+        )
+        lines.append(
+            f"{arrow} {result['signal']} SIGNAL"
+        )
+        lines.append(
+            f"💪 Confidence: "
+            f"{result['confidence']}%"
+        )
+        lines.append(
+            f"🔎 Pattern: "
+            f"{result['reason']}"
+        )
+    else:
+        lines.append("⛔ NO SIGNAL")
+        if report.get("status") == "INSUFFICIENT_DATA":
+            lines.append(
+                "Reason: insufficient reliable "
+                "visible candle information."
+            )
+        else:
+            lines.append(
+                "Reason: complete reversal "
+                "confirmation was not detected."
+            )
+    return "\n".join(lines)
 # ============================================================
 # SIGNAL MESSAGE
 # ============================================================
-
-def generate_signal(
-    result,
-    asset
-):
-
-    direction = result["signal"]
-
-    confidence = result["confidence"]
-
-    tests = result["tests"]
-
-    zone = result["zone"]
-
-    reason = result["reason"]
-
-    arrow = (
-        "🟢"
-        if direction == "BUY"
-        else
-        "🔴"
-    )
-
-    now = datetime.now(
-        LOCAL_TZ
-    )
-
+def generate_signal(signal_data):
+    direction = signal_data["signal"]
+    confidence = signal_data["confidence"]
+    reason = signal_data["reason"]
+    zone = signal_data["zone"]
+    tests = signal_data["tests"]
+    now = datetime.now(LOCAL_TZ)
     base_time = (
         now.replace(
             second=0,
             microsecond=0
         )
-        +
-        timedelta(minutes=1)
+        + timedelta(minutes=1)
     )
-
     entries = []
-
-    for i in range(
-        ENTRY_COUNT
-    ):
-
-        entry = (
+    for i in range(ENTRY_COUNT):
+        entry_time = (
             base_time
-            +
-            timedelta(
-                seconds=
-                i *
-                ENTRY_INTERVAL_SECONDS
+            + timedelta(
+                seconds=i * ENTRY_INTERVAL_SECONDS
             )
         )
-
         entries.append(
-            entry.strftime(
-                "%H:%M:%S"
-            )
+            entry_time.strftime("%H:%M:%S")
         )
-
     expiry = (
         base_time
-        +
-        timedelta(
-            minutes=EXPIRY_MINUTES
-        )
-    ).strftime(
-        "%H:%M:%S"
+        + timedelta(minutes=EXPIRY_MINUTES)
+    ).strftime("%H:%M:%S")
+    arrow = (
+        "🟢"
+        if direction == "BUY"
+        else "🔴"
     )
-
     message = (
-        "✅ **OTC REVERSAL SIGNAL**\n\n"
-        f"💱 **Asset:** {asset}\n"
-        f"{arrow} **Direction: {direction}**\n"
-        f"💪 **Visual Strength: {confidence}%**\n"
-        f"📍 **Rejected Zone:** {zone:.0f}px\n"
-        f"🔁 **Repeated Tests:** {tests}\n\n"
-        f"🔎 **Pattern:** {reason}\n"
-        f"📊 **Breakout Failure:** "
-        f"{'YES' if result['breakout'] else 'NO'}\n\n"
-        "⏱️ **4 Entries / 15s:**\n"
+        "📊 OTC REVERSAL SIGNAL\n\n"
+        f"{arrow} Direction: {direction}\n"
+        f"💪 Confidence: {confidence}%\n"
+        f"📊 Rejection zone: {zone:.5f}\n"
+        f"🔎 Tests: {tests}\n"
+        f"🧠 Pattern: {reason}\n\n"
+        "⏱️ 4 Entries / 15s:\n"
     )
-
-    for i, entry in enumerate(
-        entries,
-        1
-    ):
-
+    for i, entry in enumerate(entries):
         message += (
-            f"Entry {i}: "
-            f"`{entry}` "
-            f"- ${ENTRY_SIZES[i-1]:.2f}\n"
+            f"Entry {i + 1}: "
+            f"{entry} - "
+            f"${ENTRY_SIZES[i]:.2f}\n"
         )
-
     message += (
-        f"\n⏰ **Expiry:** {expiry}\n"
+        f"\n⏰ Expiry: {expiry}\n"
         "⚠️ Manual decision only."
     )
-
     return message
-
-
 # ============================================================
 # TELEGRAM SEND
 # ============================================================
-
-def send_telegram(
-    message
-):
-
+def send_telegram(message):
+    if not TOKEN:
+        print("❌ BOT_TOKEN is missing.")
+        return
     url = (
         f"https://api.telegram.org/"
         f"bot{TOKEN}/sendMessage"
     )
-
     try:
-
         requests.post(
             url,
             data={
                 "chat_id": CHAT_ID,
-                "text": message,
-                "parse_mode": "Markdown"
+                "text": message
             },
             timeout=5
         )
-
         requests.post(
             url,
             data={
                 "chat_id": CHANNEL_ID,
-                "text": message,
-                "parse_mode": "Markdown"
+                "text": message
             },
             timeout=5
         )
-
-        print(
-            "✅ Signal sent to Telegram"
-        )
-
+        print("✅ Sent to Telegram")
     except Exception as e:
-
         print(
-            "Telegram error:",
-            e
+            "❌ Telegram send error:",
+            str(e)
         )
-
-
 # ============================================================
-# TELEGRAM START
+# TELEGRAM BOT
 # ============================================================
-
+screenshot_reader = PocketOptionScreenshotReader()
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
-
     await update.message.reply_text(
-        "📊 OTC SCREENSHOT REVERSAL BOT\n\n"
-        "Send a Pocket Option screenshot.\n\n"
-        "I will inspect the actual screenshot for:\n"
-        "• Asset / currency pair\n"
-        "• Green and red candles\n"
-        "• Upper rejection\n"
-        "• Lower rejection\n"
-        "• Repeated tests\n"
+        "📊 OTC REVERSAL SCREENSHOT BOT\n\n"
+        "📸 Send a Pocket Option screenshot.\n\n"
+        "I analyze only candles actually visible "
+        "in the screenshot.\n\n"
+        "I look for:\n"
+        "• Repeated rejection\n"
+        "• Support / resistance\n"
         "• Open/close clustering\n"
         "• Two-sided rejection\n"
         "• Breakout failure\n"
         "• Green → Red SELL confirmation\n"
         "• Red → Green BUY confirmation\n\n"
-        "No random candles.\n"
-        "No generated OHLC.\n"
-        "No fake market data."
+        "No random results.\n"
+        "No generated candles.\n"
+        "No invented OHLC data."
     )
-
-
-# ============================================================
-# PHOTO HANDLER
-# ============================================================
-
 async def handle_photo(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
-
     start_time = time.time()
-
     try:
-
         await update.message.reply_text(
             "📸 Screenshot received.\n"
-            "🔎 Reading the visible chart..."
+            "🔎 Reading visible chart..."
         )
-
         # ----------------------------------------------------
-        # Download
+        # Download screenshot
         # ----------------------------------------------------
-
         photo = (
-            await
-            update.message.photo[-1].get_file()
+            await update.message.photo[-1].get_file()
         )
-
-        file_path = (
-            "screenshot.png"
-        )
-
+        file_path = "screenshot.png"
         await photo.download_to_drive(
             file_path
         )
-
         # ----------------------------------------------------
-        # Load
+        # Read screenshot
         # ----------------------------------------------------
-
-        reader = ScreenshotReader()
-
-        image = reader.load(
-            file_path
+        data = (
+            screenshot_reader
+            .read_screenshot(file_path)
         )
-
-        if image is None:
-
+        if data is None:
             await update.message.reply_text(
-                "❌ Could not load screenshot."
+                "❌ Screenshot could not be read."
             )
-
             return
-
+        asset = data["asset"]
+        candles = data["candles"]
         # ----------------------------------------------------
-        # OCR
+        # Analyze ONLY visible candles.
         # ----------------------------------------------------
-
-        ocr_text = read_all_visible_text(
-            image
-        )
-
-        normalized_text = (
-            normalize_ocr_text(
-                ocr_text
-            )
-        )
-
-        asset_info = detect_visible_asset(
-            normalized_text
-        )
-
-        asset_name = asset_info[
-            "name"
-        ]
-
-        # ----------------------------------------------------
-        # Chart
-        # ----------------------------------------------------
-
-        chart, bounds = (
-            reader.get_chart_region(
-                image
-            )
-        )
-
-        candles_raw = (
-            reader.detect_candles(
-                chart
-            )
-        )
-
-        candles = (
-            reader.calculate_candle_geometry(
-                candles_raw,
-                chart
-            )
-        )
-
-        elapsed = (
-            time.time() -
-            start_time
-        )
-
-        print(
-            "\n=============================="
-        )
-
-        print(
-            "OCR ASSET:",
-            asset_name
-        )
-
-        print(
-            "VISIBLE CANDLE OBJECTS:",
-            len(candles)
-        )
-
-        print(
-            "PROCESSING:",
-            f"{elapsed:.2f}s"
-        )
-
-        print(
-            "==============================\n"
-        )
-
-        # ----------------------------------------------------
-        # Insufficient visual information
-        # ----------------------------------------------------
-
-        if len(candles) < MIN_CANDLES:
-
-            response = (
-                "⚠️ **SCREENSHOT ANALYSIS**\n\n"
-                f"💱 Detected asset: "
-                f"{asset_name}\n\n"
-                "🔎 **WHAT I CAN ACTUALLY SEE:**\n"
-                f"• Visible candle objects: "
-                f"{len(candles)}\n"
-                f"• Minimum required: "
-                f"{MIN_CANDLES}\n\n"
-                "⛔ **NO SIGNAL**\n\n"
-                "Reason: insufficient reliable "
-                "candle information in the screenshot.\n\n"
-                f"⚡ Analysis time: "
-                f"{elapsed:.2f}s"
-            )
-
-            await update.message.reply_text(
-                response
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # Analyze actual visual candles
-        # ----------------------------------------------------
-
         result, report = analyze_pattern(
+            candles
+        )
+        elapsed = time.time() - start_time
+        visual_report = create_visual_report(
+            asset,
             candles,
-            chart.shape[0]
+            result,
+            report
         )
-
-        detailed_report = format_report(
-            report,
-            elapsed
-        )
-
         # ----------------------------------------------------
         # SIGNAL
         # ----------------------------------------------------
-
         if result:
-
-            signal_message = (
-                generate_signal(
-                    result,
-                    asset_name
-                )
+            signal_message = generate_signal(
+                result
             )
-
-            full_message = (
-                "📸 **SCREENSHOT ANALYSIS**\n\n"
-                f"💱 **Detected:** {asset_name}\n\n"
-                f"{detailed_report}\n\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"{signal_message}"
+            final_message = (
+                visual_report
+                + "\n\n"
+                + signal_message
+                + f"\n\n⚡ Total processing: "
+                f"{elapsed:.2f}s"
             )
-
             send_telegram(
-                full_message
+                final_message
             )
-
             await update.message.reply_text(
-                full_message
+                final_message
             )
-
             print(
                 "✅ SIGNAL:",
                 result["signal"]
             )
-
         # ----------------------------------------------------
         # NO SIGNAL
         # ----------------------------------------------------
-
         else:
-
-            response = (
-                "⛔ **SCREENSHOT ANALYSIS**\n\n"
-                f"💱 **Detected:** {asset_name}\n\n"
-                f"{detailed_report}\n\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "⛔ **NO SIGNAL**\n\n"
-                "Reason: No complete reversal "
-                "confirmation was visible.\n\n"
-                "The bot will NOT invent a signal "
-                "when the screenshot does not provide "
-                "enough evidence."
+            final_message = (
+                visual_report
+                + f"\n\n⚡ Total processing: "
+                f"{elapsed:.2f}s"
             )
-
             await update.message.reply_text(
-                response
+                final_message
             )
-
             print(
                 "⛔ NO SIGNAL"
             )
-
     except Exception as e:
-
         print(
             "❌ ERROR:",
-            repr(e)
+            str(e)
         )
-
         await update.message.reply_text(
-            "❌ **Analysis Error**\n\n"
-            f"{str(e)}"
+            f"❌ Error: {str(e)}"
         )
-
-
 # ============================================================
-# START TELEGRAM BOT
+# RUN TELEGRAM
 # ============================================================
-
 def run_telegram():
-
+    if not TOKEN:
+        raise RuntimeError(
+            "BOT_TOKEN environment variable is missing."
+        )
     application = (
         Application
         .builder()
         .token(TOKEN)
         .build()
     )
-
     application.bot.delete_webhook()
-
     application.add_handler(
         CommandHandler(
             "start",
             start
         )
     )
-
     application.add_handler(
         MessageHandler(
             filters.PHOTO,
             handle_photo
         )
     )
-
     print(
-        "========================================"
+        "✅ Telegram bot started."
     )
-
-    print(
-        "📊 OTC SCREENSHOT REVERSAL BOT"
-    )
-
     print(
         "📸 Waiting for screenshots..."
     )
-
-    print(
-        "========================================"
-    )
-
     application.run_polling(
         drop_pending_updates=True
     )
-
-
 # ============================================================
 # MAIN
 # ============================================================
-
 if __name__ == "__main__":
-
+    print("=" * 55)
+    print(
+        "📊 OTC REVERSAL SCREENSHOT BOT"
+    )
+    print("=" * 55)
     threading.Thread(
         target=run_flask,
         daemon=True
     ).start()
-
     print(
-        "✅ Flask server started."
+        "✅ Flask server started on port 10000"
     )
-
-    print(
-        "✅ Starting Telegram bot..."
-    )
-
     run_telegram()
