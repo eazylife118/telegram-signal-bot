@@ -60,13 +60,13 @@ def run_flask():
 
 
 # ============================================================
-# MAXIMUM CANDLE COUNTER — 2X EXPANDED CAPTURE
+# MAXIMUM CANDLE COUNTER — NO CROP (0% to 100%)
 # ============================================================
 
 def count_real_candles(image_path):
     """
     Count EVERY visible candle in the screenshot.
-    2X EXPANDED capture — captures the FULL chart edge-to-edge.
+    NO CROP — analyzes the entire screenshot (0% to 100%).
     No fake data. No generation. Just real pixels.
     """
 
@@ -76,24 +76,27 @@ def count_real_candles(image_path):
 
     height, width = img.shape[:2]
 
+    print("=" * 50)
+    print("🔍 DEBUG: IMAGE INFO")
+    print("=" * 50)
+    print(f"📱 Image size: {width} x {height} pixels")
+    print(f"📊 No crop — analyzing entire image (0% to 100%)")
+
     # ==========================================================
-    # 2X EXPANDED CHART CROP — Maximum possible capture
+    # NO CROP — Use the entire image
     # ==========================================================
 
-    # These values capture the ENTIRE chart — edge to edge
-    # No part of the chart is left out.
-    top = int(height * 0.01)       # 1% from top — captures everything
-    bottom = int(height * 0.99)    # 99% from top — captures everything
-    left = int(width * 0.005)      # 0.5% from left — captures everything
-    right = int(width * 0.995)     # 99.5% from left — captures everything
-
-    chart = img[top:bottom, left:right]
+    chart = img
     chart_height, chart_width = chart.shape[:2]
 
-    print(f"📏 Chart crop: {chart_width} x {chart_height} pixels")
-    print(f"📱 Original image: {width} x {height} pixels")
-    print(f"📊 Crop range: top={top}, bottom={bottom}, left={left}, right={right}")
-    print(f"🎯 Target: 2x capture of iPhone 14 Pro Max screen")
+    print(f"📏 Chart size: {chart_width} x {chart_height} pixels")
+
+    # ==========================================================
+    # DEBUG: Save the chart for inspection
+    # ==========================================================
+
+    cv2.imwrite("debug_full_chart.png", chart)
+    print(f"   💾 Saved full chart to debug_full_chart.png")
 
     # ==========================================================
     # ENHANCE IMAGE
@@ -111,38 +114,62 @@ def count_real_candles(image_path):
     hsv = cv2.cvtColor(chart, cv2.COLOR_BGR2HSV)
 
     # ==========================================================
-    # REAL GREEN CANDLES
+    # DETECT GREEN — Multiple methods
     # ==========================================================
 
+    # Method 1: HSV
     green_lower = np.array([25, 30, 30])
     green_upper = np.array([100, 255, 255])
-    green = cv2.inRange(hsv, green_lower, green_upper)
+    green_hsv = cv2.inRange(hsv, green_lower, green_upper)
+
+    # Method 2: BGR channel difference
+    b, g, r = cv2.split(chart)
+    green_bgr = cv2.bitwise_and(
+        cv2.bitwise_and(
+            (g > r + 15).astype(np.uint8) * 255,
+            (g > b + 15).astype(np.uint8) * 255
+        ),
+        (g > 30).astype(np.uint8) * 255
+    )
+
+    # Combine green methods
+    green = cv2.bitwise_or(green_hsv, green_bgr)
 
     # ==========================================================
-    # REAL RED CANDLES — Wide range
+    # DETECT RED — Multiple methods
     # ==========================================================
 
+    # Method 1: HSV (two ranges)
     red1_lower = np.array([0, 25, 25])
     red1_upper = np.array([20, 255, 255])
     red2_lower = np.array([155, 25, 25])
     red2_upper = np.array([185, 255, 255])
     red1 = cv2.inRange(hsv, red1_lower, red1_upper)
     red2 = cv2.inRange(hsv, red2_lower, red2_upper)
-    red = cv2.bitwise_or(red1, red2)
+    red_hsv = cv2.bitwise_or(red1, red2)
 
-    # ==========================================================
-    # FALLBACK RED DETECTION
-    # ==========================================================
-
-    b, g, r = cv2.split(chart)
-    red_fallback = cv2.bitwise_and(
+    # Method 2: BGR channel difference
+    red_bgr = cv2.bitwise_and(
         cv2.bitwise_and(
             (r > g + 15).astype(np.uint8) * 255,
             (r > b + 15).astype(np.uint8) * 255
         ),
         (r > 30).astype(np.uint8) * 255
     )
-    red = cv2.bitwise_or(red, red_fallback)
+
+    # Method 3: Red is often darker — use threshold
+    _, red_thresh = cv2.threshold(r, 50, 255, cv2.THRESH_BINARY)
+    red_dark = cv2.bitwise_and(
+        red_thresh,
+        cv2.bitwise_and(
+            (r > g).astype(np.uint8) * 255,
+            (r > b).astype(np.uint8) * 255
+        )
+    )
+
+    # Combine all red methods
+    red = cv2.bitwise_or(red_hsv, red_bgr)
+    red = cv2.bitwise_or(red, red_dark)
 
     # ==========================================================
     # WHITE/BULLISH CANDLES
@@ -151,6 +178,15 @@ def count_real_candles(image_path):
     white_lower = np.array([0, 0, 180])
     white_upper = np.array([180, 30, 255])
     white = cv2.inRange(hsv, white_lower, white_upper)
+
+    # ==========================================================
+    # DEBUG: Save color masks
+    # ==========================================================
+
+    cv2.imwrite("debug_green_mask.png", green)
+    cv2.imwrite("debug_red_mask.png", red)
+    cv2.imwrite("debug_white_mask.png", white)
+    print(f"   💾 Saved color masks: green, red, white")
 
     # ==========================================================
     # COMBINE
@@ -173,19 +209,21 @@ def count_real_candles(image_path):
 
     contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+    print(f"   🔍 Found {len(contours)} contours before filtering")
+
     candles = []
 
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
 
-        # Minimal filtering
-        if h < 3:
+        # Filtering
+        if h < 5:
             continue
-        if w < 1:
+        if w < 2:
             continue
-        if w > chart_width * 0.20:
+        if w > chart_width * 0.15:
             continue
-        if h > chart_height * 0.92:
+        if h > chart_height * 0.85:
             continue
 
         roi_green = green[y:y+h, x:x+w]
@@ -197,7 +235,7 @@ def count_real_candles(image_path):
         white_pixels = np.sum(roi_white > 0)
         total_pixels = green_pixels + red_pixels + white_pixels
 
-        if total_pixels < 3:
+        if total_pixels < 10:
             continue
 
         if green_pixels + white_pixels >= red_pixels:
@@ -230,7 +268,7 @@ def count_real_candles(image_path):
 
         last = merged[-1]
 
-        if candle["x"] <= last["x"] + last["w"] + 3:
+        if candle["x"] <= last["x"] + last["w"] + 5:
             new_x = min(last["x"], candle["x"])
             new_w = max(last["x"] + last["w"], candle["x"] + candle["w"]) - new_x
             new_y = min(last["y"], candle["y"])
@@ -251,17 +289,11 @@ def count_real_candles(image_path):
         else:
             merged.append(candle)
 
-    # ==========================================================
-    # FINAL COUNT
-    # ==========================================================
-
     total = len(merged)
     green_count = sum(1 for c in merged if c["color"] == "GREEN")
     red_count = sum(1 for c in merged if c["color"] == "RED")
 
-    print(f"📊 Detected: {total} candles ({green_count} green, {red_count} red)")
-    print(f"📊 Total green pixels: {sum(c['green_pixels'] for c in merged)}")
-    print(f"📊 Total red pixels: {sum(c['red_pixels'] for c in merged)}")
+    print(f"   📊 Final: {total} candles ({green_count} green, {red_count} red)")
 
     return {
         "total": total,
@@ -289,7 +321,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Doji candles\n\n"
         "🚫 **No fake data**\n"
         "🚫 **No generated candles**\n"
-        "✅ **Just what is actually visible**"
+        "✅ **Just what is actually visible**\n\n"
+        "📊 **No crop** — analyzing the entire screenshot (0% to 100%)"
     )
 
 
@@ -373,7 +406,8 @@ if __name__ == "__main__":
     print("=" * 50)
     print("✅ Detects EVERY visible candle")
     print("✅ No fake data")
-    print("✅ Maximum chart capture (2x expanded)")
+    print("✅ NO CROP — 0% to 100% analysis")
+    print("✅ Debug mode enabled")
     print("=" * 50)
 
     threading.Thread(target=run_flask, daemon=True).start()
