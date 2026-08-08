@@ -1,384 +1,442 @@
 import os
 import time
 import re
-import threading
-import requests
+import asyncio
 import cv2
 import numpy as np
 import pytesseract
-from flask import Flask
 from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
-    filters,
     ContextTypes,
+    filters,
 )
 # ============================================================
-# TELEGRAM BOT
+# TELEGRAM
 # ============================================================
 TOKEN = "8937673241:AAGvyTA-G12xfwMlhif3Nh4_2Ag8OStq3tU"
-CHAT_ID = "6280535707"
-CHANNEL_ID = "-1004324805205"
 # ============================================================
-# FLASK SERVER
+# CANDLE DETECTION SETTINGS
 # ============================================================
-app = Flask(__name__)
-@app.route("/")
-def home():
-    return "✅ Candle Detection Test Bot is running!"
-@app.route("/ping")
-def ping():
-    return "pong", 200
-def run_flask():
-    import logging
-    log = logging.getLogger("werkzeug")
-    log.setLevel(logging.ERROR)
-    app.run(
-        host="0.0.0.0",
-        port=10000,
-        debug=False,
-        threaded=True
-    )
+MIN_CANDLES_EXPECTED = 5
+# We do NOT generate candles.
+# We do NOT create fake OHLC.
+# We only count candles that are visually detected.
+#
+# The detector intentionally does NOT use a fixed
+# "chart_width // 6" candle limit.
 # ============================================================
-# OCR — ONLY TO IDENTIFY WHAT TEXT/PAIR IS VISIBLE
-# ============================================================
-def read_visible_text(image):
-    """
-    OCR is only used to report visible text.
-    It does NOT create candle data.
-    """
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # Upscale moderately for OCR
-    h, w = gray.shape
-    if w < 1200:
-        scale = 1200 / w
-        gray = cv2.resize(
-            gray,
-            (1200, int(h * scale)),
-            interpolation=cv2.INTER_CUBIC
-        )
-    # Light thresholding
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    text = pytesseract.image_to_string(
-        gray,
-        config="--psm 11"
-    )
-    text = text.strip()
-    # Try to find likely asset/pair text
-    asset = "NOT CLEAR"
-    lines = [
-        line.strip()
-        for line in text.splitlines()
-        if line.strip()
-    ]
-    for line in lines:
-        upper = line.upper()
-        # OTC names such as:
-        # AUD/CHF OTC
-        # EUR/USD OTC
-        # AMERICAN EXPRESS OTC
-        if "OTC" in upper:
-            asset = line
-            break
-    # Currency-style pair fallback
-    if asset == "NOT CLEAR":
-        pair_match = re.search(
-            r"\b[A-Z]{3}\s*/?\s*[A-Z]{3}\b",
-            text.upper()
-        )
-        if pair_match:
-            asset = pair_match.group(0)
-    return asset, text
-# ============================================================
-# CANDLE DETECTOR
-# ============================================================
-class CandleDetector:
+class CandleReader:
     def __init__(self):
-        pass
+        self.last_result = None
     # --------------------------------------------------------
-    # FIND CHART REGION
+    # LOAD IMAGE
     # --------------------------------------------------------
-    def get_chart_region(self, image):
-        """
-        Pocket Option screenshots normally contain:
-        header at top,
-        chart in the middle,
-        controls/navigation near bottom.
-        We deliberately keep a large central region.
-        """
-        height, width = image.shape[:2]
-        top = int(height * 0.12)
-        bottom = int(height * 0.78)
-        left = int(width * 0.03)
-        right = int(width * 0.92)
-        chart = image[top:bottom, left:right]
-        return chart, (left, top, right, bottom)
+    def load_image(self, path):
+        img = cv2.imread(path)
+        if img is None:
+            raise ValueError("Could not read screenshot.")
+        return img
+    # --------------------------------------------------------
+    # FIND CHART AREA
+    # --------------------------------------------------------
+    def get_chart_region(self, img):
+        h, w = img.shape[:2]
+        # Pocket Option screenshots normally have:
+        # controls above/below the chart and price scale
+        # around the right side.
+        #
+        # We intentionally keep a very large chart area.
+        top = int(h * 0.12)
+        bottom = int(h * 0.82)
+        left = int(w * 0.04)
+        right = int(w * 0.91)
+        chart = img[top:bottom, left:right]
+        return chart
     # --------------------------------------------------------
     # COLOR MASKS
     # --------------------------------------------------------
-    def create_masks(self, chart):
+    def get_masks(self, chart):
         hsv = cv2.cvtColor(chart, cv2.COLOR_BGR2HSV)
         # GREEN
-        green_lower = np.array([30, 35, 35])
-        green_upper = np.array([95, 255, 255])
-        green_mask = cv2.inRange(
+        green1 = cv2.inRange(
             hsv,
-            green_lower,
-            green_upper
+            np.array([30, 25, 25]),
+            np.array([95, 255, 255])
         )
         # RED
-        red_lower_1 = np.array([0, 35, 35])
-        red_upper_1 = np.array([12, 255, 255])
-        red_lower_2 = np.array([165, 35, 35])
-        red_upper_2 = np.array([180, 255, 255])
-        red_mask_1 = cv2.inRange(
+        red1 = cv2.inRange(
             hsv,
-            red_lower_1,
-            red_upper_1
+            np.array([0, 25, 25]),
+            np.array([15, 255, 255])
         )
-        red_mask_2 = cv2.inRange(
+        red2 = cv2.inRange(
             hsv,
-            red_lower_2,
-            red_upper_2
+            np.array([165, 25, 25]),
+            np.array([180, 255, 255])
         )
-        red_mask = cv2.bitwise_or(
-            red_mask_1,
-            red_mask_2
-        )
-        return green_mask, red_mask
+        red = cv2.bitwise_or(red1, red2)
+        return green1, red
     # --------------------------------------------------------
-    # MORPHOLOGICAL CLEANUP
+    # REMOVE UI / GRID NOISE
     # --------------------------------------------------------
     def clean_mask(self, mask):
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_RECT,
-            (3, 3)
-        )
+        kernel = np.ones((2, 2), np.uint8)
         mask = cv2.morphologyEx(
             mask,
             cv2.MORPH_OPEN,
             kernel
         )
-        mask = cv2.morphologyEx(
-            mask,
-            cv2.MORPH_CLOSE,
-            kernel
-        )
         return mask
     # --------------------------------------------------------
-    # DETECT CANDLE BODIES USING CONNECTED COMPONENTS
+    # FIND CANDLE CANDIDATES
     # --------------------------------------------------------
-    def detect_components(self, mask, color_name):
+    def find_candidates(self, mask, color):
+        h, w = mask.shape
+        # Vertical projection.
+        #
+        # Every candle produces pixels at its horizontal
+        # position. Unlike the previous code, we don't divide
+        # the chart into 25/40/50 artificial columns.
+        projection = np.sum(mask > 0, axis=0)
+        # Small amount of smoothing prevents a candle from
+        # being split into several tiny pieces.
+        smooth_kernel = 3
+        kernel = np.ones(smooth_kernel) / smooth_kernel
+        projection_smooth = np.convolve(
+            projection,
+            kernel,
+            mode="same"
+        )
+        # Adaptive threshold.
+        nonzero = projection_smooth[projection_smooth > 0]
+        if len(nonzero) == 0:
+            return []
+        threshold = max(
+            2,
+            np.percentile(nonzero, 25)
+        )
+        active = projection_smooth >= threshold
+        # ----------------------------------------------------
+        # GROUP NEIGHBORING ACTIVE COLUMNS
+        # ----------------------------------------------------
+        groups = []
+        start = None
+        for x in range(w):
+            if active[x]:
+                if start is None:
+                    start = x
+            else:
+                if start is not None:
+                    groups.append((start, x - 1))
+                    start = None
+        if start is not None:
+            groups.append((start, w - 1))
+        candidates = []
+        for x1, x2 in groups:
+            width = x2 - x1 + 1
+            # Ignore extremely tiny noise.
+            if width < 1:
+                continue
+            roi = mask[:, x1:x2 + 1]
+            ys, xs = np.where(roi > 0)
+            if len(ys) < 4:
+                continue
+            top = int(np.min(ys))
+            bottom = int(np.max(ys))
+            height = bottom - top + 1
+            if height < 2:
+                continue
+            # Candle-like vertical object.
+            #
+            # Very wide regions are usually UI/grid elements
+            # rather than a single candle.
+            if width > max(30, int(w * 0.08)):
+                continue
+            center = (x1 + x2) / 2
+            candidates.append({
+                "x1": x1,
+                "x2": x2,
+                "center": center,
+                "top": top,
+                "bottom": bottom,
+                "height": height,
+                "width": width,
+                "color": color
+            })
+        return candidates
+    # --------------------------------------------------------
+    # MERGE SAME CANDLE COMPONENTS
+    # --------------------------------------------------------
+    def merge_candidates(self, candidates):
+        if not candidates:
+            return []
+        candidates = sorted(
+            candidates,
+            key=lambda x: x["center"]
+        )
+        merged = []
+        for c in candidates:
+            if not merged:
+                merged.append(c)
+                continue
+            previous = merged[-1]
+            # Nearby components can belong to the same candle.
+            distance = c["center"] - previous["center"]
+            if distance <= max(
+                4,
+                (c["width"] + previous["width"]) * 0.8
+            ):
+                new_x1 = min(previous["x1"], c["x1"])
+                new_x2 = max(previous["x2"], c["x2"])
+                new_top = min(previous["top"], c["top"])
+                new_bottom = max(previous["bottom"], c["bottom"])
+                # If same color, merge.
+                if previous["color"] == c["color"]:
+                    previous["x1"] = new_x1
+                    previous["x2"] = new_x2
+                    previous["center"] = (
+                        new_x1 + new_x2
+                    ) / 2
+                    previous["top"] = new_top
+                    previous["bottom"] = new_bottom
+                    previous["width"] = new_x2 - new_x1 + 1
+                    previous["height"] = new_bottom - new_top + 1
+                else:
+                    # Different colors very close together are
+                    # more likely to be separate candles.
+                    merged.append(c)
+            else:
+                merged.append(c)
+        return merged
+    # --------------------------------------------------------
+    # ALTERNATIVE: CONNECTED COMPONENT METHOD
+    # --------------------------------------------------------
+    def connected_components(self, mask, color):
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
             mask,
             connectivity=8
         )
-        detected = []
+        results = []
+        h, w = mask.shape
         for i in range(1, num_labels):
-            x = stats[i, cv2.CC_STAT_LEFT]
-            y = stats[i, cv2.CC_STAT_TOP]
-            w = stats[i, cv2.CC_STAT_WIDTH]
-            h = stats[i, cv2.CC_STAT_HEIGHT]
-            area = stats[i, cv2.CC_STAT_AREA]
-            # Ignore tiny noise
-            if area < 15:
+            x, y, width, height, area = stats[i]
+            if area < 3:
                 continue
-            # Ignore huge UI/background regions
-            if area > 20000:
+            if width > max(35, int(w * 0.08)):
                 continue
-            # Candle bodies are normally reasonably narrow.
-            if w < 2:
+            if height < 2:
                 continue
-            if w > 45:
+            if height > int(h * 0.9):
                 continue
-            if h < 3:
-                continue
-            # Very long horizontal objects are probably
-            # chart lines/UI rather than candle bodies.
-            if w > h * 8:
-                continue
-            detected.append({
-                "color": color_name,
-                "x": x,
-                "y": y,
-                "width": w,
-                "height": h,
-                "area": area,
-                "center_x": x + w / 2,
-                "center_y": y + h / 2
+            results.append({
+                "x1": int(x),
+                "x2": int(x + width - 1),
+                "center": float(centroids[i][0]),
+                "top": int(y),
+                "bottom": int(y + height - 1),
+                "height": int(height),
+                "width": int(width),
+                "color": color
             })
-        return detected
+        return results
     # --------------------------------------------------------
-    # MERGE COMPONENTS THAT BELONG TO SAME CANDLE
+    # BUILD FINAL CANDLE SEQUENCE
     # --------------------------------------------------------
-    def merge_nearby(self, candles):
-        if not candles:
-            return []
-        candles = sorted(
-            candles,
-            key=lambda c: c["center_x"]
+    def build_sequence(self, green_candidates, red_candidates, chart_width):
+        all_candidates = (
+            green_candidates +
+            red_candidates
         )
-        merged = []
-        for candle in candles:
-            if not merged:
-                merged.append(candle)
-                continue
-            previous = merged[-1]
-            distance = abs(
-                candle["center_x"] -
-                previous["center_x"]
-            )
-            # Components very close horizontally
-            # can belong to the same candle body.
-            if (
-                distance <=
-                max(
-                    8,
-                    (candle["width"] +
-                     previous["width"]) * 1.5
-                )
-            ):
-                # Keep the stronger/larger component.
-                if candle["area"] > previous["area"]:
-                    merged[-1] = candle
-            else:
-                merged.append(candle)
-        return merged
-    # --------------------------------------------------------
-    # REMOVE DUPLICATE CANDLES
-    # --------------------------------------------------------
-    def remove_duplicates(self, candles):
-        if not candles:
+        if not all_candidates:
             return []
-        candles = sorted(
-            candles,
-            key=lambda c: c["center_x"]
+        all_candidates = sorted(
+            all_candidates,
+            key=lambda x: x["center"]
         )
+        # ----------------------------------------------------
+        # REMOVE DUPLICATES
+        # ----------------------------------------------------
         final = []
-        for candle in candles:
+        for c in all_candidates:
             duplicate = False
             for existing in final:
                 distance = abs(
-                    candle["center_x"] -
-                    existing["center_x"]
+                    c["center"] -
+                    existing["center"]
                 )
-                if distance < 6:
+                if distance <= max(
+                    3,
+                    min(
+                        c["width"],
+                        existing["width"]
+                    )
+                ):
+                    # Keep the stronger detection.
+                    if c["height"] > existing["height"]:
+                        existing.update(c)
                     duplicate = True
-                    # Keep stronger detection
-                    if candle["area"] > existing["area"]:
-                        final.remove(existing)
-                        final.append(candle)
                     break
             if not duplicate:
-                final.append(candle)
-        return sorted(
-            final,
-            key=lambda c: c["center_x"]
+                final.append(c)
+        # ----------------------------------------------------
+        # REMOVE OBVIOUS UI-LIKE OBJECTS
+        # ----------------------------------------------------
+        cleaned = []
+        for c in final:
+            # Candles should not be extremely wide.
+            if c["width"] > chart_width * 0.06:
+                continue
+            # Ignore full-height vertical UI artifacts.
+            if c["height"] > chart_width * 0.8:
+                continue
+            cleaned.append(c)
+        cleaned.sort(
+            key=lambda x: x["center"]
         )
+        return cleaned
     # --------------------------------------------------------
-    # MAIN DETECTION
+    # OCR ONLY FOR ASSET NAME
     # --------------------------------------------------------
-    def analyze(self, image):
-        chart, region = self.get_chart_region(image)
-        if chart.size == 0:
-            return {
-                "green": 0,
-                "red": 0,
-                "total": 0,
-                "sequence": [],
-                "region": None
-            }
-        green_mask, red_mask = self.create_masks(chart)
+    def detect_asset(self, img):
+        h, w = img.shape[:2]
+        # Asset/pair is normally around the upper-middle
+        # portion of the Pocket Option screen.
+        regions = [
+            img[int(h * 0.15):int(h * 0.40),
+                int(w * 0.20):int(w * 0.90)],
+            img[int(h * 0.20):int(h * 0.50),
+                int(w * 0.10):int(w * 0.95)]
+        ]
+        texts = []
+        for roi in regions:
+            if roi.size == 0:
+                continue
+            gray = cv2.cvtColor(
+                roi,
+                cv2.COLOR_BGR2GRAY
+            )
+            gray = cv2.resize(
+                gray,
+                None,
+                fx=1.5,
+                fy=1.5,
+                interpolation=cv2.INTER_CUBIC
+            )
+            _, thresh = cv2.threshold(
+                gray,
+                0,
+                255,
+                cv2.THRESH_BINARY +
+                cv2.THRESH_OTSU
+            )
+            text = pytesseract.image_to_string(
+                thresh,
+                config="--psm 6"
+            )
+            texts.append(text)
+        combined = "\n".join(texts)
+        # OTC pairs and normal currency pairs.
+        patterns = [
+            r'([A-Z]{3}\s*/\s*[A-Z]{3}\s*OTC)',
+            r'([A-Z]{3}\s*[/\-]\s*[A-Z]{3})',
+            r'([A-Z]{3}\s+[A-Z]{3}\s+OTC)',
+            r'([A-Z]{3}\s*OTC)'
+        ]
+        for pattern in patterns:
+            match = re.search(
+                pattern,
+                combined,
+                re.IGNORECASE
+            )
+            if match:
+                return match.group(1).upper().strip()
+        # American Express is not a currency pair, but if it
+        # appears on the chart we report it rather than
+        # pretending it is USD/CHF.
+        if re.search(
+            r'AMERICAN\s+EXPRESS',
+            combined,
+            re.IGNORECASE
+        ):
+            return "AMERICAN EXPRESS OTC"
+        return "NOT CONFIDENTLY DETECTED"
+    # --------------------------------------------------------
+    # MAIN READER
+    # --------------------------------------------------------
+    def read(self, path):
+        img = self.load_image(path)
+        original = img.copy()
+        # Don't resize the entire screenshot unnecessarily.
+        # Preserve the actual candle spacing.
+        chart = self.get_chart_region(img)
+        chart_h, chart_w = chart.shape[:2]
+        green_mask, red_mask = self.get_masks(chart)
         green_mask = self.clean_mask(green_mask)
         red_mask = self.clean_mask(red_mask)
-        green_candles = self.detect_components(
+        # Method 1: projection
+        green_a = self.find_candidates(
             green_mask,
             "GREEN"
         )
-        red_candles = self.detect_components(
+        red_a = self.find_candidates(
             red_mask,
             "RED"
         )
-        all_candles = green_candles + red_candles
-        # Remove duplicates within each color
-        green_candles = self.remove_duplicates(
-            green_candles
+        # Method 2: connected components
+        green_b = self.connected_components(
+            green_mask,
+            "GREEN"
         )
-        red_candles = self.remove_duplicates(
-            red_candles
+        red_b = self.connected_components(
+            red_mask,
+            "RED"
         )
-        all_candles = green_candles + red_candles
-        # Sort from left to right
-        all_candles = sorted(
-            all_candles,
-            key=lambda c: c["center_x"]
+        # Combine both visual methods.
+        green = self.merge_candidates(
+            green_a + green_b
+        )
+        red = self.merge_candidates(
+            red_a + red_b
+        )
+        candles = self.build_sequence(
+            green,
+            red,
+            chart_w
         )
         # ----------------------------------------------------
         # IMPORTANT:
-        # Only count actual detected candle objects.
-        # Nothing is generated.
+        # NO FAKE CANDLES ARE ADDED HERE.
         # ----------------------------------------------------
-        sequence = []
-        for candle in all_candles:
-            sequence.append(
-                candle["color"]
-            )
+        asset = self.detect_asset(original)
         return {
-            "green": len(green_candles),
-            "red": len(red_candles),
-            "total": len(all_candles),
-            "sequence": sequence,
-            "region": region
+            "asset": asset,
+            "candles": candles,
+            "green": sum(
+                1 for c in candles
+                if c["color"] == "GREEN"
+            ),
+            "red": sum(
+                1 for c in candles
+                if c["color"] == "RED"
+            ),
+            "total": len(candles)
         }
 # ============================================================
-# TELEGRAM SENDING
+# TELEGRAM MESSAGE
 # ============================================================
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    try:
-        requests.post(
-            url,
-            data={
-                "chat_id": CHAT_ID,
-                "text": message
-            },
-            timeout=5
-        )
-        requests.post(
-            url,
-            data={
-                "chat_id": CHANNEL_ID,
-                "text": message
-            },
-            timeout=5
-        )
-        print("✅ Sent to Telegram")
-    except Exception as e:
-        print(
-            "⚠️ Telegram send error:",
-            e
-        )
-# ============================================================
-# TELEGRAM BOT
-# ============================================================
-detector = CandleDetector()
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+reader = CandleReader()
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📊 CANDLE DETECTION TEST BOT\n\n"
+        "🕯️ CANDLE DETECTION TEST\n\n"
         "Send a Pocket Option screenshot.\n\n"
-        "I will ONLY count the visible candles:\n"
-        "🟢 Green candles\n"
-        "🔴 Red candles\n"
-        "📊 Total detected\n\n"
-        "No strategy.\n"
-        "No signal.\n"
-        "No generated candles.\n"
-        "No random data."
+        "I will only count candles that are actually "
+        "visible in the screenshot.\n\n"
+        "No OHLC generation.\n"
+        "No random candles.\n"
+        "No trading signal."
     )
 async def handle_photo(
     update: Update,
@@ -386,115 +444,78 @@ async def handle_photo(
 ):
     start_time = time.time()
     try:
-        # ----------------------------------------------------
-        # DOWNLOAD IMAGE
-        # ----------------------------------------------------
+        await update.message.reply_text(
+            "📸 Reading visible candles..."
+        )
         photo = await update.message.photo[-1].get_file()
-        file_path = "screenshot_test.png"
-        await photo.download_to_drive(
-            file_path
-        )
-        # ----------------------------------------------------
-        # LOAD ORIGINAL IMAGE
-        # ----------------------------------------------------
-        image = cv2.imread(file_path)
-        if image is None:
-            await update.message.reply_text(
-                "❌ Could not load screenshot."
-            )
-            return
-        print(
-            f"📸 Screenshot received: "
-            f"{image.shape[1]}x{image.shape[0]}"
-        )
-        # ----------------------------------------------------
-        # OCR — INFORMATION ONLY
-        # ----------------------------------------------------
-        asset, visible_text = read_visible_text(
-            image
-        )
-        # ----------------------------------------------------
-        # CANDLE DETECTION
-        # ----------------------------------------------------
-        result = detector.analyze(
-            image
-        )
+        filename = "candle_test.png"
+        await photo.download_to_drive(filename)
+        result = reader.read(filename)
+        candles = result["candles"]
+        sequence = []
+        for candle in candles:
+            if candle["color"] == "GREEN":
+                sequence.append("🟢")
+            else:
+                sequence.append("🔴")
         elapsed = time.time() - start_time
-        green = result["green"]
-        red = result["red"]
-        total = result["total"]
-        sequence = result["sequence"]
-        # ----------------------------------------------------
-        # SEQUENCE DISPLAY
-        # ----------------------------------------------------
-        if sequence:
-            sequence_text = " → ".join(
-                "🟢" if x == "GREEN" else "🔴"
-                for x in sequence
+        if not candles:
+            message = (
+                "⚠️ **CANDLE DETECTION TEST**\n\n"
+                f"💱 Detected asset: `{result['asset']}`\n\n"
+                "❌ No reliable visible candles detected.\n\n"
+                "No candles were generated."
             )
         else:
-            sequence_text = "NONE"
-        # ----------------------------------------------------
-        # RESULT
-        # ----------------------------------------------------
-        message = (
-            "🔎 **CANDLE DETECTION TEST**\n\n"
-            f"💱 **Detected asset:** {asset}\n\n"
-            "📊 **WHAT THE BOT ACTUALLY DETECTED:**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"🟢 Green candles: **{green}**\n"
-            f"🔴 Red candles: **{red}**\n"
-            f"📊 Total candles: **{total}**\n\n"
-            f"🕯️ **Candle sequence "
-            f"(left → right):**\n"
-            f"{sequence_text}\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "⚠️ **IMPORTANT:**\n"
-            "Only candles actually detected in the "
-            "screenshot are counted.\n"
-            "No OHLC candles are generated.\n"
-            "No random candles are added.\n"
-            "No trading signal is generated.\n\n"
-            f"⚡ Processing time: **{elapsed:.2f}s**"
-        )
+            message = (
+                "🔎 **CANDLE DETECTION TEST**\n\n"
+                f"💱 **Detected asset:** `{result['asset']}`\n\n"
+                "📊 **WHAT THE BOT ACTUALLY DETECTED:**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                f"🟢 Green candles: **{result['green']}**\n"
+                f"🔴 Red candles: **{result['red']}**\n"
+                f"📊 Total candles: **{result['total']}**\n\n"
+                "🕯️ **Candle sequence (left → right):**\n"
+                + " → ".join(sequence)
+                + "\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "⚠️ **IMPORTANT:**\n"
+                "Only visually detected candles are counted.\n"
+                "No OHLC candles are generated.\n"
+                "No random candles are added.\n"
+                "No trading signal is generated.\n\n"
+                f"⚡ **Processing time:** {elapsed:.2f}s"
+            )
         await update.message.reply_text(
             message,
             parse_mode="Markdown"
         )
-        print("\n" + "=" * 50)
-        print("CANDLE TEST RESULT")
-        print("=" * 50)
-        print(f"Asset: {asset}")
-        print(f"Green: {green}")
-        print(f"Red: {red}")
-        print(f"Total: {total}")
-        print(f"Sequence: {sequence}")
-        print(f"Time: {elapsed:.2f}s")
-        print("=" * 50)
+        print(message)
     except Exception as e:
-        print(
-            "❌ Error:",
-            str(e)
-        )
+        print("ERROR:", repr(e))
         await update.message.reply_text(
-            f"❌ Error: {str(e)}"
+            f"❌ Detection error:\n`{str(e)}`",
+            parse_mode="Markdown"
         )
 # ============================================================
-# START TELEGRAM
+# MAIN
 # ============================================================
-def run_telegram():
+def main():
+    print("=" * 50)
+    print("🕯️ POCKET OPTION CANDLE READER TEST")
+    print("=" * 50)
+    print("No random candles.")
+    print("No generated OHLC.")
+    print("No trading signals.")
+    print("=" * 50)
     application = (
         Application
         .builder()
         .token(TOKEN)
         .build()
     )
-    application.bot.delete_webhook()
     application.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
+        CommandHandler("start", start)
     )
     application.add_handler(
         MessageHandler(
@@ -502,33 +523,25 @@ def run_telegram():
             handle_photo
         )
     )
-    print(
-        "✅ Candle Detection Test Bot started."
-    )
+    print("✅ Bot is running...")
     application.run_polling(
         drop_pending_updates=True
     )
-# ============================================================
-# MAIN
-# ============================================================
 if __name__ == "__main__":
-    print("=" * 50)
-    print("📊 POCKET OPTION CANDLE DETECTION TEST")
-    print("=" * 50)
-    threading.Thread(
-        target=run_flask,
-        daemon=True
-    ).start()
-    print(
-        "✅ Flask server started on port 10000"
-    )
-    run_telegram()
+    main()
 
-requirements.txt
+Requirements:
 
-Flask
-requests
-numpy
-opencv-python-headless
-pytesseract
 python-telegram-bot
+opencv-python-headless
+numpy
+pytesseract
+Pillow
+
+And make sure Tesseract itself is installed in the environment if your hosting service doesn’t already provide it.
+
+:::
+### One important point
+I deliberately **didn't put a fake “50-candle minimum” into the code**. If there are 50 visible candles and the detector only finds 25, it must report 25. We need to make the visual detector actually find the missing 25.
+Also, **don't test this with a cropped chart** if your goal is to count everything visible. Send the same full Pocket Option screenshot you normally use.
+Once you test this, send me the bot's exact **Green / Red / Total / sequence** result. From that single test we can see whether the problem is **missing candles, merged candles, or false detections** before we touch your reversal strategy.
