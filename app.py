@@ -1,777 +1,1098 @@
 import os
-import time
 import cv2
 import numpy as np
 import telebot
+import time
+
 # ============================================================
 # TELEGRAM
 # ============================================================
-# Put your TEST bot token here.
-# Do NOT commit this file with a real token to GitHub.
-TELEGRAM_TOKEN = "8937673241:AAGvyTA-G12xfwMlhif3Nh4_2Ag8OStq3tU"
+
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+
+if not TELEGRAM_TOKEN:
+    raise RuntimeError(
+        "BOT_TOKEN environment variable is not set."
+    )
+
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+
 # ============================================================
-# SETTINGS
+# DETECTION SETTINGS
 # ============================================================
-# The whole received screenshot is examined.
-FULL_SCREEN = True
-# Small candle width.
-# The program estimates the actual spacing automatically.
-MIN_CANDLE_WIDTH = 3
-MAX_CANDLE_WIDTH = 80
-# Minimum evidence required before a lane is counted.
-MIN_COLOR_PIXELS = 10
-MIN_COLOR_RATIO = 0.025
-# A candle should have some vertical structure.
-MIN_VERTICAL_SPAN = 5
-# How much of the detected candle width becomes the lane.
-LANE_MULTIPLIER = 1.15
+
+# Keep these close to the previous working detector.
+MIN_BODY_AREA = 10
+MIN_BODY_HEIGHT = 2
+MIN_CANDLE_WIDTH = 2
+
+# Slightly easier detection for the newest candles.
+RIGHT_MIN_BODY_AREA = 7
+RIGHT_MIN_BODY_HEIGHT = 2
+
+# Prevent enormous colored regions from being called candles.
+MAX_CANDLE_WIDTH_RATIO = 0.045
+
+# Same-color pieces close together may belong to one candle.
+MERGE_DISTANCE_RATIO = 0.55
+
+# New: minimum amount of colored evidence inside a body.
+MIN_COLOR_DENSITY = 0.15
+
+# New: right side starts here.
+RIGHT_SIDE_START = 0.72
+
+# New: reject extremely large isolated objects.
+MAX_BODY_HEIGHT_RATIO = 0.35
+
+
 # ============================================================
-# IMAGE
+# LOAD IMAGE
 # ============================================================
+
 def load_image(path):
-    image = cv2.imread(path)
-    if image is None:
-        raise ValueError("Screenshot could not be read.")
-    return image
+
+    img = cv2.imread(path)
+
+    if img is None:
+        raise ValueError("Could not read screenshot.")
+
+    h, w = img.shape[:2]
+
+    # Mild upscale only.
+    if w < 1400:
+
+        scale = 1400 / w
+
+        img = cv2.resize(
+            img,
+            (
+                int(w * scale),
+                int(h * scale)
+            ),
+            interpolation=cv2.INTER_CUBIC
+        )
+
+    return img
+
+
 # ============================================================
 # COLOR MASKS
 # ============================================================
-def create_color_masks(image):
+
+def get_color_masks(img):
+
     hsv = cv2.cvtColor(
-        image,
+        img,
         cv2.COLOR_BGR2HSV
     )
+
     # --------------------------------------------------------
     # GREEN
     # --------------------------------------------------------
-    green_low = np.array([
+
+    green_lower = np.array([
         30,
-        45,
+        35,
         35
     ])
-    green_high = np.array([
-        95,
+
+    green_upper = np.array([
+        90,
         255,
         255
     ])
+
     green = cv2.inRange(
         hsv,
-        green_low,
-        green_high
+        green_lower,
+        green_upper
     )
+
     # --------------------------------------------------------
     # RED
     # --------------------------------------------------------
-    red_low_1 = np.array([
+
+    red_lower_1 = np.array([
         0,
-        45,
-        35
+        40,
+        40
     ])
-    red_high_1 = np.array([
+
+    red_upper_1 = np.array([
         15,
         255,
         255
     ])
-    red_low_2 = np.array([
+
+    red_lower_2 = np.array([
         165,
-        45,
-        35
+        40,
+        40
     ])
-    red_high_2 = np.array([
+
+    red_upper_2 = np.array([
         180,
         255,
         255
     ])
+
     red1 = cv2.inRange(
         hsv,
-        red_low_1,
-        red_high_1
+        red_lower_1,
+        red_upper_1
     )
+
     red2 = cv2.inRange(
         hsv,
-        red_low_2,
-        red_high_2
+        red_lower_2,
+        red_upper_2
     )
+
     red = cv2.bitwise_or(
         red1,
         red2
     )
+
     return green, red
+
+
 # ============================================================
-# CLEAN COLOR MASK
+# FIND CANDIDATES
 # ============================================================
-def clean_mask(mask):
-    # Keep small candle bodies.
+
+def find_candidates(
+    mask,
+    color,
+    image_width,
+    image_height,
+    right_side=False
+):
+
+    # Very mild morphology.
     kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (2, 2)
     )
+
     cleaned = cv2.morphologyEx(
         mask,
         cv2.MORPH_OPEN,
         kernel
     )
+
+    close_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (3, 3)
+    )
+
     cleaned = cv2.morphologyEx(
         cleaned,
         cv2.MORPH_CLOSE,
-        kernel
+        close_kernel
     )
-    return cleaned
-# ============================================================
-# FIND CANDLE X POSITIONS
-#
-# This does NOT count contours.
-#
-# It finds vertical concentrations of candle-colored pixels,
-# then uses those positions to build full-height lanes.
-# ============================================================
-def find_x_peaks(mask):
-    height, width = mask.shape
-    # Number of colored pixels in every x column.
-    projection = np.sum(
-        mask > 0,
-        axis=0
-    ).astype(np.float32)
-    if np.max(projection) <= 0:
-        return []
-    # Smooth the projection slightly.
-    smooth_kernel = max(
-        3,
-        int(width * 0.002)
+
+    contours, _ = cv2.findContours(
+        cleaned,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
     )
-    if smooth_kernel % 2 == 0:
-        smooth_kernel += 1
-    smooth = cv2.GaussianBlur(
-        projection.reshape(1, -1),
-        (
-            smooth_kernel,
-            1
-        ),
-        0
-    ).flatten()
-    # Adaptive threshold.
-    nonzero = smooth[smooth > 0]
-    if len(nonzero) == 0:
-        return []
-    threshold = max(
-        2,
-        float(np.percentile(nonzero, 35))
-    )
-    active = smooth >= threshold
-    # Find continuous x regions.
-    regions = []
-    start = None
-    for x, value in enumerate(active):
-        if value and start is None:
-            start = x
-        elif not value and start is not None:
-            end = x - 1
-            if end >= start:
-                regions.append(
-                    (start, end)
-                )
-            start = None
-    if start is not None:
-        regions.append(
-            (start, width - 1)
+
+    candidates = []
+
+    max_width = max(
+        10,
+        int(
+            image_width *
+            MAX_CANDLE_WIDTH_RATIO
         )
-    centers = []
-    for left, right in regions:
-        region_width = right - left + 1
-        if (
-            region_width < MIN_CANDLE_WIDTH
-            or
-            region_width > MAX_CANDLE_WIDTH
-        ):
+    )
+
+    if right_side:
+        min_area = RIGHT_MIN_BODY_AREA
+        min_height = RIGHT_MIN_BODY_HEIGHT
+    else:
+        min_area = MIN_BODY_AREA
+        min_height = MIN_BODY_HEIGHT
+
+    for contour in contours:
+
+        area = cv2.contourArea(contour)
+
+        if area < min_area:
             continue
-        local = smooth[left:right + 1]
-        if len(local) == 0:
+
+        x, y, w, h = cv2.boundingRect(
+            contour
+        )
+
+        if w < MIN_CANDLE_WIDTH:
             continue
-        strongest = left + int(
-            np.argmax(local)
+
+        if h < min_height:
+            continue
+
+        if w > max_width:
+            continue
+
+        # Reject huge vertical objects.
+        if h > image_height * MAX_BODY_HEIGHT_RATIO:
+            continue
+
+        # Reject very wide horizontal objects.
+        if w > h * 6:
+            continue
+
+        # ----------------------------------------------------
+        # COLORED PIXEL CHECK
+        # ----------------------------------------------------
+
+        region = cleaned[
+            y:y + h,
+            x:x + w
+        ]
+
+        colored_pixels = int(
+            np.sum(region > 0)
         )
-        centers.append(
-            strongest
+
+        if colored_pixels < 5:
+            continue
+
+        density = (
+            colored_pixels /
+            float(max(1, w * h))
         )
-    return centers
+
+        if density < MIN_COLOR_DENSITY:
+            continue
+
+        center_x = x + (w / 2)
+
+        candidates.append({
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "area": float(area),
+            "pixels": colored_pixels,
+            "density": density,
+            "center_x": center_x,
+            "color": color
+        })
+
+    return candidates
+
+
 # ============================================================
-# ESTIMATE CANDLE SPACING
+# MERGE SAME-COLOR PIECES
 # ============================================================
-def estimate_spacing(centers, image_width):
-    if len(centers) < 2:
-        # Conservative fallback for small candle width.
-        return max(
-            6,
-            min(
-                30,
-                int(image_width * 0.018)
+
+def merge_candidates(candidates):
+
+    if not candidates:
+        return []
+
+    candidates = sorted(
+        candidates,
+        key=lambda c: c["center_x"]
+    )
+
+    merged = []
+
+    for candidate in candidates:
+
+        merged_into_existing = False
+
+        for existing in merged:
+
+            distance = abs(
+                candidate["center_x"]
+                -
+                existing["center_x"]
             )
-        )
-    centers = sorted(
-        set(centers)
+
+            allowed = max(
+                candidate["w"],
+                existing["w"],
+                2
+            ) * MERGE_DISTANCE_RATIO
+
+            candidate_top = candidate["y"]
+
+            candidate_bottom = (
+                candidate["y"]
+                +
+                candidate["h"]
+            )
+
+            existing_top = existing["y"]
+
+            existing_bottom = (
+                existing["y"]
+                +
+                existing["h"]
+            )
+
+            vertical_overlap = not (
+                candidate_bottom < existing_top
+                or
+                candidate_top > existing_bottom
+            )
+
+            if (
+                distance <= allowed
+                and
+                vertical_overlap
+            ):
+
+                left = min(
+                    existing["x"],
+                    candidate["x"]
+                )
+
+                right = max(
+                    existing["x"] +
+                    existing["w"],
+                    candidate["x"] +
+                    candidate["w"]
+                )
+
+                top = min(
+                    existing["y"],
+                    candidate["y"]
+                )
+
+                bottom = max(
+                    existing["y"] +
+                    existing["h"],
+                    candidate["y"] +
+                    candidate["h"]
+                )
+
+                existing["x"] = left
+                existing["y"] = top
+
+                existing["w"] = (
+                    right - left
+                )
+
+                existing["h"] = (
+                    bottom - top
+                )
+
+                existing["center_x"] = (
+                    left +
+                    existing["w"] / 2
+                )
+
+                existing["area"] += (
+                    candidate["area"]
+                )
+
+                existing["pixels"] += (
+                    candidate["pixels"]
+                )
+
+                merged_into_existing = True
+
+                break
+
+        if not merged_into_existing:
+
+            merged.append(
+                candidate.copy()
+            )
+
+    return merged
+
+
+# ============================================================
+# REMOVE CROSS-COLOR DUPLICATES
+# ============================================================
+
+def remove_cross_color_duplicates(candles):
+
+    candles = sorted(
+        candles,
+        key=lambda c: c["center_x"]
     )
-    distances = []
+
+    result = []
+
+    for candle in candles:
+
+        duplicate_index = None
+
+        for i, existing in enumerate(result):
+
+            distance = abs(
+                candle["center_x"]
+                -
+                existing["center_x"]
+            )
+
+            threshold = max(
+                candle["w"],
+                existing["w"],
+                2
+            ) * 0.65
+
+            if distance <= threshold:
+
+                duplicate_index = i
+
+                break
+
+        if duplicate_index is None:
+
+            result.append(
+                candle
+            )
+
+        else:
+
+            existing = result[
+                duplicate_index
+            ]
+
+            # Keep the detection with stronger
+            # actual color evidence.
+            if (
+                candle["pixels"]
+                >
+                existing["pixels"]
+            ):
+
+                result[
+                    duplicate_index
+                ] = candle
+
+    return result
+
+
+# ============================================================
+# NEW: REMOVE OBVIOUS ISOLATED COLOR NOISE
+# ============================================================
+
+def remove_noise_candidates(candles):
+
+    if len(candles) < 3:
+        return candles
+
+    candles = sorted(
+        candles,
+        key=lambda c: c["center_x"]
+    )
+
+    centers = [
+        c["center_x"]
+        for c in candles
+    ]
+
+    gaps = []
+
     for i in range(
         1,
         len(centers)
     ):
-        distance = (
+
+        gap = (
             centers[i]
             -
             centers[i - 1]
         )
-        if 4 <= distance <= image_width * 0.15:
-            distances.append(distance)
-    if not distances:
-        return 12
-    # Median is safer than average when a few false peaks exist.
-    spacing = int(
-        np.median(distances)
+
+        if gap > 0:
+            gaps.append(gap)
+
+    if len(gaps) < 2:
+        return candles
+
+    # Median spacing between detected objects.
+    median_gap = float(
+        np.median(gaps)
     )
-    return max(
-        MIN_CANDLE_WIDTH,
-        min(
-            MAX_CANDLE_WIDTH,
-            spacing
+
+    if median_gap <= 0:
+        return candles
+
+    cleaned = []
+
+    for i, candle in enumerate(candles):
+
+        left_gap = None
+        right_gap = None
+
+        if i > 0:
+            left_gap = (
+                candle["center_x"]
+                -
+                candles[i - 1]["center_x"]
+            )
+
+        if i < len(candles) - 1:
+            right_gap = (
+                candles[i + 1]["center_x"]
+                -
+                candle["center_x"]
+            )
+
+        # Very small isolated colored objects are more
+        # suspicious when surrounded by very large gaps.
+        isolated_left = (
+            left_gap is not None
+            and
+            left_gap > median_gap * 3.0
         )
-    )
-# ============================================================
-# BUILD FULL-HEIGHT LANES
-# ============================================================
-def build_lanes(
-    centers,
-    spacing,
-    image_width
-):
-    if not centers:
-        return []
-    # Candle width is intentionally small.
-    candle_width = max(
-        MIN_CANDLE_WIDTH,
-        int(spacing * LANE_MULTIPLIER)
-    )
-    # Never allow the lane to become huge.
-    candle_width = min(
-        candle_width,
-        max(8, int(image_width * 0.04))
-    )
-    lanes = []
-    for center in sorted(
-        set(centers)
-    ):
-        left = int(
-            center -
-            candle_width / 2
+
+        isolated_right = (
+            right_gap is not None
+            and
+            right_gap > median_gap * 3.0
         )
-        right = int(
-            center +
-            candle_width / 2
+
+        weak_detection = (
+            candle["pixels"] < 10
+            or
+            candle["density"] < 0.20
         )
-        left = max(
-            0,
-            left
-        )
-        right = min(
-            image_width - 1,
-            right
-        )
-        lanes.append({
-            "center": int(center),
-            "left": left,
-            "right": right,
-            "width": right - left + 1
-        })
-    return lanes
-# ============================================================
-# CHECK WHETHER A LANE REALLY CONTAINS A CANDLE
-# ============================================================
-def inspect_lane(
-    green_mask,
-    red_mask,
-    lane
-):
-    height, width = green_mask.shape
-    left = lane["left"]
-    right = lane["right"]
-    green_region = green_mask[
-        0:height,
-        left:right + 1
-    ]
-    red_region = red_mask[
-        0:height,
-        left:right + 1
-    ]
-    green_pixels = int(
-        np.sum(
-            green_region > 0
-        )
-    )
-    red_pixels = int(
-        np.sum(
-            red_region > 0
-        )
-    )
-    total_pixels = max(
-        1,
-        green_region.size
-    )
-    green_ratio = (
-        green_pixels /
-        total_pixels
-    )
-    red_ratio = (
-        red_pixels /
-        total_pixels
-    )
-    # Find the vertical span of colored pixels.
-    combined = cv2.bitwise_or(
-        green_region,
-        red_region
-    )
-    ys, xs = np.where(
-        combined > 0
-    )
-    if len(ys) == 0:
-        return None
-    vertical_span = (
-        int(np.max(ys))
-        -
-        int(np.min(ys))
-        +
-        1
-    )
-    if vertical_span < MIN_VERTICAL_SPAN:
-        return None
-    # --------------------------------------------------------
-    # COLOR DECISION
-    # --------------------------------------------------------
-    if (
-        green_pixels >= MIN_COLOR_PIXELS
-        and
-        green_ratio >= MIN_COLOR_RATIO
-        and
-        green_pixels > red_pixels * 1.20
-    ):
-        return {
-            "color": "GREEN",
-            "green_pixels": green_pixels,
-            "red_pixels": red_pixels,
-            "ratio": green_ratio,
-            "vertical_span": vertical_span
-        }
-    if (
-        red_pixels >= MIN_COLOR_PIXELS
-        and
-        red_ratio >= MIN_COLOR_RATIO
-        and
-        red_pixels > green_pixels * 1.20
-    ):
-        return {
-            "color": "RED",
-            "green_pixels": green_pixels,
-            "red_pixels": red_pixels,
-            "ratio": red_ratio,
-            "vertical_span": vertical_span
-        }
-    # Ambiguous = do not force a color.
-    return None
-# ============================================================
-# FULL SCREEN CANDLE DETECTOR
-# ============================================================
-def detect_candles(image):
-    height, width = image.shape[:2]
-    green_mask, red_mask = create_color_masks(
-        image
-    )
-    green_mask = clean_mask(
-        green_mask
-    )
-    red_mask = clean_mask(
-        red_mask
-    )
-    # --------------------------------------------------------
-    # FIND COLOR CONCENTRATIONS
-    # --------------------------------------------------------
-    green_centers = find_x_peaks(
-        green_mask
-    )
-    red_centers = find_x_peaks(
-        red_mask
-    )
-    all_centers = (
-        green_centers +
-        red_centers
-    )
-    if not all_centers:
-        return [], [], 0
-    all_centers = sorted(
-        set(all_centers)
-    )
-    # --------------------------------------------------------
-    # ESTIMATE REAL CANDLE SPACING
-    # --------------------------------------------------------
-    spacing = estimate_spacing(
-        all_centers,
-        width
-    )
-    # --------------------------------------------------------
-    # CREATE FULL-HEIGHT VERTICAL LANES
-    # --------------------------------------------------------
-    lanes = build_lanes(
-        all_centers,
-        spacing,
-        width
-    )
-    detected = []
-    for lane in lanes:
-        result = inspect_lane(
-            green_mask,
-            red_mask,
-            lane
-        )
-        if result is None:
+
+        if (
+            weak_detection
+            and
+            isolated_left
+            and
+            isolated_right
+        ):
             continue
-        candle = lane.copy()
-        candle.update(
-            result
-        )
-        detected.append(
+
+        cleaned.append(
             candle
         )
-    # Sort left → right.
-    detected.sort(
-        key=lambda c: c["center"]
-    )
-    return (
-        detected,
-        lanes,
-        spacing
-    )
+
+    return cleaned
+
+
 # ============================================================
-# CREATE FULL-SCREEN DIAGNOSTIC IMAGE
+# MILD RIGHT-SIDE IMPROVEMENT
 # ============================================================
-def create_detection_map(
-    image,
-    detected,
-    lanes,
-    spacing
+
+def detect_right_side(
+    chart,
+    green_mask,
+    red_mask
 ):
-    output = image.copy()
-    height, width = output.shape[:2]
+
+    h, w = chart.shape[:2]
+
+    right_start = int(
+        w * RIGHT_SIDE_START
+    )
+
+    green_right = green_mask[
+        :,
+        right_start:
+    ]
+
+    red_right = red_mask[
+        :,
+        right_start:
+    ]
+
+    green = find_candidates(
+        green_right,
+        "GREEN",
+        w,
+        h,
+        right_side=True
+    )
+
+    red = find_candidates(
+        red_right,
+        "RED",
+        w,
+        h,
+        right_side=True
+    )
+
+    for candle in (
+        green +
+        red
+    ):
+
+        candle["x"] += right_start
+
+        candle["center_x"] += right_start
+
+    return (
+        green +
+        red
+    )
+
+
+# ============================================================
+# DETECT CANDLES
+# ============================================================
+
+def detect_candles(img):
+
+    h, w = img.shape[:2]
+
+    green_mask, red_mask = (
+        get_color_masks(img)
+    )
+
     # --------------------------------------------------------
-    # DRAW ALL SEARCH LANES LIGHTLY
+    # MAIN DETECTION
     # --------------------------------------------------------
-    for lane in lanes:
-        x = lane["center"]
-        cv2.line(
-            output,
-            (x, 0),
-            (x, height - 1),
-            (255, 255, 0),
-            1
-        )
+
+    green = find_candidates(
+        green_mask,
+        "GREEN",
+        w,
+        h,
+        right_side=False
+    )
+
+    red = find_candidates(
+        red_mask,
+        "RED",
+        w,
+        h,
+        right_side=False
+    )
+
+    green = merge_candidates(
+        green
+    )
+
+    red = merge_candidates(
+        red
+    )
+
+    candles = (
+        green +
+        red
+    )
+
     # --------------------------------------------------------
-    # DRAW CONFIRMED CANDLES
+    # RIGHT SIDE
     # --------------------------------------------------------
+
+    right_candidates = detect_right_side(
+        img,
+        green_mask,
+        red_mask
+    )
+
+    candles.extend(
+        right_candidates
+    )
+
+    # --------------------------------------------------------
+    # DUPLICATES
+    # --------------------------------------------------------
+
+    candles = remove_cross_color_duplicates(
+        candles
+    )
+
+    # --------------------------------------------------------
+    # SMALL NOISE CLEANUP
+    # --------------------------------------------------------
+
+    candles = remove_noise_candidates(
+        candles
+    )
+
+    # --------------------------------------------------------
+    # LEFT → RIGHT
+    # --------------------------------------------------------
+
+    candles.sort(
+        key=lambda c: c["center_x"]
+    )
+
+    return candles
+
+
+# ============================================================
+# REPORT
+# ============================================================
+
+def create_report(candles):
+
+    green = sum(
+        1
+        for c in candles
+        if c["color"] == "GREEN"
+    )
+
+    red = sum(
+        1
+        for c in candles
+        if c["color"] == "RED"
+    )
+
+    return green, red
+
+
+# ============================================================
+# DETECTION MAP
+# ============================================================
+
+def create_detection_map(
+    img,
+    candles
+):
+
+    output = img.copy()
+
     for number, candle in enumerate(
-        detected,
+        candles,
         start=1
     ):
-        left = candle["left"]
-        right = candle["right"]
+
+        x = int(candle["x"])
+        y = int(candle["y"])
+        w = int(candle["w"])
+        h = int(candle["h"])
+
+        # Yellow rectangle = detected body.
+        cv2.rectangle(
+            output,
+            (x, y),
+            (x + w, y + h),
+            (0, 255, 255),
+            2
+        )
+
+        # Green / red number shows classification.
         if candle["color"] == "GREEN":
-            box_color = (
+
+            label_color = (
                 0,
                 255,
                 0
             )
+
         else:
-            box_color = (
+
+            label_color = (
                 0,
                 0,
                 255
             )
-        # Full-height lane.
-        cv2.rectangle(
-            output,
-            (left, 0),
-            (right, height - 1),
-            box_color,
-            2
-        )
-        # Number at top.
+
         cv2.putText(
             output,
-            f"{number}",
+            str(number),
             (
-                left,
-                30
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.75,
-            box_color,
-            2,
-            cv2.LINE_AA
-        )
-        # Color label.
-        label = candle["color"]
-        cv2.putText(
-            output,
-            label,
-            (
-                left,
-                min(
-                    height - 10,
-                    60
+                x,
+                max(
+                    25,
+                    y - 7
                 )
             ),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.50,
-            box_color,
+            0.60,
+            label_color,
             2,
             cv2.LINE_AA
         )
+
     return output
-# ============================================================
-# REPORT
-# ============================================================
-def create_report(
-    detected,
-    spacing
-):
-    green = sum(
-        1
-        for c in detected
-        if c["color"] == "GREEN"
-    )
-    red = sum(
-        1
-        for c in detected
-        if c["color"] == "RED"
-    )
-    total = len(
-        detected
-    )
-    sequence = []
-    for candle in detected:
-        if candle["color"] == "GREEN":
-            sequence.append("🟢 GREEN")
-        else:
-            sequence.append("🔴 RED")
-    return (
-        green,
-        red,
-        total,
-        sequence,
-        spacing
-    )
+
+
 # ============================================================
 # TELEGRAM PHOTO HANDLER
 # ============================================================
+
 @bot.message_handler(
     content_types=["photo"]
 )
 def handle_photo(message):
+
     start_time = time.time()
+
     original_path = (
-        "pocket_option_screenshot.png"
+        "chart_screenshot.png"
     )
+
     detection_path = (
-        "candle_full_screen_map.png"
+        "candle_detection.png"
     )
+
     try:
+
         bot.reply_to(
             message,
-            "👁️ Reading the entire screenshot...\n"
-            "Building full-height candle lanes..."
+            "👁️ Reading visible candles...\n"
+            "Checking green/red classification..."
         )
+
         # ----------------------------------------------------
-        # DOWNLOAD HIGHEST RESOLUTION PHOTO
+        # DOWNLOAD HIGHEST RESOLUTION
         # ----------------------------------------------------
+
         file_info = bot.get_file(
             message.photo[-1].file_id
         )
-        downloaded_file = bot.download_file(
-            file_info.file_path
+
+        downloaded_file = (
+            bot.download_file(
+                file_info.file_path
+            )
         )
+
         with open(
             original_path,
             "wb"
         ) as f:
+
             f.write(
                 downloaded_file
             )
+
         # ----------------------------------------------------
-        # LOAD ORIGINAL SCREENSHOT
+        # LOAD
         # ----------------------------------------------------
-        image = load_image(
+
+        img = load_image(
             original_path
         )
+
         # ----------------------------------------------------
         # DETECT
         # ----------------------------------------------------
-        detected, lanes, spacing = (
-            detect_candles(image)
+
+        candles = detect_candles(
+            img
         )
+
         # ----------------------------------------------------
-        # REPORT
+        # COUNT
         # ----------------------------------------------------
-        (
-            green,
-            red,
-            total,
-            sequence,
-            spacing
-        ) = create_report(
-            detected,
-            spacing
+
+        green, red = create_report(
+            candles
         )
+
+        total = len(candles)
+
         elapsed = (
             time.time()
             -
             start_time
         )
+
+        # ----------------------------------------------------
+        # SEQUENCE
+        # ----------------------------------------------------
+
+        sequence = []
+
+        for number, candle in enumerate(
+            candles,
+            start=1
+        ):
+
+            if candle["color"] == "GREEN":
+
+                sequence.append(
+                    f"{number}. 🟢 GREEN"
+                )
+
+            else:
+
+                sequence.append(
+                    f"{number}. 🔴 RED"
+                )
+
+        sequence_text = "\n".join(
+            sequence
+        )
+
+        # ----------------------------------------------------
+        # NO DETECTION
+        # ----------------------------------------------------
+
         if total == 0:
+
             bot.reply_to(
                 message,
-                "❌ No candle was confidently detected.\n\n"
-                "The detector did NOT invent a candle.\n"
-                "No OHLC data was generated.\n"
-                "No random candles were added.\n"
-                "No trading signal was generated."
+                "❌ No reliable candle bodies detected.\n\n"
+                "No candle was generated.\n"
+                "No random candle was added.\n"
+                "No signal was generated."
             )
+
             return
-        sequence_text = "\n".join(
-            f"{i}. {value}"
-            for i, value in enumerate(
-                sequence,
-                start=1
-            )
-        )
+
+        # ----------------------------------------------------
+        # RESULT
+        # ----------------------------------------------------
+
         report = (
-            "🔎 **CANDLE VISION TEST**\n\n"
-            "📱 **FULL SCREEN SCAN**\n"
+            "🔎 **CANDLE READING TEST**\n\n"
+
+            "📊 **WHAT THE BOT ACTUALLY DETECTED:**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
-            f"📐 Screenshot: "
-            f"{image.shape[1]} × {image.shape[0]}\n"
-            f"📏 Estimated candle spacing: "
-            f"{spacing}px\n\n"
-            "📊 **ACTUAL DETECTION:**\n"
+
+            f"🟢 GREEN: {green}\n"
+            f"🔴 RED: {red}\n"
+            f"📊 TOTAL: {total}\n\n"
+
+            "🕯️ **CANDLE-BY-CANDLE READING:**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
-            f"🟢 Green candles: {green}\n"
-            f"🔴 Red candles: {red}\n"
-            f"📊 Total candles: {total}\n\n"
-            "🕯️ **LEFT → RIGHT:**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
+
             f"{sequence_text}\n\n"
+
             "━━━━━━━━━━━━━━━━━━━━\n"
-            "🔬 **METHOD:**\n"
-            "• Entire screenshot scanned\n"
-            "• Full-height vertical candle lanes\n"
-            "• Small candle width\n"
-            "• Adaptive candle spacing\n"
-            "• Actual green/red pixel evidence\n"
-            "• Ambiguous objects are NOT forced\n\n"
+
+            "🎯 **COLOR CHECK:**\n"
+            "🟢 = Bot believes candle is GREEN\n"
+            "🔴 = Bot believes candle is RED\n\n"
+
             "⚠️ **TEST ONLY**\n"
-            "No OHLC candles generated.\n"
-            "No random candles added.\n"
-            "No trading signal generated.\n\n"
+            "No OHLC data is generated.\n"
+            "No random candles are added.\n"
+            "No trading signal is generated.\n\n"
+
             f"⚡ Processing time: "
             f"{elapsed:.2f}s"
         )
+
         bot.reply_to(
             message,
             report,
             parse_mode="Markdown"
         )
+
         # ----------------------------------------------------
-        # DIAGNOSTIC MAP
+        # DETECTION MAP
         # ----------------------------------------------------
-        diagnostic = create_detection_map(
-            image,
-            detected,
-            lanes,
-            spacing
+
+        detection_map = (
+            create_detection_map(
+                img,
+                candles
+            )
         )
+
         cv2.imwrite(
             detection_path,
-            diagnostic
+            detection_map
         )
+
+        # ----------------------------------------------------
+        # SEND MAP
+        # ----------------------------------------------------
+
         with open(
             detection_path,
             "rb"
         ) as photo:
+
             bot.send_photo(
                 message.chat.id,
                 photo,
                 caption=(
-                    "📱 FULL-SCREEN CANDLE MAP\n\n"
-                    "🟢 Green lane = detector classified "
-                    "a candle as GREEN.\n"
-                    "🔴 Red lane = detector classified "
-                    "a candle as RED.\n"
-                    "🟡 Thin line = inspected candle position.\n\n"
-                    "The lane covers the full height of "
-                    "the screenshot.\n\n"
-                    "A lane by itself is NOT counted as "
-                    "a candle."
-                )
+                    "🔢 **CANDLE DETECTION MAP**\n\n"
+
+                    "🟨 Yellow box = detected candle body\n"
+                    "🟢 Green number = classified GREEN\n"
+                    "🔴 Red number = classified RED\n\n"
+
+                    "Check every box against the actual "
+                    "candle in your screenshot.\n\n"
+
+                    "The detector does NOT create missing "
+                    "candles or fill empty spaces."
+                ),
+                parse_mode="Markdown"
             )
-    except Exception as error:
+
+    except Exception as e:
+
         print(
             "❌ ERROR:",
-            repr(error)
+            repr(e)
         )
+
         bot.reply_to(
             message,
-            "❌ Detection error:\n"
-            f"{str(error)}"
+            f"❌ Detection error:\n{str(e)}"
         )
+
     finally:
-        for path in (
+
+        for path in [
             original_path,
             detection_path
-        ):
+        ]:
+
             if os.path.exists(path):
+
                 try:
+
                     os.remove(path)
+
                 except Exception:
+
                     pass
+
+
 # ============================================================
 # START
 # ============================================================
+
 print(
     "========================================"
 )
+
 print(
-    "📱 POCKET OPTION FULL-SCREEN "
-    "CANDLE VISION TEST"
+    "🕯️ CANDLE READING TEST"
 )
+
 print(
     "========================================"
 )
+
 print(
-    "Entire screenshot will be scanned."
+    "Previous detector architecture."
 )
+
 print(
-    "Vertical lanes cover the full screen."
+    "Small right-side improvement."
 )
+
 print(
-    "No forced candle count."
+    "Color classification preserved."
 )
+
 print(
-    "No fake candles."
+    "No aggressive vertical scanning."
 )
+
 print(
     "No OHLC generation."
 )
+
+print(
+    "No random candles."
+)
+
 print(
     "No trading signals."
 )
+
 print(
     "========================================"
 )
+
 bot.infinity_polling(
     timeout=30,
     long_polling_timeout=30
