@@ -1,5 +1,7 @@
+flask
 python-telegram-bot
-opencv-python-headless
+requests
 numpy
+opencv-python
 pytesseract
 Pillow
