@@ -24,7 +24,7 @@ from datetime import datetime, timezone, timedelta
 # TELEGRAM CREDENTIALS
 # ============================================================
 
-TOKEN = "8846196749:AAH_BwZEgcD1RCUUxwYPIkYjqfTCOlOZSHo"
+TOKEN = "8937673241:AAGvyTA-G12xfwMlhif3Nh4_2Ag8OStq3tU"
 
 CHAT_ID = "6280535707"
 CHANNEL_ID = "-1004324805205"
