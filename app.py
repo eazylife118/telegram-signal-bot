@@ -22,7 +22,7 @@ from telegram.ext import (
 # TELEGRAM
 # ============================================================
 
-TOKEN = os.getenv("BOT_TOKEN", "")
+TOKEN = "8937673241:AAGvyTA-G12xfwMlhif3Nh4_2Ag8OStq3tU"
 
 if not TOKEN:
     print("⚠️ BOT_TOKEN environment variable is not set.")
