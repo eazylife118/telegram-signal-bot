@@ -2,5 +2,7 @@ Flask
 python-telegram-bot
 requests
 opencv-python-headless
-pytesseract
+easyocr
+torch
+torchvision
 numpy
