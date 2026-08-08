@@ -2,9 +2,10 @@ import os
 import cv2
 import numpy as np
 import telebot
+import time
 
 # ============================================================
-# TELEGRAM CONFIGURATION
+# TELEGRAM
 # ============================================================
 
 TELEGRAM_TOKEN = os.getenv(
@@ -14,40 +15,46 @@ TELEGRAM_TOKEN = os.getenv(
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-
 # ============================================================
-# IMAGE SETTINGS
-# ============================================================
-
-MIN_BODY_AREA = 25
-MIN_BODY_HEIGHT = 3
-MAX_BODY_WIDTH = 80
-
-# Minimum amount of colored pixels needed to consider
-# a vertical region a possible candle body.
-MIN_COLOR_PIXELS = 20
-
-
-# ============================================================
-# LOAD AND PREPARE IMAGE
+# DETECTION SETTINGS
 # ============================================================
 
-def prepare_image(image_path):
-    img = cv2.imread(image_path)
+MIN_COLOR_PIXELS = 8
+MIN_BODY_AREA = 12
+MIN_BODY_HEIGHT = 2
+
+# Pocket Option screenshots normally have candles distributed
+# across the chart horizontally.
+MIN_CANDLE_WIDTH = 2
+MAX_CANDLE_WIDTH_RATIO = 0.045
+
+# Distance used when combining pieces belonging to one candle.
+MERGE_DISTANCE_RATIO = 0.55
+
+
+# ============================================================
+# IMAGE PREPARATION
+# ============================================================
+
+def load_image(path):
+
+    img = cv2.imread(path)
 
     if img is None:
-        raise ValueError("Could not read the screenshot.")
+        raise ValueError("Could not read screenshot.")
 
-    height, width = img.shape[:2]
+    h, w = img.shape[:2]
 
     # Upscale small screenshots.
-    if width < 1400:
-        scale = 1400 / width
+    if w < 1400:
+
+        scale = 1400 / w
+
         img = cv2.resize(
             img,
             (
-                int(width * scale),
-                int(height * scale)
+                int(w * scale),
+                int(h * scale)
             ),
             interpolation=cv2.INTER_CUBIC
         )
@@ -56,60 +63,96 @@ def prepare_image(image_path):
 
 
 # ============================================================
-# COLOR MASKS
+# COLOR DETECTION
 # ============================================================
 
-def create_masks(img):
+def get_color_masks(img):
 
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    hsv = cv2.cvtColor(
+        img,
+        cv2.COLOR_BGR2HSV
+    )
 
+    # --------------------------------------------------------
     # GREEN / BULLISH
-    green_lower = np.array([35, 50, 40])
-    green_upper = np.array([90, 255, 255])
+    # --------------------------------------------------------
 
-    green_mask = cv2.inRange(
+    green_lower = np.array([
+        30,
+        35,
+        35
+    ])
+
+    green_upper = np.array([
+        95,
+        255,
+        255
+    ])
+
+    green = cv2.inRange(
         hsv,
         green_lower,
         green_upper
     )
 
+    # --------------------------------------------------------
     # RED / BEARISH
-    red_lower_1 = np.array([0, 50, 40])
-    red_upper_1 = np.array([12, 255, 255])
+    # --------------------------------------------------------
 
-    red_lower_2 = np.array([168, 50, 40])
-    red_upper_2 = np.array([180, 255, 255])
+    red_lower_1 = np.array([
+        0,
+        35,
+        35
+    ])
 
-    red_mask_1 = cv2.inRange(
+    red_upper_1 = np.array([
+        15,
+        255,
+        255
+    ])
+
+    red_lower_2 = np.array([
+        165,
+        35,
+        35
+    ])
+
+    red_upper_2 = np.array([
+        180,
+        255,
+        255
+    ])
+
+    red1 = cv2.inRange(
         hsv,
         red_lower_1,
         red_upper_1
     )
 
-    red_mask_2 = cv2.inRange(
+    red2 = cv2.inRange(
         hsv,
         red_lower_2,
         red_upper_2
     )
 
-    red_mask = cv2.bitwise_or(
-        red_mask_1,
-        red_mask_2
+    red = cv2.bitwise_or(
+        red1,
+        red2
     )
 
-    return green_mask, red_mask
+    return green, red
 
 
 # ============================================================
-# FIND CANDLE BODIES
+# FIND COLORED REGIONS
 # ============================================================
 
-def find_body_candidates(mask, color):
+def find_candidates(mask, color, image_width):
 
-    # Remove tiny isolated pixels.
+    # Remove isolated noise.
     kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
-        (3, 3)
+        (2, 2)
     )
 
     cleaned = cv2.morphologyEx(
@@ -118,16 +161,16 @@ def find_body_candidates(mask, color):
         kernel
     )
 
-    # Slightly connect pieces belonging to the same candle body.
-    kernel_close = cv2.getStructuringElement(
+    # Connect small gaps inside candle bodies.
+    close_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
-        (5, 3)
+        (3, 3)
     )
 
     cleaned = cv2.morphologyEx(
         cleaned,
         cv2.MORPH_CLOSE,
-        kernel_close
+        close_kernel
     )
 
     contours, _ = cv2.findContours(
@@ -138,6 +181,11 @@ def find_body_candidates(mask, color):
 
     candidates = []
 
+    max_width = max(
+        10,
+        int(image_width * MAX_CANDLE_WIDTH_RATIO)
+    )
+
     for contour in contours:
 
         area = cv2.contourArea(contour)
@@ -145,29 +193,32 @@ def find_body_candidates(mask, color):
         if area < MIN_BODY_AREA:
             continue
 
-        x, y, w, h = cv2.boundingRect(contour)
+        x, y, w, h = cv2.boundingRect(
+            contour
+        )
 
         if h < MIN_BODY_HEIGHT:
             continue
 
-        if w > MAX_BODY_WIDTH:
+        if w < MIN_CANDLE_WIDTH:
             continue
 
-        # Reject extremely thin horizontal objects.
-        if w > h * 5:
+        if w > max_width:
             continue
 
-        # Reject extremely large objects that are unlikely
-        # to be individual candle bodies.
-        if area > 100000:
+        # Reject extremely wide horizontal objects.
+        if w > h * 6:
             continue
+
+        center_x = x + w / 2
 
         candidates.append({
             "x": x,
             "y": y,
             "w": w,
             "h": h,
-            "area": area,
+            "area": float(area),
+            "center_x": center_x,
             "color": color
         })
 
@@ -175,42 +226,40 @@ def find_body_candidates(mask, color):
 
 
 # ============================================================
-# MERGE CANDIDATES THAT BELONG TO THE SAME CANDLE
+# MERGE PIECES OF THE SAME CANDLE
 # ============================================================
 
-def merge_same_candles(candidates):
+def merge_candidates(candidates):
 
     if not candidates:
         return []
 
     candidates = sorted(
         candidates,
-        key=lambda c: c["x"]
+        key=lambda x: x["center_x"]
     )
 
     merged = []
 
     for candidate in candidates:
 
-        cx = candidate["x"] + candidate["w"] / 2
-
-        matched = False
+        found = False
 
         for existing in merged:
 
-            ecx = existing["x"] + existing["w"] / 2
-
-            # Candles normally occupy a compact horizontal area.
-            horizontal_distance = abs(cx - ecx)
-
-            max_width = max(
-                candidate["w"],
-                existing["w"]
+            distance = abs(
+                candidate["center_x"]
+                -
+                existing["center_x"]
             )
 
-            if horizontal_distance <= max_width * 0.65:
+            allowed = max(
+                candidate["w"],
+                existing["w"]
+            ) * MERGE_DISTANCE_RATIO
 
-                # Combine the two detections.
+            if distance <= allowed:
+
                 left = min(
                     existing["x"],
                     candidate["x"]
@@ -235,164 +284,188 @@ def merge_same_candles(candidates):
                 existing["y"] = top
                 existing["w"] = right - left
                 existing["h"] = bottom - top
+                existing["center_x"] = (
+                    left + existing["w"] / 2
+                )
                 existing["area"] += candidate["area"]
 
-                matched = True
+                found = True
                 break
 
-        if not matched:
-            merged.append(candidate.copy())
+        if not found:
+            merged.append(
+                candidate.copy()
+            )
 
     return merged
 
 
 # ============================================================
-# REMOVE OBVIOUS NON-CANDLE OBJECTS
+# REMOVE DUPLICATES BETWEEN COLORS
 # ============================================================
 
-def filter_candidates(candidates, image_width):
+def remove_overlapping_detections(candidates):
 
-    if not candidates:
-        return []
+    candidates = sorted(
+        candidates,
+        key=lambda x: x["center_x"]
+    )
 
     result = []
 
-    for c in candidates:
-
-        center_x = c["x"] + c["w"] / 2
-
-        # Ignore extreme edge objects where UI controls/
-        # labels commonly appear.
-        if center_x < image_width * 0.03:
-            continue
-
-        if center_x > image_width * 0.97:
-            continue
-
-        # Candle bodies should have a reasonable width.
-        if c["w"] < 2:
-            continue
-
-        if c["w"] > image_width * 0.08:
-            continue
-
-        result.append(c)
-
-    return result
-
-
-# ============================================================
-# CANDLE DETECTION
-# ============================================================
-
-def detect_candles(image_path):
-
-    img = prepare_image(image_path)
-
-    height, width = img.shape[:2]
-
-    green_mask, red_mask = create_masks(img)
-
-    green_candidates = find_body_candidates(
-        green_mask,
-        "GREEN"
-    )
-
-    red_candidates = find_body_candidates(
-        red_mask,
-        "RED"
-    )
-
-    green_candidates = merge_same_candles(
-        green_candidates
-    )
-
-    red_candidates = merge_same_candles(
-        red_candidates
-    )
-
-    green_candidates = filter_candidates(
-        green_candidates,
-        width
-    )
-
-    red_candidates = filter_candidates(
-        red_candidates,
-        width
-    )
-
-    # Combine all candidates.
-    all_candidates = (
-        green_candidates +
-        red_candidates
-    )
-
-    # Sort exactly as candles appear on the screenshot.
-    all_candidates.sort(
-        key=lambda c: c["x"]
-    )
-
-    # Prevent two overlapping detections at essentially
-    # the same horizontal position from becoming two candles.
-    final = []
-
-    for candle in all_candidates:
-
-        center = candle["x"] + candle["w"] / 2
+    for candle in candidates:
 
         duplicate = False
 
-        for existing in final:
-
-            existing_center = (
-                existing["x"] +
-                existing["w"] / 2
-            )
+        for existing in result:
 
             distance = abs(
-                center - existing_center
+                candle["center_x"]
+                -
+                existing["center_x"]
             )
 
-            if distance <= max(
+            threshold = max(
                 candle["w"],
                 existing["w"]
-            ) * 0.45:
+            ) * 0.6
+
+            if distance <= threshold:
 
                 duplicate = True
 
                 # Keep the stronger detection.
                 if candle["area"] > existing["area"]:
 
-                    index = final.index(existing)
-                    final[index] = candle
+                    index = result.index(
+                        existing
+                    )
+
+                    result[index] = candle
 
                 break
 
         if not duplicate:
-            final.append(candle)
+            result.append(candle)
 
-    final.sort(key=lambda c: c["x"])
-
-    return final
+    return result
 
 
 # ============================================================
-# ANALYSIS REPORT
+# DETECT CANDLES
 # ============================================================
 
-def analyze_screenshot(image_path):
+def detect_candles(img):
 
-    candles = detect_candles(image_path)
+    height, width = img.shape[:2]
 
-    green = [
-        c for c in candles
+    green_mask, red_mask = get_color_masks(
+        img
+    )
+
+    green_candidates = find_candidates(
+        green_mask,
+        "GREEN",
+        width
+    )
+
+    red_candidates = find_candidates(
+        red_mask,
+        "RED",
+        width
+    )
+
+    green_candidates = merge_candidates(
+        green_candidates
+    )
+
+    red_candidates = merge_candidates(
+        red_candidates
+    )
+
+    all_candidates = (
+        green_candidates +
+        red_candidates
+    )
+
+    all_candidates = remove_overlapping_detections(
+        all_candidates
+    )
+
+    all_candidates.sort(
+        key=lambda x: x["center_x"]
+    )
+
+    return all_candidates
+
+
+# ============================================================
+# ANNOTATED IMAGE
+# ============================================================
+
+def create_annotated_image(img, candles):
+
+    output = img.copy()
+
+    for number, candle in enumerate(
+        candles,
+        start=1
+    ):
+
+        x = candle["x"]
+        y = candle["y"]
+        w = candle["w"]
+        h = candle["h"]
+
+        # Draw detection rectangle.
+        cv2.rectangle(
+            output,
+            (x, y),
+            (x + w, y + h),
+            (255, 255, 0),
+            2
+        )
+
+        # Candle number.
+        label = str(number)
+
+        text_x = x
+        text_y = max(
+            25,
+            y - 8
+        )
+
+        cv2.putText(
+            output,
+            label,
+            (text_x, text_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (255, 255, 0),
+            2,
+            cv2.LINE_AA
+        )
+
+    return output
+
+
+# ============================================================
+# REPORT
+# ============================================================
+
+def create_report(candles):
+
+    green = sum(
+        1
+        for c in candles
         if c["color"] == "GREEN"
-    ]
+    )
 
-    red = [
-        c for c in candles
+    red = sum(
+        1
+        for c in candles
         if c["color"] == "RED"
-    ]
+    )
 
     sequence = []
 
@@ -403,31 +476,34 @@ def analyze_screenshot(image_path):
         else:
             sequence.append("🔴")
 
-    return {
-        "green": len(green),
-        "red": len(red),
-        "total": len(candles),
-        "sequence": sequence
-    }
+    return green, red, sequence
 
 
 # ============================================================
 # TELEGRAM PHOTO HANDLER
 # ============================================================
 
-@bot.message_handler(content_types=["photo"])
+@bot.message_handler(
+    content_types=["photo"]
+)
 def handle_photo(message):
 
-    image_path = "chart_screenshot.png"
+    start_time = time.time()
+
+    original_path = "chart_screenshot.png"
+    annotated_path = "candle_detection.png"
 
     try:
 
         bot.reply_to(
             message,
-            "👁️ Reading the visible candlesticks..."
+            "👁️ Reading the visible candles..."
         )
 
-        # Download highest-resolution Telegram photo.
+        # ----------------------------------------------------
+        # DOWNLOAD HIGHEST RESOLUTION IMAGE
+        # ----------------------------------------------------
+
         file_info = bot.get_file(
             message.photo[-1].file_id
         )
@@ -436,33 +512,59 @@ def handle_photo(message):
             file_info.file_path
         )
 
-        with open(image_path, "wb") as f:
-            f.write(downloaded_file)
+        with open(
+            original_path,
+            "wb"
+        ) as f:
 
-        # Analyze actual screenshot.
-        result = analyze_screenshot(
-            image_path
+            f.write(
+                downloaded_file
+            )
+
+        # ----------------------------------------------------
+        # LOAD
+        # ----------------------------------------------------
+
+        img = load_image(
+            original_path
         )
 
-        green = result["green"]
-        red = result["red"]
-        total = result["total"]
-        sequence = result["sequence"]
+        # ----------------------------------------------------
+        # DETECT
+        # ----------------------------------------------------
+
+        candles = detect_candles(
+            img
+        )
+
+        # ----------------------------------------------------
+        # REPORT
+        # ----------------------------------------------------
+
+        green, red, sequence = create_report(
+            candles
+        )
+
+        total = len(candles)
+
+        elapsed = time.time() - start_time
 
         if total == 0:
 
             bot.reply_to(
                 message,
-                "❌ No reliable candle bodies were detected.\n\n"
-                "No candles were invented or generated."
+                "❌ No reliable candle bodies detected.\n\n"
+                "No candles were generated or guessed."
             )
 
             return
 
-        sequence_text = " → ".join(sequence)
+        sequence_text = " → ".join(
+            sequence
+        )
 
-        reply = (
-            "🔎 **CANDLE DETECTION TEST**\n\n"
+        report = (
+            "🔎 **CANDLE VISION TEST**\n\n"
             "📊 **WHAT THE BOT ACTUALLY DETECTED:**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"🟢 Green candles: {green}\n"
@@ -472,22 +574,59 @@ def handle_photo(message):
             f"{sequence_text}\n\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "⚠️ **IMPORTANT:**\n"
-            "Only visually detected candle bodies are counted.\n"
+            "Only visually detected candle objects are counted.\n"
             "No OHLC candles are generated.\n"
             "No random candles are added.\n"
-            "No trading signal is generated."
+            "No trading signal is generated.\n\n"
+            f"⚡ Processing time: {elapsed:.2f}s"
         )
 
         bot.reply_to(
             message,
-            reply,
+            report,
             parse_mode="Markdown"
         )
+
+        # ----------------------------------------------------
+        # CREATE NUMBERED DIAGNOSTIC IMAGE
+        # ----------------------------------------------------
+
+        annotated = create_annotated_image(
+            img,
+            candles
+        )
+
+        cv2.imwrite(
+            annotated_path,
+            annotated
+        )
+
+        # ----------------------------------------------------
+        # SEND NUMBERED IMAGE
+        # ----------------------------------------------------
+
+        with open(
+            annotated_path,
+            "rb"
+        ) as photo:
+
+            bot.send_photo(
+                message.chat.id,
+                photo,
+                caption=(
+                    "🔢 **DETECTION MAP**\n\n"
+                    "Every numbered box is one candle "
+                    "the detector believes it found.\n\n"
+                    "🟢/🔴 classification is based on "
+                    "the detected candle color."
+                ),
+                parse_mode="Markdown"
+            )
 
     except Exception as e:
 
         print(
-            "ERROR:",
+            "❌ ERROR:",
             repr(e)
         )
 
@@ -498,22 +637,38 @@ def handle_photo(message):
 
     finally:
 
-        if os.path.exists(image_path):
+        for path in [
+            original_path,
+            annotated_path
+        ]:
 
-            try:
-                os.remove(image_path)
-            except:
-                pass
+            if os.path.exists(path):
+
+                try:
+                    os.remove(path)
+                except:
+                    pass
 
 
 # ============================================================
-# START BOT
+# START
 # ============================================================
 
-print("========================================")
-print("🕯️ CANDLE DETECTION TEST BOT")
-print("========================================")
-print("Bot is listening for screenshots...")
+print(
+    "========================================"
+)
+
+print(
+    "🕯️ CANDLE DETECTION VISION TEST"
+)
+
+print(
+    "========================================"
+)
+
+print(
+    "Bot is listening for screenshots..."
+)
 
 bot.infinity_polling(
     timeout=30,
