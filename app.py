@@ -66,8 +66,8 @@ def run_flask():
 def count_real_candles(image_path):
     """
     Count EVERY visible candle in the screenshot.
-    Maximum detection range — captures full chart.
-    No fake data. No generation. Just real pixels.
+    Captures the FULL chart with maximum range.
+    Detects red AND green correctly.
     """
 
     img = cv2.imread(image_path)
@@ -77,14 +77,14 @@ def count_real_candles(image_path):
     height, width = img.shape[:2]
 
     # ==========================================================
-    # MAXIMUM CHART CROP — Capture the ENTIRE chart area
+    # MAXIMUM CHART CROP — Capture the ENTIRE chart
     # ==========================================================
 
-    # Aggressive crop to capture every possible candle
-    top = int(height * 0.05)      # Almost to the top
-    bottom = int(height * 0.92)   # Almost to the bottom
-    left = int(width * 0.01)      # Almost to the left edge
-    right = int(width * 0.98)     # Almost to the right edge
+    # WIDEST possible crop — capture everything
+    top = int(height * 0.03)      # Almost the very top
+    bottom = int(height * 0.94)   # Almost the very bottom
+    left = int(width * 0.01)      # Almost the very left
+    right = int(width * 0.99)     # Almost the very right
 
     chart = img[top:bottom, left:right]
     chart_height, chart_width = chart.shape[:2]
@@ -92,10 +92,10 @@ def count_real_candles(image_path):
     print(f"📏 Chart crop: {chart_width} x {chart_height} pixels")
 
     # ==========================================================
-    # ENHANCE IMAGE FOR BETTER DETECTION
+    # ENHANCE IMAGE
     # ==========================================================
 
-    # Increase contrast
+    # Increase contrast for better color detection
     lab = cv2.cvtColor(chart, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
@@ -103,7 +103,7 @@ def count_real_candles(image_path):
     chart = cv2.merge((l, a, b))
     chart = cv2.cvtColor(chart, cv2.COLOR_LAB2BGR)
 
-    # Convert to HSV for accurate color detection
+    # Convert to HSV
     hsv = cv2.cvtColor(chart, cv2.COLOR_BGR2HSV)
 
     # ==========================================================
@@ -115,39 +115,64 @@ def count_real_candles(image_path):
     green = cv2.inRange(hsv, green_lower, green_upper)
 
     # ==========================================================
-    # REAL RED CANDLES — Wide range
+    # REAL RED CANDLES — MUCH WIDER RANGE
     # ==========================================================
 
-    red1_lower = np.array([0, 30, 30])
-    red1_upper = np.array([15, 255, 255])
-    red2_lower = np.array([160, 30, 30])
-    red2_upper = np.array([180, 255, 255])
+    # Red appears in TWO ranges in HSV
+    red1_lower = np.array([0, 25, 25])
+    red1_upper = np.array([20, 255, 255])   # Expanded from 12 to 20
+
+    red2_lower = np.array([155, 25, 25])
+    red2_upper = np.array([185, 255, 255])  # Expanded from 180 to 185
+
     red1 = cv2.inRange(hsv, red1_lower, red1_upper)
     red2 = cv2.inRange(hsv, red2_lower, red2_upper)
     red = cv2.bitwise_or(red1, red2)
 
     # ==========================================================
-    # DETECT WHITE/BULLISH CANDLES (sometimes Pocket Option uses white)
+    # FALLBACK: Detect red using brightness/color difference
+    # ==========================================================
+
+    # Convert to BGR for pixel-level red detection
+    b, g, r = cv2.split(chart)
+
+    # Red pixels: where red channel is significantly higher than green and blue
+    red_fallback = cv2.bitwise_and(
+        cv2.bitwise_and(
+            (r > g + 15).astype(np.uint8) * 255,
+            (r > b + 15).astype(np.uint8) * 255
+        ),
+        (r > 30).astype(np.uint8) * 255
+    )
+
+    # Combine HSV red + fallback red
+    red = cv2.bitwise_or(red, red_fallback)
+
+    # ==========================================================
+    # WHITE/BULLISH CANDLES
     # ==========================================================
 
     white_lower = np.array([0, 0, 180])
     white_upper = np.array([180, 30, 255])
     white = cv2.inRange(hsv, white_lower, white_upper)
 
-    # Combine all candle pixels
+    # ==========================================================
+    # COMBINE ALL CANDLE PIXELS
+    # ==========================================================
+
     combined = cv2.bitwise_or(green, red)
     combined = cv2.bitwise_or(combined, white)
 
     # ==========================================================
-    # MORPHOLOGICAL CLEANING — Preserve small candles
+    # CLEAN UP
     # ==========================================================
 
-    kernel = np.ones((1, 1), np.uint8)
+    kernel = np.ones((2, 2), np.uint8)
     combined = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel)
     combined = cv2.morphologyEx(combined, cv2.MORPH_CLOSE, kernel)
 
     # ==========================================================
-    # FIND ALL CANDLES — Every contour is a candle
+    # FIND ALL CONTOURS
     # ==========================================================
 
     contours, _ = cv2.findContours(combined, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -157,17 +182,17 @@ def count_real_candles(image_path):
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
 
-        # --- MINIMAL FILTERING — Only reject absolute noise ---
-        if h < 3:       # Too short to be a candle
+        # Minimal filtering
+        if h < 3:
             continue
-        if w < 1:       # Too narrow
+        if w < 1:
             continue
-        if w > chart_width * 0.18:  # Too wide (likely not a candle)
+        if w > chart_width * 0.20:
             continue
-        if h > chart_height * 0.90:  # Too tall (likely not a candle)
+        if h > chart_height * 0.92:
             continue
 
-        # Check actual color in this region
+        # Check color in this region
         roi_green = green[y:y+h, x:x+w]
         roi_red = red[y:y+h, x:x+w]
         roi_white = white[y:y+h, x:x+w]
@@ -177,11 +202,11 @@ def count_real_candles(image_path):
         white_pixels = np.sum(roi_white > 0)
         total_pixels = green_pixels + red_pixels + white_pixels
 
-        if total_pixels < 3:  # Almost no color — noise
+        if total_pixels < 3:
             continue
 
         # Determine color (white counts as bullish/green)
-        if green_pixels + white_pixels > red_pixels:
+        if green_pixels + white_pixels >= red_pixels:
             color = "GREEN"
         else:
             color = "RED"
@@ -191,11 +216,14 @@ def count_real_candles(image_path):
             "y": y,
             "w": w,
             "h": h,
-            "color": color
+            "color": color,
+            "green_pixels": green_pixels,
+            "red_pixels": red_pixels,
+            "white_pixels": white_pixels
         })
 
     # ==========================================================
-    # MERGE OVERLAPPING/TOUCHING CANDLES
+    # MERGE TOUCHING CANDLES
     # ==========================================================
 
     candles.sort(key=lambda c: c["x"])
@@ -208,7 +236,6 @@ def count_real_candles(image_path):
 
         last = merged[-1]
 
-        # If overlapping or touching horizontally
         if candle["x"] <= last["x"] + last["w"] + 3:
             new_x = min(last["x"], candle["x"])
             new_w = max(last["x"] + last["w"], candle["x"] + candle["w"]) - new_x
@@ -219,11 +246,20 @@ def count_real_candles(image_path):
             last["y"] = new_y
             last["w"] = new_w
             last["h"] = new_h
+            last["green_pixels"] += candle["green_pixels"]
+            last["red_pixels"] += candle["red_pixels"]
+            last["white_pixels"] += candle["white_pixels"]
+
+            # Recalculate color after merge
+            if last["green_pixels"] + last["white_pixels"] >= last["red_pixels"]:
+                last["color"] = "GREEN"
+            else:
+                last["color"] = "RED"
         else:
             merged.append(candle)
 
     # ==========================================================
-    # FINAL COUNT — REAL DATA ONLY
+    # FINAL COUNT
     # ==========================================================
 
     total = len(merged)
@@ -231,6 +267,10 @@ def count_real_candles(image_path):
     red_count = sum(1 for c in merged if c["color"] == "RED")
 
     print(f"📊 Detected: {total} candles ({green_count} green, {red_count} red)")
+
+    # Debug: print red pixel info
+    total_red_pixels = sum(c["red_pixels"] for c in merged)
+    print(f"🔴 Total red pixels: {total_red_pixels}")
 
     return {
         "total": total,
@@ -287,15 +327,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         green = result["green"]
         red = result["red"]
 
-        # Build confidence message
-        if total >= 40:
+        # Status based on count
+        if total >= 45:
             status = "✅ **Excellent** — Full chart detected"
-        elif total >= 25:
-            status = "⚠️ **Good** — Partial chart detected"
-        elif total >= 10:
-            status = "⚠️ **Low** — Only part of the chart captured"
+        elif total >= 30:
+            status = "✅ **Good** — Most of the chart detected"
+        elif total >= 20:
+            status = "⚠️ **Partial** — Only part of the chart captured"
         else:
-            status = "❌ **Very Low** — Chart crop may be too narrow"
+            status = "❌ **Low** — Chart crop may be too narrow"
 
         message = (
             "📊 **REAL CANDLE COUNT**\n\n"
