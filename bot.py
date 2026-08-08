@@ -16,7 +16,7 @@ import re
 # ==========================================
 # TELEGRAM CREDENTIALS
 # ==========================================
-TOKEN = "8846196749:AAHxqCpbH9MUQmXUWPmsYI_ktRDYT8mxndc"
+TOKEN = "8846196749:AAH_BwZEgcD1RCUUxwYPIkYjqfTCOlOZSHo"
 CHAT_ID = "6280535707"
 CHANNEL_ID = "-1004324805205"
 
