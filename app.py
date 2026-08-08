@@ -529,19 +529,3 @@ def main():
     )
 if __name__ == "__main__":
     main()
-
-Requirements:
-
-python-telegram-bot
-opencv-python-headless
-numpy
-pytesseract
-Pillow
-
-And make sure Tesseract itself is installed in the environment if your hosting service doesn’t already provide it.
-
-:::
-### One important point
-I deliberately **didn't put a fake “50-candle minimum” into the code**. If there are 50 visible candles and the detector only finds 25, it must report 25. We need to make the visual detector actually find the missing 25.
-Also, **don't test this with a cropped chart** if your goal is to count everything visible. Send the same full Pocket Option screenshot you normally use.
-Once you test this, send me the bot's exact **Green / Red / Total / sequence** result. From that single test we can see whether the problem is **missing candles, merged candles, or false detections** before we touch your reversal strategy.
