@@ -1,6 +1,5 @@
-Flask
-requests
-numpy
-opencv-python-headless
-pytesseract
 python-telegram-bot
+opencv-python-headless
+numpy
+pytesseract
+Pillow
