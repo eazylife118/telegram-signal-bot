@@ -1,19 +1,19 @@
 import os
-import time
 import io
-import base64
+import time
 import telebot
 from PIL import Image
 from google import genai
+from google.genai import types
 # ============================================================
-# CONFIGURATION
+# ENVIRONMENT
 # ============================================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing from Render Environment Variables.")
+    raise RuntimeError("BOT_TOKEN is missing.")
 if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is missing from Render Environment Variables.")
+    raise RuntimeError("GEMINI_API_KEY is missing.")
 # ============================================================
 # TELEGRAM
 # ============================================================
@@ -24,65 +24,48 @@ bot = telebot.TeleBot(BOT_TOKEN)
 client = genai.Client(
     api_key=GEMINI_API_KEY
 )
-# Use a current Gemini model available through the GenAI API.
 MODEL_NAME = "gemini-2.5-flash"
 # ============================================================
-# GEMINI VISION PROMPT
+# VISION INSTRUCTIONS
 # ============================================================
-VISION_PROMPT = """
-You are a visual candle-reading assistant.
-Analyze ONLY the uploaded screenshot.
-IMPORTANT RULES:
-1. Do NOT invent candles.
-2. Do NOT create OHLC data.
-3. Do NOT assume a candle exists because of empty space.
-4. Do NOT force the result to a particular number of candles.
-5. Do NOT generate trading signals.
-6. Do NOT predict the next candle.
-7. Do NOT use random data.
-Your job is ONLY to identify candle bodies that are visibly present.
-Look across the ENTIRE uploaded screenshot from the far LEFT to the far RIGHT.
-For every visibly identifiable candle:
-- identify its approximate left-to-right position
-- classify its BODY as GREEN or RED
-- ignore BUY/SELL buttons and interface elements
-- ignore empty background
-- ignore text
-- ignore horizontal chart lines
-- ignore buttons
-- ignore interface decorations
-- ignore isolated colored pixels that are clearly not candle bodies
-- do not count the same candle twice
-A candle may have:
-- a small body
-- a large body
-- a doji/small body
-- a wick
-The candle body is more important than the wick.
-Do NOT treat a long thin vertical line by itself as a candle unless there is clear evidence that it belongs to a candle body.
-For the final answer, provide:
+PROMPT = """
+Analyze this screenshot as a candle-vision test.
+IMPORTANT:
+- Examine the COMPLETE screenshot from 0% to 100%.
+- Do not crop the image.
+- Do not invent candles.
+- Do not generate OHLC data.
+- Do not use random candles.
+- Do not force a candle count.
+- Do not create a trading signal.
+- Do not count empty space as a candle.
+- Do not count BUY or SELL buttons.
+- Do not count text or interface elements.
+- Do not count chart decorations.
+- Do not count isolated vertical lines unless they clearly belong to a candle.
+- Count only visibly identifiable candle bodies.
+For every candle you can actually see, classify the BODY:
+GREEN or RED.
+Read them from LEFT to RIGHT.
+Small candle bodies and doji candles should still be considered, but only when there is actual visible evidence of a candle.
+Return exactly this structure:
 GREEN COUNT: number
 RED COUNT: number
 TOTAL: number
-Then provide the candle sequence from LEFT to RIGHT using:
+SEQUENCE:
 1. GREEN
 2. RED
 3. GREEN
-etc.
-Then provide a short confidence note explaining whether some candles are difficult to identify.
-Remember:
-This is a VISION TEST ONLY.
+Then:
+CONFIDENCE:
+Briefly explain whether any candles were difficult to identify.
+This is ONLY a visual candle-reading test.
 There is NO trading signal.
 """
 # ============================================================
-# IMAGE PREPARATION
+# PREPARE IMAGE
 # ============================================================
 def prepare_image(image_bytes):
-    """
-    Opens the Telegram image and converts it to JPEG.
-    No crop is applied.
-    The complete uploaded screenshot is preserved.
-    """
     image = Image.open(
         io.BytesIO(image_bytes)
     )
@@ -93,39 +76,49 @@ def prepare_image(image_bytes):
         format="JPEG",
         quality=95
     )
-    output.seek(0)
-    return output.read()
+    return output.getvalue()
 # ============================================================
-# GEMINI VISION
+# GEMINI IMAGE ANALYSIS
 # ============================================================
-def analyze_image(image_bytes):
-    image_data = prepare_image(
+def analyze_with_gemini(image_bytes):
+    jpeg_data = prepare_image(
         image_bytes
     )
-    image_part = {
-        "mime_type": "image/jpeg",
-        "data": image_data
-    }
+    image_part = types.Part.from_bytes(
+        data=jpeg_data,
+        mime_type="image/jpeg"
+    )
     response = client.models.generate_content(
         model=MODEL_NAME,
         contents=[
-            VISION_PROMPT,
-            image_part
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(
+                        text=PROMPT
+                    ),
+                    image_part
+                ]
+            )
         ]
     )
-    if not response or not response.text:
+    if response is None:
+        raise RuntimeError(
+            "Gemini returned no response."
+        )
+    if not response.text:
         raise RuntimeError(
             "Gemini returned an empty response."
         )
     return response.text.strip()
 # ============================================================
-# TELEGRAM PHOTO HANDLER
+# TELEGRAM PHOTO
 # ============================================================
 @bot.message_handler(
     content_types=["photo"]
 )
 def handle_photo(message):
-    start_time = time.time()
+    start = time.time()
     try:
         bot.reply_to(
             message,
@@ -133,7 +126,7 @@ def handle_photo(message):
             "Checking GREEN and RED candle bodies."
         )
         # ----------------------------------------------------
-        # GET HIGHEST TELEGRAM PHOTO RESOLUTION
+        # DOWNLOAD ORIGINAL HIGH-RES TELEGRAM IMAGE
         # ----------------------------------------------------
         file_info = bot.get_file(
             message.photo[-1].file_id
@@ -141,29 +134,39 @@ def handle_photo(message):
         image_bytes = bot.download_file(
             file_info.file_path
         )
+        print(
+            f"📸 Image received: "
+            f"{len(image_bytes)} bytes"
+        )
         # ----------------------------------------------------
-        # GEMINI ANALYSIS
+        # GEMINI
         # ----------------------------------------------------
-        result = analyze_image(
+        print(
+            "🧠 Sending screenshot to Gemini..."
+        )
+        result = analyze_with_gemini(
             image_bytes
+        )
+        print(
+            "✅ Gemini response received."
         )
         elapsed = (
             time.time()
-            - start_time
+            - start
         )
         # ----------------------------------------------------
-        # FORMAT RESPONSE
+        # SEND RESULT
         # ----------------------------------------------------
         report = (
             "🔎 **CANDLE VISION TEST**\n\n"
             "🟡 **DETECTION AREA:**\n"
             "Entire uploaded screenshot — 0% to 100%\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"{result}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{result}\n\n"
             "━━━━━━━━━━━━━━━━━━━━\n\n"
             "🎯 **COLOR CHECK**\n"
-            "🟢 GREEN = Gemini visually identified a green candle body\n"
-            "🔴 RED = Gemini visually identified a red candle body\n\n"
+            "🟢 GREEN = visually classified GREEN\n"
+            "🔴 RED = visually classified RED\n\n"
             "⚠️ **TEST ONLY**\n"
             "No OHLC candles are generated.\n"
             "No random candles are added.\n"
@@ -176,23 +179,23 @@ def handle_photo(message):
             parse_mode="Markdown"
         )
     except Exception as e:
-        print(
-            "❌ VISION ERROR:",
-            repr(e)
-        )
         elapsed = (
             time.time()
-            - start_time
+            - start
+        )
+        print(
+            "❌ GEMINI ERROR:",
+            repr(e)
         )
         bot.reply_to(
             message,
             "❌ **VISION ERROR**\n\n"
-            f"{str(e)}\n\n"
+            f"`{str(e)}`\n\n"
             f"Processing time: {elapsed:.2f}s",
             parse_mode="Markdown"
         )
 # ============================================================
-# TEXT HANDLER
+# TEXT
 # ============================================================
 @bot.message_handler(
     content_types=["text"]
@@ -200,51 +203,45 @@ def handle_photo(message):
 def handle_text(message):
     bot.reply_to(
         message,
-        "📸 Send me a Pocket Option screenshot "
-        "and I will analyze the visible candle bodies."
+        "📸 Send a screenshot and I will read the visible "
+        "GREEN and RED candle bodies."
     )
 # ============================================================
 # START
 # ============================================================
 print(
-    "============================================"
+    "=========================================="
 )
 print(
     "🕯️ GEMINI CANDLE VISION BOT"
 )
 print(
-    "============================================"
+    "=========================================="
 )
 print(
-    "✅ Telegram connected"
+    "✅ Telegram ready"
 )
 print(
-    "✅ Gemini API-key authentication enabled"
+    "✅ Gemini API key loaded"
 )
 print(
-    "✅ Full screenshot analysis"
+    "✅ Full screenshot — no crop"
 )
 print(
-    "✅ No screenshot cropping"
+    "✅ GREEN + RED visual analysis"
+)
+print(
+    "✅ No fake candles"
 )
 print(
     "✅ No OHLC generation"
 )
 print(
-    "✅ No random candles"
-)
-print(
-    "✅ No forced candle count"
-)
-print(
     "✅ No trading signals"
 )
 print(
-    "============================================"
+    "=========================================="
 )
-# ============================================================
-# TELEGRAM POLLING
-# ============================================================
 bot.infinity_polling(
     timeout=30,
     long_polling_timeout=30
