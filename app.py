@@ -2,9 +2,10 @@ import os
 import asyncio
 import threading
 import logging
-import telebot
 
+import telebot
 from flask import Flask
+
 from pocket_option import PocketOptionClient
 from pocket_option.constants import Regions
 from pocket_option.contrib.default_init import default_init
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# RENDER / FLASK
+# FLASK / RENDER
 # ============================================================
 
 app = Flask(__name__)
@@ -32,7 +33,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Pocket Option Telegram Bot is running."
+    return "Telegram + Pocket Option connection test is running."
 
 
 @app.route("/ping")
@@ -41,94 +42,65 @@ def ping():
 
 
 # ============================================================
-# TELEGRAM
+# RENDER ENVIRONMENT VARIABLES
 # ============================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+PO_SESSION = os.getenv("PO_SESSION")
+PO_UID = os.getenv("PO_UID")
+
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing from Render Environment Variables.")
+    raise RuntimeError("BOT_TOKEN is missing.")
+
+if not PO_SESSION:
+    raise RuntimeError("PO_SESSION is missing.")
+
+if not PO_UID:
+    raise RuntimeError("PO_UID is missing.")
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
 
 # ============================================================
-# POCKET OPTION CREDENTIALS
+# POCKET OPTION STATUS
 # ============================================================
 
-PO_SESSION = os.getenv("PO_SESSION")
-PO_UID = os.getenv("PO_UID")
+po_status = "CONNECTING"
+po_error = None
 
-if not PO_SESSION:
-    raise RuntimeError("PO_SESSION is missing from Render Environment Variables.")
-
-if not PO_UID:
-    raise RuntimeError("PO_UID is missing from Render Environment Variables.")
-
-
-# ============================================================
-# POCKET OPTION SETTINGS
-# ============================================================
-
-# This is ONLY used to subscribe to an OTC asset and verify
-# that the Pocket Option connection is alive.
-#
-# NO TRADE WILL BE OPENED.
-ASSET = Asset.AUDCAD_otc
-
-CANDLE_PERIOD = 60
-
-IS_DEMO = 1
-
-
-# ============================================================
-# CONNECTION STATUS
-# ============================================================
-
-pocket_client = None
-
-pocket_loop = None
-
-pocket_connected = False
-
-pocket_connecting = False
-
-pocket_error = None
+po_client = None
 
 
 # ============================================================
 # POCKET OPTION CONNECTION
 # ============================================================
 
-async def connect_pocket_option():
+async def pocket_option_connection():
 
-    global pocket_client
-    global pocket_connected
-    global pocket_connecting
-    global pocket_error
-
-    pocket_connecting = True
-    pocket_connected = False
-    pocket_error = None
+    global po_status
+    global po_error
+    global po_client
 
     try:
 
-        logger.info("========================================")
-        logger.info("POCKET OPTION CONNECTION TEST")
-        logger.info("========================================")
+        logger.info("Starting Pocket Option connection...")
 
-        logger.info("Creating Pocket Option client...")
+        po_status = "CONNECTING"
 
         client = PocketOptionClient(logger=True)
 
-        pocket_client = client
-
-        logger.info("Loading authorization...")
+        po_client = client
 
         authorization = AuthorizationData.model_validate(
             {
                 "session": PO_SESSION,
-                "isDemo": IS_DEMO,
+                "isDemo": 1,
                 "uid": int(PO_UID),
                 "platform": 2,
                 "isFastHistory": True,
@@ -136,51 +108,50 @@ async def connect_pocket_option():
             }
         )
 
-        logger.info("Initializing OTC asset subscription...")
+        logger.info("Initializing OTC subscription...")
 
         default_init(
             client,
             authorization=authorization,
-            sub_assets=[ASSET],
-            sub_period=CANDLE_PERIOD,
+            sub_assets=[Asset.AUDCAD_otc],
+            sub_period=60,
         )
 
-        logger.info("Connecting to Pocket Option...")
+        logger.info("Connecting to Pocket Option WebSocket...")
 
         await client.connect(Regions.DEMO)
 
-        logger.info("Waiting for Pocket Option authorization...")
+        logger.info("Waiting for authorization...")
 
-        # Wait for the SDK to confirm authorization.
         await asyncio.wait_for(
             client.authorized_event.wait(),
-            timeout=30,
+            timeout=20,
         )
 
-        pocket_connected = True
-        pocket_connecting = False
-        pocket_error = None
-
-        logger.info("========================================")
-        logger.info("POCKET OPTION CONNECTED SUCCESSFULLY")
-        logger.info("========================================")
+        po_status = "CONNECTED"
+        po_error = None
 
         logger.info(
-            "OTC asset subscription: %s",
-            ASSET,
+            "========================================"
+        )
+        logger.info(
+            "POCKET OPTION CONNECTED"
+        )
+        logger.info(
+            "========================================"
         )
 
-        logger.info("Automatic trading: OFF")
-
-        # Keep the connection alive.
+        # Keep connection alive.
         while True:
             await asyncio.sleep(30)
 
     except asyncio.TimeoutError:
 
-        pocket_connected = False
-        pocket_connecting = False
-        pocket_error = "Pocket Option authorization timed out."
+        po_status = "FAILED"
+
+        po_error = (
+            "Pocket Option authorization timed out."
+        )
 
         logger.error(
             "Pocket Option authorization timed out."
@@ -188,9 +159,9 @@ async def connect_pocket_option():
 
     except Exception as e:
 
-        pocket_connected = False
-        pocket_connecting = False
-        pocket_error = str(e)
+        po_status = "FAILED"
+
+        po_error = str(e)
 
         logger.exception(
             "Pocket Option connection failed."
@@ -198,37 +169,31 @@ async def connect_pocket_option():
 
 
 # ============================================================
-# START POCKET OPTION IN BACKGROUND
+# POCKET OPTION BACKGROUND THREAD
 # ============================================================
 
-def pocket_thread():
+def run_pocket_connection():
 
-    global pocket_loop
+    loop = asyncio.new_event_loop()
 
-    pocket_loop = asyncio.new_event_loop()
-
-    asyncio.set_event_loop(
-        pocket_loop
-    )
+    asyncio.set_event_loop(loop)
 
     try:
 
-        pocket_loop.run_until_complete(
-            connect_pocket_option()
+        loop.run_until_complete(
+            pocket_option_connection()
         )
 
-    except Exception:
+    except Exception as e:
 
         logger.exception(
-            "Pocket Option background thread stopped."
+            "Pocket Option thread stopped: %s",
+            e,
         )
 
     finally:
 
-        try:
-            pocket_loop.close()
-        except Exception:
-            pass
+        loop.close()
 
 
 # ============================================================
@@ -239,98 +204,87 @@ def pocket_thread():
 def start_command(message):
 
     logger.info(
-        "Telegram /start received from chat %s",
+        "Received /start from Telegram chat %s",
         message.chat.id,
     )
 
-    # --------------------------------------------------------
-    # TELEGRAM IS DEFINITELY CONNECTED IF WE RECEIVED /START
-    # --------------------------------------------------------
+    # Telegram test first.
+    bot.reply_to(
+        message,
+        "📱 Telegram: ✅ CONNECTED\n\n"
+        "🔎 Checking Pocket Option connection..."
+    )
 
-    if pocket_connected:
+    # Give Pocket Option a moment, but DON'T block Telegram.
+    if po_status == "CONNECTED":
 
-        text = (
-            "🟢 BOT CONNECTION TEST\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📱 Telegram: ✅ CONNECTED\n"
-            "🟢 Pocket Option: ✅ CONNECTED\n"
-            "💱 OTC market: ✅ CONNECTED\n"
-            "🤖 Automatic trading: 🔴 OFF\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "✅ Connection test successful.\n\n"
-            "Pocket Option is connected and ready "
-            "for the next testing stage."
+        bot.send_message(
+            message.chat.id,
+            "🟢 POCKET OPTION: CONNECTED\n\n"
+            "📱 Telegram: ✅ Connected\n"
+            "🟢 Pocket Option: ✅ Connected\n"
+            "💱 OTC connection: ✅ Active\n"
+            "🤖 Automatic trading: 🔴 OFF\n\n"
+            "Connection test successful."
         )
 
-    elif pocket_connecting:
+    elif po_status == "CONNECTING":
 
-        text = (
-            "🟡 BOT CONNECTION TEST\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📱 Telegram: ✅ CONNECTED\n"
-            "🟡 Pocket Option: ⏳ CONNECTING\n"
-            "💱 OTC market: ⏳ WAITING\n"
-            "🤖 Automatic trading: 🔴 OFF\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Please send /start again in a few seconds."
+        bot.send_message(
+            message.chat.id,
+            "🟡 POCKET OPTION: STILL CONNECTING\n\n"
+            "Telegram is working correctly.\n"
+            "Pocket Option is still attempting authorization.\n\n"
+            "Send /status again in a few seconds."
         )
 
     else:
 
-        error_text = pocket_error or "Unknown connection error."
-
-        text = (
-            "🔴 BOT CONNECTION TEST\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "📱 Telegram: ✅ CONNECTED\n"
-            "🔴 Pocket Option: ❌ NOT CONNECTED\n"
-            "💱 OTC market: ❌ NOT CONNECTED\n"
-            "🤖 Automatic trading: 🔴 OFF\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "❌ Pocket Option connection failed.\n\n"
-            f"Reason:\n{error_text}"
+        bot.send_message(
+            message.chat.id,
+            "🔴 POCKET OPTION: NOT CONNECTED\n\n"
+            "📱 Telegram: ✅ Connected\n"
+            "🔴 Pocket Option: ❌ Failed\n"
+            "🤖 Automatic trading: 🔴 OFF\n\n"
+            f"Reason:\n{po_error or 'Unknown error'}"
         )
-
-    bot.reply_to(
-        message,
-        text,
-    )
 
 
 # ============================================================
-# SIMPLE STATUS COMMAND
+# TELEGRAM /STATUS
 # ============================================================
 
 @bot.message_handler(commands=["status"])
 def status_command(message):
 
-    if pocket_connected:
+    if po_status == "CONNECTED":
 
         text = (
-            "🟢 STATUS\n\n"
-            "Telegram: ✅ Connected\n"
-            "Pocket Option: ✅ Connected\n"
-            "OTC connection: ✅ Active\n"
-            "Automatic trading: 🔴 OFF"
+            "🟢 CONNECTION STATUS\n\n"
+            "📱 Telegram: ✅ CONNECTED\n"
+            "🟢 Pocket Option: ✅ CONNECTED\n"
+            "💱 OTC: ✅ ACTIVE\n"
+            "🤖 Automatic trading: 🔴 OFF"
         )
 
-    elif pocket_connecting:
+    elif po_status == "CONNECTING":
 
         text = (
-            "🟡 STATUS\n\n"
-            "Telegram: ✅ Connected\n"
-            "Pocket Option: ⏳ Connecting...\n"
-            "Automatic trading: 🔴 OFF"
+            "🟡 CONNECTION STATUS\n\n"
+            "📱 Telegram: ✅ CONNECTED\n"
+            "🟡 Pocket Option: ⏳ CONNECTING\n"
+            "💱 OTC: ⏳ WAITING\n"
+            "🤖 Automatic trading: 🔴 OFF"
         )
 
     else:
 
         text = (
-            "🔴 STATUS\n\n"
-            "Telegram: ✅ Connected\n"
-            "Pocket Option: ❌ Not connected\n"
-            "Automatic trading: 🔴 OFF\n\n"
-            f"Error: {pocket_error or 'Unknown'}"
+            "🔴 CONNECTION STATUS\n\n"
+            "📱 Telegram: ✅ CONNECTED\n"
+            "🔴 Pocket Option: ❌ FAILED\n"
+            "🤖 Automatic trading: 🔴 OFF\n\n"
+            f"Error:\n{po_error or 'Unknown error'}"
         )
 
     bot.reply_to(
@@ -340,40 +294,45 @@ def status_command(message):
 
 
 # ============================================================
-# START EVERYTHING
+# TELEGRAM ERROR HANDLER
+# ============================================================
+
+@bot.message_handler(
+    func=lambda message: True
+)
+def unknown_message(message):
+
+    bot.reply_to(
+        message,
+        "🟢 Telegram is connected.\n\n"
+        "Send /start to run the connection test."
+    )
+
+
+# ============================================================
+# MAIN
 # ============================================================
 
 if __name__ == "__main__":
 
     print("========================================")
-    print("POCKET OPTION TELEGRAM BOT")
+    print("POCKET OPTION TELEGRAM CONNECTION TEST")
     print("========================================")
     print("BOT_TOKEN: loaded from Render")
     print("PO_SESSION: loaded from Render")
     print("PO_UID: loaded from Render")
-    print("Credentials are NOT stored in app.py")
     print("Automatic trading: OFF")
     print("Screenshot analysis: OFF")
-    print("Signal generation: OFF")
+    print("Signals: OFF")
     print("========================================")
 
-    # --------------------------------------------------------
-    # START POCKET OPTION CONNECTION
-    # --------------------------------------------------------
-
+    # Start Pocket Option separately.
     threading.Thread(
-        target=pocket_thread,
+        target=run_pocket_connection,
         daemon=True,
     ).start()
 
-    # --------------------------------------------------------
-    # START TELEGRAM POLLING
-    # --------------------------------------------------------
-
-    logger.info(
-        "Starting Telegram polling..."
-    )
-
+    # Start Telegram separately.
     threading.Thread(
         target=lambda: bot.infinity_polling(
             timeout=30,
@@ -383,15 +342,9 @@ if __name__ == "__main__":
         daemon=True,
     ).start()
 
-    # --------------------------------------------------------
-    # START FLASK
-    # --------------------------------------------------------
-
+    # Start Render web server.
     port = int(
-        os.getenv(
-            "PORT",
-            "10000",
-        )
+        os.getenv("PORT", "10000")
     )
 
     app.run(
