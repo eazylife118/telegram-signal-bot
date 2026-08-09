@@ -1,3 +1,5 @@
-opencv-python
 pyTelegramBotAPI
+opencv-python-headless
 numpy
+google-genai
+Flask
