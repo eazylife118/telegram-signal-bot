@@ -1,5 +1,6 @@
 pyTelegramBotAPI
+google-genai
 opencv-python-headless
 numpy
-google-genai
 Flask
+Pillow
