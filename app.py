@@ -24,7 +24,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 client = genai.Client(
     api_key=GEMINI_API_KEY
 )
-MODEL_NAME = "gemini-2.5-flash"
+MODEL_NAME = "gemini-3.6-flash"
 # ============================================================
 # VISION INSTRUCTIONS
 # ============================================================
