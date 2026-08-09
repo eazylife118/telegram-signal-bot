@@ -1,248 +1,601 @@
 import os
-import io
-import time
+import cv2
+import numpy as np
 import telebot
-from PIL import Image
-from google import genai
-from google.genai import types
-# ============================================================
-# ENVIRONMENT
-# ============================================================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing.")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is missing.")
+import time
 # ============================================================
 # TELEGRAM
 # ============================================================
-bot = telebot.TeleBot(BOT_TOKEN)
-# ============================================================
-# GEMINI
-# ============================================================
-client = genai.Client(
-    api_key=GEMINI_API_KEY
+TELEGRAM_TOKEN = os.getenv(
+    "BOT_TOKEN",
+    "PUT_YOUR_BOT_TOKEN_HERE"
 )
-MODEL_NAME = "gemini-3.6-flash"
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # ============================================================
-# VISION INSTRUCTIONS
+# RED CANDLE SETTINGS
 # ============================================================
-PROMPT = """
-Analyze this screenshot as a candle-vision test.
-IMPORTANT:
-- Examine the COMPLETE screenshot from 0% to 100%.
-- Do not crop the image.
-- Do not invent candles.
-- Do not generate OHLC data.
-- Do not use random candles.
-- Do not force a candle count.
-- Do not create a trading signal.
-- Do not count empty space as a candle.
-- Do not count BUY or SELL buttons.
-- Do not count text or interface elements.
-- Do not count chart decorations.
-- Do not count isolated vertical lines unless they clearly belong to a candle.
-- Count only visibly identifiable candle bodies.
-For every candle you can actually see, classify the BODY:
-GREEN or RED.
-Read them from LEFT to RIGHT.
-Small candle bodies and doji candles should still be considered, but only when there is actual visible evidence of a candle.
-Return exactly this structure:
-GREEN COUNT: number
-RED COUNT: number
-TOTAL: number
-SEQUENCE:
-1. GREEN
-2. RED
-3. GREEN
-Then:
-CONFIDENCE:
-Briefly explain whether any candles were difficult to identify.
-This is ONLY a visual candle-reading test.
-There is NO trading signal.
-"""
+# Based on the "powerful red candle" detector you provided,
+# but relaxed for smaller Pocket Option candles.
+MIN_RED_AREA = 20
+MIN_RED_HEIGHT = 5
+MIN_RED_WIDTH = 1
+# Candle bodies should remain relatively narrow.
+MAX_RED_WIDTH_RATIO = 0.045
+# Vertical-shape protection.
+MIN_VERTICAL_RATIO = 1.25
+# Minimum amount of actual red pixels inside the box.
+MIN_RED_PIXELS = 5
+# Conservative merging.
+# We do NOT aggressively combine nearby candles.
+MERGE_X_DISTANCE = 2
 # ============================================================
-# PREPARE IMAGE
+# LOAD SCREENSHOT
 # ============================================================
-def prepare_image(image_bytes):
-    image = Image.open(
-        io.BytesIO(image_bytes)
+def load_image(path):
+    img = cv2.imread(path)
+    if img is None:
+        raise ValueError("Could not read screenshot.")
+    return img
+# ============================================================
+# RED COLOR MASK
+# ============================================================
+def get_red_mask(img):
+    hsv = cv2.cvtColor(
+        img,
+        cv2.COLOR_BGR2HSV
     )
-    image = image.convert("RGB")
-    output = io.BytesIO()
-    image.save(
-        output,
-        format="JPEG",
-        quality=95
+    # --------------------------------------------------------
+    # HSV RED
+    # --------------------------------------------------------
+    lower_red_1 = np.array([
+        0,
+        45,
+        35
+    ])
+    upper_red_1 = np.array([
+        15,
+        255,
+        255
+    ])
+    lower_red_2 = np.array([
+        165,
+        45,
+        35
+    ])
+    upper_red_2 = np.array([
+        180,
+        255,
+        255
+    ])
+    hsv_red_1 = cv2.inRange(
+        hsv,
+        lower_red_1,
+        upper_red_1
     )
-    return output.getvalue()
+    hsv_red_2 = cv2.inRange(
+        hsv,
+        lower_red_2,
+        upper_red_2
+    )
+    hsv_red = cv2.bitwise_or(
+        hsv_red_1,
+        hsv_red_2
+    )
+    # --------------------------------------------------------
+    # BGR RED CONFIRMATION
+    # --------------------------------------------------------
+    b = img[:, :, 0].astype(np.int16)
+    g = img[:, :, 1].astype(np.int16)
+    r = img[:, :, 2].astype(np.int16)
+    # Red must actually dominate the other channels.
+    bgr_red = (
+        (r > g + 12) &
+        (r > b + 12) &
+        (r > 45)
+    )
+    bgr_red = (
+        bgr_red.astype(np.uint8) * 255
+    )
+    # --------------------------------------------------------
+    # COMBINE
+    # --------------------------------------------------------
+    # HSV is the primary detector.
+    # BGR helps confirm difficult red pixels.
+    combined = cv2.bitwise_or(
+        hsv_red,
+        bgr_red
+    )
+    return combined
 # ============================================================
-# GEMINI IMAGE ANALYSIS
+# FIND RED CANDLE CANDIDATES
 # ============================================================
-def analyze_with_gemini(image_bytes):
-    jpeg_data = prepare_image(
-        image_bytes
+def find_red_candidates(
+    img,
+    red_mask
+):
+    h_img, w_img = img.shape[:2]
+    # Keep morphology deliberately small.
+    # Large kernels can join neighboring candles.
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (2, 2)
     )
-    image_part = types.Part.from_bytes(
-        data=jpeg_data,
-        mime_type="image/jpeg"
+    cleaned = cv2.morphologyEx(
+        red_mask,
+        cv2.MORPH_OPEN,
+        kernel
     )
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=[
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_text(
-                        text=PROMPT
-                    ),
-                    image_part
-                ]
-            )
+    contours, _ = cv2.findContours(
+        cleaned,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+    candidates = []
+    max_width = max(
+        8,
+        int(
+            w_img *
+            MAX_RED_WIDTH_RATIO
+        )
+    )
+    for contour in contours:
+        area = cv2.contourArea(
+            contour
+        )
+        if area < MIN_RED_AREA:
+            continue
+        x, y, w, h = cv2.boundingRect(
+            contour
+        )
+        if w < MIN_RED_WIDTH:
+            continue
+        if h < MIN_RED_HEIGHT:
+            continue
+        # Reject extremely wide objects.
+        if w > max_width:
+            continue
+        # ----------------------------------------------------
+        # VERTICAL CANDLE PROTECTION
+        # ----------------------------------------------------
+        if h < w * MIN_VERTICAL_RATIO:
+            continue
+        # ----------------------------------------------------
+        # CHECK REAL RED PIXELS
+        # ----------------------------------------------------
+        roi = cleaned[
+            y:y + h,
+            x:x + w
         ]
-    )
-    if response is None:
-        raise RuntimeError(
-            "Gemini returned no response."
+        red_pixels = int(
+            np.sum(
+                roi > 0
+            )
         )
-    if not response.text:
-        raise RuntimeError(
-            "Gemini returned an empty response."
+        if red_pixels < MIN_RED_PIXELS:
+            continue
+        density = (
+            red_pixels /
+            float(
+                max(
+                    1,
+                    w * h
+                )
+            )
         )
-    return response.text.strip()
+        # Don't accept extremely sparse red noise.
+        if density < 0.08:
+            continue
+        # ----------------------------------------------------
+        # CENTER
+        # ----------------------------------------------------
+        center_x = (
+            x +
+            w / 2.0
+        )
+        candidates.append({
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "area": float(area),
+            "pixels": red_pixels,
+            "density": density,
+            "center_x": center_x,
+            "color": "RED"
+        })
+    return candidates
 # ============================================================
-# TELEGRAM PHOTO
+# CONSERVATIVE RED MERGING
+# ============================================================
+def merge_red_candidates(
+    candidates
+):
+    if not candidates:
+        return []
+    candidates = sorted(
+        candidates,
+        key=lambda c: c["center_x"]
+    )
+    result = []
+    for candidate in candidates:
+        merged = False
+        for existing in result:
+            distance = abs(
+                candidate["center_x"]
+                -
+                existing["center_x"]
+            )
+            # Only merge extremely close pieces.
+            if distance > MERGE_X_DISTANCE:
+                continue
+            # Check vertical overlap.
+            c_top = candidate["y"]
+            c_bottom = (
+                candidate["y"]
+                +
+                candidate["h"]
+            )
+            e_top = existing["y"]
+            e_bottom = (
+                existing["y"]
+                +
+                existing["h"]
+            )
+            overlap = not (
+                c_bottom < e_top
+                or
+                c_top > e_bottom
+            )
+            if not overlap:
+                continue
+            # Merge only when they are genuinely touching.
+            left = min(
+                existing["x"],
+                candidate["x"]
+            )
+            right = max(
+                existing["x"]
+                +
+                existing["w"],
+                candidate["x"]
+                +
+                candidate["w"]
+            )
+            top = min(
+                existing["y"],
+                candidate["y"]
+            )
+            bottom = max(
+                existing["y"]
+                +
+                existing["h"],
+                candidate["y"]
+                +
+                candidate["h"]
+            )
+            existing["x"] = left
+            existing["y"] = top
+            existing["w"] = (
+                right -
+                left
+            )
+            existing["h"] = (
+                bottom -
+                top
+            )
+            existing["center_x"] = (
+                left +
+                existing["w"] /
+                2.0
+            )
+            existing["area"] += (
+                candidate["area"]
+            )
+            existing["pixels"] += (
+                candidate["pixels"]
+            )
+            merged = True
+            break
+        if not merged:
+            result.append(
+                candidate.copy()
+            )
+    return result
+# ============================================================
+# DETECT RED CANDLES
+# ============================================================
+def detect_red_candles(img):
+    # Entire screenshot.
+    # No crop.
+    red_mask = get_red_mask(
+        img
+    )
+    candidates = find_red_candidates(
+        img,
+        red_mask
+    )
+    candidates = merge_red_candidates(
+        candidates
+    )
+    candidates.sort(
+        key=lambda c: c["center_x"]
+    )
+    return candidates
+# ============================================================
+# CREATE RED DETECTION MAP
+# ============================================================
+def create_red_detection_map(
+    img,
+    candles
+):
+    output = img.copy()
+    for number, candle in enumerate(
+        candles,
+        start=1
+    ):
+        x = int(
+            candle["x"]
+        )
+        y = int(
+            candle["y"]
+        )
+        w = int(
+            candle["w"]
+        )
+        h = int(
+            candle["h"]
+        )
+        # ----------------------------------------------------
+        # RED RECTANGLE
+        # ----------------------------------------------------
+        cv2.rectangle(
+            output,
+            (x, y),
+            (
+                x + w,
+                y + h
+            ),
+            (0, 0, 255),
+            2
+        )
+        # ----------------------------------------------------
+        # NUMBER
+        # ----------------------------------------------------
+        cv2.putText(
+            output,
+            str(number),
+            (
+                x,
+                max(
+                    25,
+                    y - 7
+                )
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.60,
+            (0, 0, 255),
+            2,
+            cv2.LINE_AA
+        )
+    return output
+# ============================================================
+# TELEGRAM PHOTO HANDLER
 # ============================================================
 @bot.message_handler(
     content_types=["photo"]
 )
-def handle_photo(message):
-    start = time.time()
+def handle_photo(
+    message
+):
+    start_time = time.time()
+    original_path = (
+        "red_test_original.png"
+    )
+    detection_path = (
+        "red_detection_map.png"
+    )
     try:
         bot.reply_to(
             message,
-            "👁️ Reading the entire screenshot...\n"
-            "Checking GREEN and RED candle bodies."
+            "🔴 RED CANDLE TEST\n\n"
+            "Scanning the entire screenshot...\n"
+            "Looking ONLY for red candle-shaped objects."
         )
         # ----------------------------------------------------
-        # DOWNLOAD ORIGINAL HIGH-RES TELEGRAM IMAGE
+        # DOWNLOAD ORIGINAL PHOTO
         # ----------------------------------------------------
         file_info = bot.get_file(
             message.photo[-1].file_id
         )
-        image_bytes = bot.download_file(
-            file_info.file_path
+        downloaded_file = (
+            bot.download_file(
+                file_info.file_path
+            )
         )
-        print(
-            f"📸 Image received: "
-            f"{len(image_bytes)} bytes"
+        with open(
+            original_path,
+            "wb"
+        ) as f:
+            f.write(
+                downloaded_file
+            )
+        # ----------------------------------------------------
+        # LOAD
+        # ----------------------------------------------------
+        img = load_image(
+            original_path
         )
         # ----------------------------------------------------
-        # GEMINI
+        # RED DETECTION
         # ----------------------------------------------------
-        print(
-            "🧠 Sending screenshot to Gemini..."
+        red_candles = (
+            detect_red_candles(
+                img
+            )
         )
-        result = analyze_with_gemini(
-            image_bytes
-        )
-        print(
-            "✅ Gemini response received."
+        red_count = len(
+            red_candles
         )
         elapsed = (
             time.time()
-            - start
+            -
+            start_time
         )
         # ----------------------------------------------------
-        # SEND RESULT
+        # REPORT
         # ----------------------------------------------------
+        if red_count == 0:
+            bot.reply_to(
+                message,
+                "🔴 RED CANDLE TEST\n\n"
+                "No reliable red candle-shaped "
+                "objects were detected.\n\n"
+                "No candles were generated.\n"
+                "No random candles were added.\n"
+                "No trading signal was generated."
+            )
+            return
+        sequence = []
+        for number in range(
+            1,
+            red_count + 1
+        ):
+            sequence.append(
+                f"{number}. 🔴 RED"
+            )
+        sequence_text = "\n".join(
+            sequence
+        )
         report = (
-            "🔎 **CANDLE VISION TEST**\n\n"
+            "🔎 **RED CANDLE READING TEST**\n\n"
             "🟡 **DETECTION AREA:**\n"
             "Entire uploaded screenshot — 0% to 100%\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{result}\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "🎯 **COLOR CHECK**\n"
-            "🟢 GREEN = visually classified GREEN\n"
-            "🔴 RED = visually classified RED\n\n"
+            "🔴 **RED CANDLES DETECTED:**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔴 RED: {red_count}\n\n"
+            "🕯️ **RED CANDLE ORDER:**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"{sequence_text}\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🎯 **SCREEN CHECK:**\n"
+            "🔴 Red rectangle = detected red candle\n"
+            "🔢 Number = left-to-right detection order\n\n"
             "⚠️ **TEST ONLY**\n"
+            "Only visually detected red objects are counted.\n"
             "No OHLC candles are generated.\n"
             "No random candles are added.\n"
             "No trading signal is generated.\n\n"
-            f"⚡ Processing time: {elapsed:.2f}s"
+            f"⚡ Processing time: "
+            f"{elapsed:.2f}s"
         )
         bot.reply_to(
             message,
             report,
             parse_mode="Markdown"
         )
-    except Exception as e:
-        elapsed = (
-            time.time()
-            - start
+        # ----------------------------------------------------
+        # CREATE MAP
+        # ----------------------------------------------------
+        detection_map = (
+            create_red_detection_map(
+                img,
+                red_candles
+            )
         )
+        cv2.imwrite(
+            detection_path,
+            detection_map
+        )
+        # ----------------------------------------------------
+        # SEND MAP
+        # ----------------------------------------------------
+        with open(
+            detection_path,
+            "rb"
+        ) as photo:
+            bot.send_photo(
+                message.chat.id,
+                photo,
+                caption=(
+                    "🔴 **RED CANDLE DETECTION MAP**\n\n"
+                    "Every red rectangle is one "
+                    "detected red candle candidate.\n\n"
+                    "Numbers show detection order "
+                    "from LEFT → RIGHT.\n\n"
+                    "Please compare this directly "
+                    "with the original screenshot."
+                ),
+                parse_mode="Markdown"
+            )
+    except Exception as e:
         print(
-            "❌ GEMINI ERROR:",
+            "❌ ERROR:",
             repr(e)
         )
         bot.reply_to(
             message,
-            "❌ **VISION ERROR**\n\n"
-            f"`{str(e)}`\n\n"
-            f"Processing time: {elapsed:.2f}s",
-            parse_mode="Markdown"
+            f"❌ Red detection error:\n{str(e)}"
         )
-# ============================================================
-# TEXT
-# ============================================================
-@bot.message_handler(
-    content_types=["text"]
-)
-def handle_text(message):
-    bot.reply_to(
-        message,
-        "📸 Send a screenshot and I will read the visible "
-        "GREEN and RED candle bodies."
-    )
+    finally:
+        for path in [
+            original_path,
+            detection_path
+        ]:
+            if os.path.exists(
+                path
+            ):
+                try:
+                    os.remove(
+                        path
+                    )
+                except Exception:
+                    pass
 # ============================================================
 # START
 # ============================================================
 print(
-    "=========================================="
+    "========================================"
 )
 print(
-    "🕯️ GEMINI CANDLE VISION BOT"
+    "🔴 RED CANDLE TEST BOT"
 )
 print(
-    "=========================================="
+    "========================================"
 )
 print(
-    "✅ Telegram ready"
+    "Full screenshot scan: ENABLED"
 )
 print(
-    "✅ Gemini API key loaded"
+    "RED detection: HSV + BGR"
 )
 print(
-    "✅ Full screenshot — no crop"
+    "Vertical candle protection: ENABLED"
 )
 print(
-    "✅ GREEN + RED visual analysis"
+    "Conservative merging: ENABLED"
 )
 print(
-    "✅ No fake candles"
+    "Green detection: DISABLED"
 )
 print(
-    "✅ No OHLC generation"
+    "No OHLC generation."
 )
 print(
-    "✅ No trading signals"
+    "No random candles."
 )
 print(
-    "=========================================="
+    "No trading signals."
+)
+print(
+    "========================================"
 )
 bot.infinity_polling(
     timeout=30,
     long_polling_timeout=30
 )
+
+requirements.txt
+
+pyTelegramBotAPI
+opencv-python-headless
+numpy
