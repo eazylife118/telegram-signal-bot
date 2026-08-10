@@ -3,43 +3,124 @@ import cv2
 import numpy as np
 import telebot
 import time
+import threading
+
+from flask import Flask
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+
 # ============================================================
 # TELEGRAM
 # ============================================================
+
 TELEGRAM_TOKEN = os.getenv(
     "BOT_TOKEN",
     "PASTE_YOUR_BOT_TOKEN_HERE"
 )
+
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+
+# ============================================================
+# FLASK KEEP-ALIVE
+# ============================================================
+
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+    return "OTC Candle Strategy Bot is running."
+
+
+@app.route("/ping")
+def ping():
+    return "OK"
+
+
+def run_flask():
+    port = int(os.getenv("PORT", 10000))
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        use_reloader=False
+    )
+
+
+# ============================================================
+# TIMEZONE
+# ============================================================
+
+NIGERIA_TZ = ZoneInfo("Africa/Lagos")
+
+
+def nigeria_now():
+    return datetime.now(NIGERIA_TZ)
+
+
+def signal_and_entry_times():
+    now = nigeria_now()
+
+    signal_time = now.replace(
+        second=0,
+        microsecond=0
+    )
+
+    entry_time = signal_time + timedelta(
+        minutes=1
+    )
+
+    return (
+        signal_time.strftime("%H:%M"),
+        entry_time.strftime("%H:%M")
+    )
+
+
 # ============================================================
 # DETECTION SETTINGS
 # ============================================================
+
 MIN_BODY_AREA = 10
 MIN_BODY_HEIGHT = 2
 MIN_CANDLE_WIDTH = 2
+
 RIGHT_MIN_BODY_AREA = 6
 RIGHT_MIN_BODY_HEIGHT = 2
+
 MAX_CANDLE_WIDTH_RATIO = 0.045
 MERGE_DISTANCE_RATIO = 0.55
-# ============================================================
-# STRATEGY TEST SETTINGS
-# ============================================================
+
 LOOKBACK_CANDLES = 20
+
 MIN_ZONE_TESTS = 2
+
 ZONE_TOLERANCE_RATIO = 0.035
+
+MIN_SIGNAL_AGREEMENT = 65
+
 SMALL_BODY_RATIO = 0.35
+
+
 # ============================================================
 # LOAD IMAGE
 # ============================================================
+
 def load_image(path):
+
     img = cv2.imread(path)
+
     if img is None:
         raise ValueError(
             "Could not read screenshot."
         )
+
     h, w = img.shape[:2]
+
     if w < 1400:
+
         scale = 1400 / w
+
         img = cv2.resize(
             img,
             (
@@ -48,88 +129,114 @@ def load_image(path):
             ),
             interpolation=cv2.INTER_CUBIC
         )
+
     return img
+
+
 # ============================================================
 # COLOR MASKS
 # ============================================================
+
 def get_color_masks(img):
+
     hsv = cv2.cvtColor(
         img,
         cv2.COLOR_BGR2HSV
     )
+
     # GREEN
     green_lower = np.array([
         30, 35, 35
     ])
+
     green_upper = np.array([
         90, 255, 255
     ])
+
     green = cv2.inRange(
         hsv,
         green_lower,
         green_upper
     )
+
     # RED
     red_lower_1 = np.array([
         0, 55, 55
     ])
+
     red_upper_1 = np.array([
         12, 255, 255
     ])
+
     red_lower_2 = np.array([
         168, 55, 55
     ])
+
     red_upper_2 = np.array([
         180, 255, 255
     ])
+
     red1 = cv2.inRange(
         hsv,
         red_lower_1,
         red_upper_1
     )
+
     red2 = cv2.inRange(
         hsv,
         red_lower_2,
         red_upper_2
     )
+
     red = cv2.bitwise_or(
         red1,
         red2
     )
+
     return green, red
+
+
 # ============================================================
 # FIND CANDIDATES
 # ============================================================
+
 def find_candidates(
     mask,
     color,
     image_width,
     right_side=False
 ):
+
     kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (2, 2)
     )
+
     cleaned = cv2.morphologyEx(
         mask,
         cv2.MORPH_OPEN,
         kernel
     )
+
     close_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (3, 3)
     )
+
     cleaned = cv2.morphologyEx(
         cleaned,
         cv2.MORPH_CLOSE,
         close_kernel
     )
+
     contours, _ = cv2.findContours(
         cleaned,
         cv2.RETR_EXTERNAL,
         cv2.CHAIN_APPROX_SIMPLE
     )
+
     candidates = []
+
     max_width = max(
         10,
         int(
@@ -137,49 +244,69 @@ def find_candidates(
             MAX_CANDLE_WIDTH_RATIO
         )
     )
+
     if right_side:
+
         min_area = RIGHT_MIN_BODY_AREA
         min_height = RIGHT_MIN_BODY_HEIGHT
+
     else:
+
         min_area = MIN_BODY_AREA
         min_height = MIN_BODY_HEIGHT
+
     for contour in contours:
+
         area = cv2.contourArea(
             contour
         )
+
         if area < min_area:
             continue
+
         x, y, w, h = cv2.boundingRect(
             contour
         )
+
         if w < MIN_CANDLE_WIDTH:
             continue
+
         if h < min_height:
             continue
+
         if w > max_width:
             continue
+
         if w > h * 6:
             continue
+
         region = cleaned[
             y:y+h,
             x:x+w
         ]
+
         colored_pixels = int(
             np.sum(region > 0)
         )
+
         if colored_pixels < 5:
             continue
+
         density = (
             colored_pixels /
             float(max(1, w * h))
         )
+
         if density < 0.15:
             continue
+
         center_x = (
             x +
             w / 2
         )
+
         candidates.append({
+
             "x": x,
             "y": y,
             "w": w,
@@ -190,210 +317,286 @@ def find_candidates(
             "center_x": center_x,
             "color": color
         })
+
     return candidates
+
+
 # ============================================================
 # MERGE SAME-COLOR PIECES
 # ============================================================
+
 def merge_candidates(candidates):
+
     if not candidates:
         return []
+
     candidates = sorted(
         candidates,
         key=lambda c: c["center_x"]
     )
+
     merged = []
+
     for candidate in candidates:
+
         merged_into_existing = False
+
         for existing in merged:
+
             distance = abs(
                 candidate["center_x"]
                 -
                 existing["center_x"]
             )
+
             allowed = max(
                 candidate["w"],
                 existing["w"],
                 2
             ) * MERGE_DISTANCE_RATIO
+
             candidate_top = candidate["y"]
+
             candidate_bottom = (
                 candidate["y"] +
                 candidate["h"]
             )
+
             existing_top = existing["y"]
+
             existing_bottom = (
                 existing["y"] +
                 existing["h"]
             )
+
             vertical_overlap = not (
                 candidate_bottom < existing_top
                 or
                 candidate_top > existing_bottom
             )
+
             if (
                 distance <= allowed
                 and
                 vertical_overlap
             ):
+
                 left = min(
                     existing["x"],
                     candidate["x"]
                 )
+
                 right = max(
                     existing["x"] +
                     existing["w"],
                     candidate["x"] +
                     candidate["w"]
                 )
+
                 top = min(
                     existing["y"],
                     candidate["y"]
                 )
+
                 bottom = max(
                     existing["y"] +
                     existing["h"],
                     candidate["y"] +
                     candidate["h"]
                 )
+
                 existing["x"] = left
                 existing["y"] = top
+
                 existing["w"] = (
                     right - left
                 )
+
                 existing["h"] = (
                     bottom - top
                 )
+
                 existing["center_x"] = (
                     left +
                     existing["w"] / 2
                 )
+
                 existing["area"] += (
                     candidate["area"]
                 )
+
                 existing["pixels"] += (
                     candidate["pixels"]
                 )
+
                 merged_into_existing = True
+
                 break
+
         if not merged_into_existing:
+
             merged.append(
                 candidate.copy()
             )
+
     return merged
+
+
 # ============================================================
 # REMOVE CROSS-COLOR DUPLICATES
 # ============================================================
+
 def remove_cross_color_duplicates(
     candles
 ):
+
     candles = sorted(
         candles,
         key=lambda c: c["center_x"]
     )
+
     result = []
+
     for candle in candles:
+
         duplicate_index = None
+
         for i, existing in enumerate(
             result
         ):
+
             distance = abs(
                 candle["center_x"]
                 -
                 existing["center_x"]
             )
+
             threshold = max(
                 candle["w"],
                 existing["w"],
                 2
             ) * 0.65
+
             if distance <= threshold:
+
                 duplicate_index = i
                 break
+
         if duplicate_index is None:
+
             result.append(
                 candle
             )
+
         else:
+
             existing = result[
                 duplicate_index
             ]
+
             if (
                 candle["pixels"]
                 >
                 existing["pixels"]
             ):
+
                 result[
                     duplicate_index
                 ] = candle
+
     return result
+
+
 # ============================================================
-# RIGHT-SIDE DETECTION
+# RIGHT SIDE DETECTION
 # ============================================================
+
 def detect_right_side(
     chart,
     green_mask,
     red_mask
 ):
+
     h, w = chart.shape[:2]
+
     right_start = int(
         w * 0.72
     )
+
     green_right = green_mask[
         :,
         right_start:
     ]
+
     red_right = red_mask[
         :,
         right_start:
     ]
+
     green = find_candidates(
         green_right,
         "GREEN",
         w,
         right_side=True
     )
+
     red = find_candidates(
         red_right,
         "RED",
         w,
         right_side=True
     )
+
     for candle in green + red:
+
         candle["x"] += right_start
+
         candle["center_x"] += (
             right_start
         )
+
     return green + red
+
+
 # ============================================================
 # DETECT CANDLES
 # ============================================================
+
 def detect_candles(img):
+
     h, w = img.shape[:2]
+
     green_mask, red_mask = (
         get_color_masks(img)
     )
+
     green = find_candidates(
         green_mask,
         "GREEN",
         w,
         right_side=False
     )
+
     red = find_candidates(
         red_mask,
         "RED",
         w,
         right_side=False
     )
+
     green = merge_candidates(
         green
     )
+
     red = merge_candidates(
         red
     )
+
     candles = (
         green +
         red
     )
+
     right_candidates = (
         detect_right_side(
             img,
@@ -401,936 +604,609 @@ def detect_candles(img):
             red_mask
         )
     )
+
     candles.extend(
         right_candidates
     )
+
     candles = (
         remove_cross_color_duplicates(
             candles
         )
     )
+
     candles.sort(
         key=lambda c: c["center_x"]
     )
+
     # RIGHT → LEFT
     # Candle #1 = newest/rightmost
+
     candles.reverse()
+
     return candles
+
+
 # ============================================================
-# CANDLE VISIBLE RANGE
+# BODY POSITION
 # ============================================================
-def candle_range(candle):
-    return max(
-        1,
-        candle["h"]
-    )
-# ============================================================
-# ESTIMATE BODY POSITION
-# ============================================================
+
 def body_position(candle):
+
     top = candle["y"]
+
     bottom = (
         candle["y"] +
         candle["h"]
     )
+
     return (
         top,
         bottom
     )
+
+
 # ============================================================
-# APPROXIMATE BODY CHARACTERISTICS
+# RESISTANCE
 # ============================================================
-def body_information(candle):
-    h = max(
-        1,
-        candle["h"]
-    )
-    return {
-        "body_height": h,
-        "body_width": candle["w"],
-        "color": candle["color"]
-    }
-# ============================================================
-# FIND APPROXIMATE RESISTANCE ZONE
-# ============================================================
+
 def find_resistance_zone(
     candles
 ):
+
     if not candles:
         return None
+
     candles_to_check = candles[
         :LOOKBACK_CANDLES
     ]
+
     if len(candles_to_check) < 2:
         return None
+
     highest_points = []
+
     for candle in candles_to_check:
-        top, bottom = (
-            body_position(candle)
+
+        top, bottom = body_position(
+            candle
         )
+
         highest_points.append(
             top
         )
+
     chart_min = min(
         highest_points
     )
+
     chart_max = max(
         highest_points
     )
+
     visible_range = max(
         1,
         chart_max - chart_min
     )
+
     tolerance = (
         visible_range *
         ZONE_TOLERANCE_RATIO
     )
+
     zones = []
+
     for candle in candles_to_check:
+
         top, _ = body_position(
             candle
         )
+
         placed = False
+
         for zone in zones:
+
             if abs(
                 top -
                 zone["level"]
             ) <= tolerance:
+
                 zone["candles"].append(
                     candle
                 )
+
                 zone["level"] = np.mean(
                     [
                         body_position(c)[0]
                         for c in zone["candles"]
                     ]
                 )
+
                 placed = True
                 break
+
         if not placed:
+
             zones.append({
+
                 "level": float(top),
+
                 "candles": [
                     candle
                 ]
             })
+
     zones.sort(
         key=lambda z: len(
             z["candles"]
         ),
         reverse=True
     )
+
     if not zones:
         return None
+
     strongest = zones[0]
+
     if len(
         strongest["candles"]
     ) < MIN_ZONE_TESTS:
+
         return None
+
     return strongest
+
+
 # ============================================================
-# FIND APPROXIMATE SUPPORT ZONE
+# SUPPORT
 # ============================================================
+
 def find_support_zone(
     candles
 ):
+
     if not candles:
         return None
+
     candles_to_check = candles[
         :LOOKBACK_CANDLES
     ]
+
     if len(candles_to_check) < 2:
         return None
+
     lowest_points = []
+
     for candle in candles_to_check:
+
         _, bottom = body_position(
             candle
         )
+
         lowest_points.append(
             bottom
         )
+
     chart_min = min(
         lowest_points
     )
+
     chart_max = max(
         lowest_points
     )
+
     visible_range = max(
         1,
         chart_max - chart_min
     )
+
     tolerance = (
         visible_range *
         ZONE_TOLERANCE_RATIO
     )
+
     zones = []
+
     for candle in candles_to_check:
+
         _, bottom = body_position(
             candle
         )
+
         placed = False
+
         for zone in zones:
+
             if abs(
                 bottom -
                 zone["level"]
             ) <= tolerance:
+
                 zone["candles"].append(
                     candle
                 )
+
                 zone["level"] = np.mean(
                     [
                         body_position(c)[1]
                         for c in zone["candles"]
                     ]
                 )
+
                 placed = True
                 break
+
         if not placed:
+
             zones.append({
+
                 "level": float(bottom),
+
                 "candles": [
                     candle
                 ]
             })
+
     zones.sort(
         key=lambda z: len(
             z["candles"]
         ),
         reverse=True
     )
+
     if not zones:
         return None
+
     strongest = zones[0]
+
     if len(
         strongest["candles"]
     ) < MIN_ZONE_TESTS:
+
         return None
+
     return strongest
+
+
 # ============================================================
-# CHECK CURRENT CANDLE AGAINST RESISTANCE
+# RESISTANCE REACTION
 # ============================================================
+
 def resistance_behavior(
     candles,
     resistance
 ):
+
     if not resistance:
+
         return {
             "near": False,
-            "rejection": False,
-            "description":
-                "No confirmed resistance zone."
+            "rejection": False
         }
+
     newest = candles[0]
+
     top, bottom = body_position(
         newest
     )
+
     level = resistance["level"]
+
     distance = abs(
-        top - level
+        top -
+        level
     )
+
     tolerance = max(
         3,
         newest["h"] * 0.75
     )
+
     near = (
         distance <= tolerance
     )
-    rejection = False
-    description = (
-        "Newest candle is not near "
-        "the detected resistance zone."
+
+    rejection = (
+        near
+        and
+        newest["color"] == "RED"
     )
-    if near:
-        if newest["color"] == "RED":
-            rejection = True
-            description = (
-                "Newest visible candle is RED "
-                "near the approximate resistance zone."
-            )
-        else:
-            description = (
-                "Newest visible candle is GREEN "
-                "near the approximate resistance zone."
-            )
+
     return {
         "near": near,
-        "rejection": rejection,
-        "description": description
+        "rejection": rejection
     }
+
+
 # ============================================================
-# CHECK CURRENT CANDLE AGAINST SUPPORT
+# SUPPORT REACTION
 # ============================================================
+
 def support_behavior(
     candles,
     support
 ):
+
     if not support:
+
         return {
             "near": False,
-            "rejection": False,
-            "description":
-                "No confirmed support zone."
+            "rejection": False
         }
+
     newest = candles[0]
+
     top, bottom = body_position(
         newest
     )
+
     level = support["level"]
+
     distance = abs(
-        bottom - level
+        bottom -
+        level
     )
+
     tolerance = max(
         3,
         newest["h"] * 0.75
     )
+
     near = (
         distance <= tolerance
     )
-    rejection = False
-    description = (
-        "Newest candle is not near "
-        "the detected support zone."
+
+    rejection = (
+        near
+        and
+        newest["color"] == "GREEN"
     )
-    if near:
-        if newest["color"] == "GREEN":
-            rejection = True
-            description = (
-                "Newest visible candle is GREEN "
-                "near the approximate support zone."
-            )
-        else:
-            description = (
-                "Newest visible candle is RED "
-                "near the approximate support zone."
-            )
+
     return {
         "near": near,
-        "rejection": rejection,
-        "description": description
+        "rejection": rejection
     }
+
+
 # ============================================================
-# ZONE REACTION STRENGTH
+# REACTION STRENGTH
 # ============================================================
-def zone_reaction_strength(
+
+def reaction_strength(
     zone,
-    zone_type
+    candles,
+    resistance=True
 ):
+
     if not zone:
-        return {
-            "score": 0,
-            "description":
-                "No confirmed zone."
-        }
+        return 0
+
     tests = len(
         zone["candles"]
     )
+
     if tests >= 8:
-        score = 3
-    elif tests >= 5:
-        score = 2
-    else:
-        score = 1
-    description = (
-        f"{score}/3 based on "
-        f"{tests} visible tests."
-    )
-    return {
-        "score": score,
-        "description": description
-    }
+        return 3
+
+    if tests >= 5:
+        return 2
+
+    if tests >= 2:
+        return 1
+
+    return 0
+
+
 # ============================================================
-# BREAKOUT / HOLD / FAILURE
+# BODY MOMENTUM
 # ============================================================
-def analyze_breakout_structure(
-    candles,
-    resistance,
-    support
-):
-    result = {
-        "resistance_breakout": False,
-        "resistance_hold": False,
-        "resistance_failure": False,
-        "support_breakdown": False,
-        "support_hold": False,
-        "support_failure": False
-    }
-    if len(candles) < 3:
-        return result
-    # --------------------------------------------------------
-    # RESISTANCE
-    # --------------------------------------------------------
-    if resistance:
-        level = resistance["level"]
-        for i in range(
-            1,
-            min(
-                len(candles),
-                LOOKBACK_CANDLES
-            )
-        ):
-            newer = candles[i - 1]
-            older = candles[i]
-            newer_top = (
-                body_position(newer)[0]
-            )
-            older_top = (
-                body_position(older)[0]
-            )
-            # Because screen Y increases downward:
-            # smaller Y = higher price.
-            #
-            # Older body was at/below resistance
-            # and newer body moved above it.
-            if (
-                older_top >= level
-                and
-                newer_top < level
-            ):
-                result[
-                    "resistance_breakout"
-                ] = True
-                # A newer RED candle can still be
-                # bullish if its body remains above
-                # the resistance level.
-                if newer["color"] == "RED":
-                    newer_bottom = (
-                        body_position(newer)[1]
-                    )
-                    if newer_bottom < level:
-                        result[
-                            "resistance_hold"
-                        ] = True
-                # Look for a following candle that
-                # remains above resistance.
-                if i >= 2:
-                    follow = candles[i - 2]
-                    follow_bottom = (
-                        body_position(follow)[1]
-                    )
-                    if follow_bottom < level:
-                        result[
-                            "resistance_hold"
-                        ] = True
-                # If the newer body returns below
-                # resistance, classify as failure.
-                newer_bottom = (
-                    body_position(newer)[1]
-                )
-                if newer_bottom >= level:
-                    result[
-                        "resistance_failure"
-                    ] = True
-                break
-    # --------------------------------------------------------
-    # SUPPORT
-    # --------------------------------------------------------
-    if support:
-        level = support["level"]
-        for i in range(
-            1,
-            min(
-                len(candles),
-                LOOKBACK_CANDLES
-            )
-        ):
-            newer = candles[i - 1]
-            older = candles[i]
-            newer_bottom = (
-                body_position(newer)[1]
-            )
-            older_bottom = (
-                body_position(older)[1]
-            )
-            # Screen Y increases downward:
-            # larger Y = lower price.
-            #
-            # Older body was at/above support
-            # and newer body moved below it.
-            if (
-                older_bottom <= level
-                and
-                newer_bottom > level
-            ):
-                result[
-                    "support_breakdown"
-                ] = True
-                # A newer GREEN candle can still be
-                # bearish if its body remains below
-                # support.
-                if newer["color"] == "GREEN":
-                    newer_top = (
-                        body_position(newer)[0]
-                    )
-                    if newer_top > level:
-                        result[
-                            "support_hold"
-                        ] = True
-                if i >= 2:
-                    follow = candles[i - 2]
-                    follow_top = (
-                        body_position(follow)[0]
-                    )
-                    if follow_top > level:
-                        result[
-                            "support_hold"
-                        ] = True
-                newer_top = (
-                    body_position(newer)[0]
-                )
-                if newer_top <= level:
-                    result[
-                        "support_failure"
-                    ] = True
-                break
-    return result
-# ============================================================
-# CANDLE SEQUENCE
-# ============================================================
-def analyze_sequence(
-    candles
-):
-    if not candles:
-        return []
-    result = []
-    maximum = min(
-        len(candles),
-        LOOKBACK_CANDLES
-    )
-    for i in range(
-        maximum
-    ):
-        candle = candles[i]
-        result.append({
-            "number": i + 1,
-            "color": candle["color"],
-            "height": candle["h"],
-            "width": candle["w"]
-        })
-    return result
-# ============================================================
-# MOMENTUM FROM VISIBLE BODY SIZE
-# ============================================================
+
 def analyze_body_momentum(
     candles
 ):
+
     if len(candles) < 3:
-        return {
-            "state": "UNKNOWN",
-            "description":
-                "Not enough candles."
-        }
-    newest = candles[0]
-    previous = candles[1]
-    older = candles[2]
-    newest_size = newest["h"]
-    previous_size = previous["h"]
-    older_size = older["h"]
+
+        return "UNKNOWN"
+
+    newest = candles[0]["h"]
+    previous = candles[1]["h"]
+    older = candles[2]["h"]
+
     average_previous = (
-        previous_size +
-        older_size
+        previous +
+        older
     ) / 2
-    if (
-        newest_size >
-        average_previous * 1.35
-    ):
-        state = "STRONGER"
-    elif (
-        newest_size <
-        average_previous * 0.70
-    ):
-        state = "WEAKER"
-    else:
-        state = "NORMAL"
-    return {
-        "state": state,
-        "description":
-            f"Newest body size is {state.lower()} "
-            "relative to the previous two visible bodies."
-    }
+
+    if newest > average_previous * 1.35:
+        return "STRONGER"
+
+    if newest < average_previous * 0.70:
+        return "WEAKER"
+
+    return "NORMAL"
+
+
 # ============================================================
 # CONSECUTIVE MOMENTUM
 # ============================================================
-def analyze_consecutive_momentum(
+
+def consecutive_momentum(
     candles
 ):
+
     if len(candles) < 3:
-        return {
-            "direction": "NONE",
-            "count": 0,
-            "description":
-                "Not enough candles."
-        }
-    newest_color = candles[0]["color"]
+        return None
+
+    color = candles[0]["color"]
+
     count = 0
+
     for candle in candles:
-        if candle["color"] == newest_color:
+
+        if candle["color"] == color:
             count += 1
+
         else:
             break
+
     if count >= 3:
-        direction = (
-            "UPWARD"
-            if newest_color == "GREEN"
-            else "DOWNWARD"
-        )
-        description = (
-            f"{count} consecutive "
-            f"{newest_color} visible candles "
-            f"show {direction.lower()} body momentum."
-        )
-    else:
-        direction = "NONE"
-        description = (
-            f"Only {count} consecutive "
-            f"{newest_color} candle(s) detected."
-        )
-    return {
-        "direction": direction,
-        "count": count,
-        "description": description
-    }
-# ============================================================
-# CONTINUATION DETECTION
-# ============================================================
-def analyze_continuation(
-    candles
-):
-    if len(candles) < 4:
-        return {
-            "direction": "NONE",
-            "detected": False,
-            "description":
-                "Not enough candles."
-        }
-    first = candles[0]
-    second = candles[1]
-    third = candles[2]
-    fourth = candles[3]
-    same_direction = (
-        first["color"] ==
-        second["color"] ==
-        third["color"]
-    )
-    if not same_direction:
-        return {
-            "direction": "NONE",
-            "detected": False,
-            "description":
-                "No strong continuation structure confirmed."
-        }
-    if (
-        first["color"] == "GREEN"
-        and
-        first["h"] >= third["h"] * 0.70
-    ):
-        return {
-            "direction": "BUY",
-            "detected": True,
-            "description":
-                "Three-candle GREEN structure "
-                "supports bullish continuation."
-        }
-    if (
-        first["color"] == "RED"
-        and
-        first["h"] >= third["h"] * 0.70
-    ):
-        return {
-            "direction": "SELL",
-            "detected": True,
-            "description":
-                "Three-candle RED structure "
-                "supports bearish continuation."
-        }
-    return {
-        "direction": "NONE",
-        "detected": False,
-        "description":
-            "No strong continuation structure confirmed."
-    }
-# ============================================================
-# BODY CLUSTERING
-# ============================================================
-def analyze_body_clustering(
-    candles
-):
-    if len(candles) < 3:
-        return {
-            "clustered": False,
-            "count": 0,
-            "description":
-                "Not enough candles."
-        }
-    recent = candles[:3]
-    heights = [
-        c["h"]
-        for c in recent
-    ]
-    average_height = (
-        sum(heights) /
-        len(heights)
-    )
-    compressed = 0
-    for height in heights:
-        if height <= average_height * 0.75:
-            compressed += 1
-    clustered = (
-        compressed >= 2
-    )
-    if clustered:
-        description = (
-            f"{compressed} of the latest "
-            "visible bodies are relatively "
-            "compressed, suggesting short-term "
-            "indecision/compression."
-        )
-    else:
-        description = (
-            "No strong body compression detected "
-            "among the latest visible bodies."
-        )
-    return {
-        "clustered": clustered,
-        "count": compressed,
-        "description": description
-    }
+
+        if color == "GREEN":
+            return "BUY"
+
+        return "SELL"
+
+    return None
+
+
 # ============================================================
 # BODY REVERSAL / ENGULFING
 # ============================================================
-def analyze_body_reversal(
+
+def body_reversal(
     candles
 ):
+
     if len(candles) < 2:
-        return {
-            "detected": False,
-            "description":
-                "Not enough candles."
-        }
+        return None
+
     current = candles[0]
     previous = candles[1]
-    current_height = current["h"]
-    previous_height = previous["h"]
-    opposite_colors = (
-        current["color"] !=
-        previous["color"]
-    )
-    strong_body = (
-        current_height >=
-        previous_height * 1.20
-    )
-    if (
-        opposite_colors
-        and
-        strong_body
-    ):
-        direction = (
-            "BUY"
-            if current["color"] == "GREEN"
-            else "SELL"
-        )
-        description = (
-            f"Possible {direction} body-engulfing "
-            "reversal detected."
-        )
-        return {
-            "detected": True,
-            "direction": direction,
-            "description": description
-        }
-    return {
-        "detected": False,
-        "description":
-            "No strong body-engulfing reversal detected."
-    }
+
+    if current["color"] == previous["color"]:
+        return None
+
+    if current["h"] >= previous["h"] * 1.20:
+
+        if current["color"] == "GREEN":
+            return "BUY"
+
+        return "SELL"
+
+    return None
+
+
 # ============================================================
-# 2-CANDLE REVERSAL
+# TWO-CANDLE REVERSAL
 # ============================================================
-def analyze_two_candle_reversal(
+
+def two_candle_reversal(
     candles
 ):
+
     if len(candles) < 2:
-        return {
-            "detected": False,
-            "direction": "NONE",
-            "description":
-                "Not enough candles."
-        }
-    first = candles[0]
-    second = candles[1]
-    opposite = (
-        first["color"] !=
-        second["color"]
-    )
-    strong_ratio = (
-        first["h"] >=
-        second["h"] * 1.15
-    )
-    if opposite and strong_ratio:
-        direction = (
-            "BUY"
-            if first["color"] == "GREEN"
-            else "SELL"
-        )
-        return {
-            "detected": True,
-            "direction": direction,
-            "description":
-                f"Possible two-candle "
-                f"{direction} reversal structure detected."
-        }
-    return {
-        "detected": False,
-        "direction": "NONE",
-        "description":
-            "No strong two-candle reversal structure detected."
-    }
-# ============================================================
-# 3-CANDLE REVERSAL
-# ============================================================
-def analyze_three_candle_reversal(
-    candles
-):
-    if len(candles) < 3:
-        return {
-            "detected": False,
-            "direction": "NONE",
-            "description":
-                "Not enough candles."
-        }
-    first = candles[0]
-    second = candles[1]
-    third = candles[2]
+        return None
+
+    a = candles[0]
+    b = candles[1]
+
     if (
-        first["color"] ==
-        second["color"]
+        a["color"] == "GREEN"
         and
-        third["color"] !=
-        first["color"]
+        b["color"] == "RED"
         and
-        first["h"] >=
-        second["h"] * 0.75
+        a["h"] >= b["h"] * 0.80
     ):
-        direction = (
-            "BUY"
-            if first["color"] == "GREEN"
-            else "SELL"
-        )
-        return {
-            "detected": True,
-            "direction": direction,
-            "description":
-                f"Three-candle {direction} "
-                "reversal structure detected."
-        }
-    return {
-        "detected": False,
-        "direction": "NONE",
-        "description":
-            "No strong three-candle reversal structure detected."
-    }
+        return "BUY"
+
+    if (
+        a["color"] == "RED"
+        and
+        b["color"] == "GREEN"
+        and
+        a["h"] >= b["h"] * 0.80
+    ):
+        return "SELL"
+
+    return None
+
+
 # ============================================================
-# PULLBACK DETECTION
+# THREE-CANDLE REVERSAL
 # ============================================================
-def analyze_pullback(
+
+def three_candle_reversal(
     candles
 ):
+
+    if len(candles) < 3:
+        return None
+
+    a = candles[0]["color"]
+    b = candles[1]["color"]
+    c = candles[2]["color"]
+
+    if (
+        a == "GREEN"
+        and
+        b == "GREEN"
+        and
+        c == "RED"
+    ):
+        return "BUY"
+
+    if (
+        a == "RED"
+        and
+        b == "RED"
+        and
+        c == "GREEN"
+    ):
+        return "SELL"
+
+    return None
+
+
+# ============================================================
+# PULLBACK
+# ============================================================
+
+def detect_pullback(
+    candles
+):
+
     if len(candles) < 4:
-        return {
-            "detected": False,
-            "direction": "NONE",
-            "description":
-                "Not enough candles."
-        }
-    first = candles[0]
-    second = candles[1]
-    third = candles[2]
-    fourth = candles[3]
+        return None
+
+    a = candles[0]["color"]
+    b = candles[1]["color"]
+    c = candles[2]["color"]
+    d = candles[3]["color"]
+
     if (
-        second["color"] ==
-        third["color"] ==
-        fourth["color"]
+        a == b
         and
-        first["color"] !=
-        second["color"]
+        b == c
+        and
+        d != c
     ):
-        direction = (
-            "BUY"
-            if first["color"] == "GREEN"
-            else "SELL"
-        )
-        return {
-            "detected": True,
-            "direction": direction,
-            "description":
-                f"Possible {direction} pullback "
-                "after a three-candle directional move."
-        }
-    return {
-        "detected": False,
-        "direction": "NONE",
-        "description":
-            "No confirmed pullback setup detected."
-    }
-# ============================================================
-# RECENT 3-CANDLE REVERSAL
-# ============================================================
-def analyze_recent_reversal(
-    candles
-):
-    if len(candles) < 3:
-        return {
-            "detected": False,
-            "description":
-                "Not enough candles."
-        }
-    first = candles[0]["color"]
-    second = candles[1]["color"]
-    third = candles[2]["color"]
-    if (
-        first == "GREEN"
-        and
-        second == "GREEN"
-        and
-        third == "RED"
-    ):
-        return {
-            "detected": True,
-            "direction": "BUY_TO_SELL",
-            "description":
-                "Recent 3-candle color sequence "
-                "shows possible bearish reversal."
-        }
-    if (
-        first == "RED"
-        and
-        second == "RED"
-        and
-        third == "GREEN"
-    ):
-        return {
-            "detected": True,
-            "direction": "SELL_TO_BUY",
-            "description":
-                "Recent 3-candle color sequence "
-                "shows possible bullish reversal."
-        }
-    return {
-        "detected": False,
-        "description":
-            "No clear recent 3-candle color reversal."
-    }
+
+        if a == "GREEN":
+            return "BUY"
+
+        return "SELL"
+
+    return None
+
+
 # ============================================================
 # BREAKOUT FAILURE
 # ============================================================
-def analyze_breakout_failure(
+
+def breakout_failure(
     candles,
     resistance,
     support
 ):
+
     resistance_failure = False
     support_failure = False
+
     if resistance:
+
         level = resistance["level"]
+
         for i in range(
             1,
             min(
@@ -1338,25 +1214,33 @@ def analyze_breakout_failure(
                 LOOKBACK_CANDLES
             )
         ):
-            previous = candles[i - 1]
-            current = candles[i]
-            previous_top = (
-                body_position(previous)[0]
-            )
-            current_top = (
-                body_position(current)[0]
-            )
+
+            newer = candles[i - 1]
+            older = candles[i]
+
+            newer_top = body_position(
+                newer
+            )[0]
+
+            older_top = body_position(
+                older
+            )[0]
+
             if (
-                previous_top <= level
+                older_top <= level
                 and
-                current_top > level
+                newer_top > level
                 and
-                current["color"] == "RED"
+                newer["color"] == "RED"
             ):
+
                 resistance_failure = True
                 break
+
     if support:
+
         level = support["level"]
+
         for i in range(
             1,
             min(
@@ -1364,41 +1248,197 @@ def analyze_breakout_failure(
                 LOOKBACK_CANDLES
             )
         ):
-            previous = candles[i - 1]
-            current = candles[i]
-            previous_bottom = (
-                body_position(previous)[1]
-            )
-            current_bottom = (
-                body_position(current)[1]
-            )
+
+            newer = candles[i - 1]
+            older = candles[i]
+
+            newer_bottom = body_position(
+                newer
+            )[1]
+
+            older_bottom = body_position(
+                older
+            )[1]
+
             if (
-                previous_bottom >= level
+                older_bottom >= level
                 and
-                current_bottom < level
+                newer_bottom < level
                 and
-                current["color"] == "GREEN"
+                newer["color"] == "GREEN"
             ):
+
                 support_failure = True
                 break
-    return {
-        "resistance_failure":
-            resistance_failure,
-        "support_failure":
-            support_failure
-    }
+
+    return (
+        resistance_failure,
+        support_failure
+    )
+
+
+# ============================================================
+# RESISTANCE BREAKOUT HOLD
+#
+# IMPORTANT:
+# Detects:
+# GREEN breaks/crosses resistance
+# followed by RED remaining above resistance.
+#
+# Candle size is NOT required to be large.
+# ============================================================
+
+def resistance_breakout_hold(
+    candles,
+    resistance
+):
+
+    if not resistance:
+        return False
+
+    level = resistance["level"]
+
+    maximum = min(
+        len(candles) - 1,
+        LOOKBACK_CANDLES - 1
+    )
+
+    for i in range(
+        maximum
+    ):
+
+        newer = candles[i]
+        older = candles[i + 1]
+
+        older_top, older_bottom = (
+            body_position(older)
+        )
+
+        newer_top, newer_bottom = (
+            body_position(newer)
+        )
+
+        older_crosses = (
+            older_top <= level
+            and
+            older_bottom >= level
+        )
+
+        older_above = (
+            older_bottom < level
+        )
+
+        older_break = (
+            older_crosses
+            or
+            older_above
+        )
+
+        newer_remains_above = (
+            newer_bottom < level
+        )
+
+        if (
+            older["color"] == "GREEN"
+            and
+            newer["color"] == "RED"
+            and
+            older_break
+            and
+            newer_remains_above
+        ):
+
+            return True
+
+    return False
+
+
+# ============================================================
+# SUPPORT BREAKDOWN HOLD
+# ============================================================
+
+def support_breakdown_hold(
+    candles,
+    support
+):
+
+    if not support:
+        return False
+
+    level = support["level"]
+
+    maximum = min(
+        len(candles) - 1,
+        LOOKBACK_CANDLES - 1
+    )
+
+    for i in range(
+        maximum
+    ):
+
+        newer = candles[i]
+        older = candles[i + 1]
+
+        older_top, older_bottom = (
+            body_position(older)
+        )
+
+        newer_top, newer_bottom = (
+            body_position(newer)
+        )
+
+        older_crosses = (
+            older_top <= level
+            and
+            older_bottom >= level
+        )
+
+        older_below = (
+            older_top > level
+        )
+
+        older_break = (
+            older_crosses
+            or
+            older_below
+        )
+
+        newer_remains_below = (
+            newer_top > level
+        )
+
+        if (
+            older["color"] == "RED"
+            and
+            newer["color"] == "GREEN"
+            and
+            older_break
+            and
+            newer_remains_below
+        ):
+
+            return True
+
+    return False
+
+
 # ============================================================
 # COLOR CONFIRMATION
 # ============================================================
-def analyze_color_confirmation(
+
+def color_confirmation(
     candles,
     resistance,
     support
 ):
+
     green_red = False
     red_green = False
+
     if resistance:
+
         level = resistance["level"]
+
         for i in range(
             1,
             min(
@@ -1406,27 +1446,35 @@ def analyze_color_confirmation(
                 LOOKBACK_CANDLES
             )
         ):
-            previous = candles[i - 1]
-            current = candles[i]
-            previous_top = (
-                body_position(previous)[0]
-            )
-            current_top = (
-                body_position(current)[0]
-            )
+
+            newer = candles[i - 1]
+            older = candles[i]
+
+            older_top = body_position(
+                older
+            )[0]
+
+            newer_top = body_position(
+                newer
+            )[0]
+
             if (
-                previous["color"] == "GREEN"
+                older["color"] == "GREEN"
                 and
-                current["color"] == "RED"
+                newer["color"] == "RED"
                 and
-                previous_top <= level
+                older_top <= level
                 and
-                current_top >= level
+                newer_top >= level
             ):
+
                 green_red = True
                 break
+
     if support:
+
         level = support["level"]
+
         for i in range(
             1,
             min(
@@ -1434,512 +1482,459 @@ def analyze_color_confirmation(
                 LOOKBACK_CANDLES
             )
         ):
-            previous = candles[i - 1]
-            current = candles[i]
-            previous_bottom = (
-                body_position(previous)[1]
-            )
-            current_bottom = (
-                body_position(current)[1]
-            )
+
+            newer = candles[i - 1]
+            older = candles[i]
+
+            older_bottom = body_position(
+                older
+            )[1]
+
+            newer_bottom = body_position(
+                newer
+            )[1]
+
             if (
-                previous["color"] == "RED"
+                older["color"] == "RED"
                 and
-                current["color"] == "GREEN"
+                newer["color"] == "GREEN"
                 and
-                previous_bottom >= level
+                older_bottom >= level
                 and
-                current_bottom <= level
+                newer_bottom <= level
             ):
+
                 red_green = True
                 break
-    return {
-        "green_red": green_red,
-        "red_green": red_green
-    }
+
+    return (
+        green_red,
+        red_green
+    )
+
+
 # ============================================================
-# COMPLETE STRATEGY READING
+# CONTINUATION
 # ============================================================
+
+def continuation_structure(
+    candles,
+    resistance,
+    support
+):
+
+    if len(candles) < 3:
+        return None
+
+    colors = [
+        c["color"]
+        for c in candles[:3]
+    ]
+
+    if colors == [
+        "GREEN",
+        "GREEN",
+        "GREEN"
+    ]:
+
+        if resistance:
+
+            level = resistance["level"]
+
+            above = True
+
+            for candle in candles[:3]:
+
+                if body_position(candle)[1] >= level:
+                    above = False
+                    break
+
+            if above:
+                return "BUY"
+
+        return "BUY"
+
+    if colors == [
+        "RED",
+        "RED",
+        "RED"
+    ]:
+
+        if support:
+
+            level = support["level"]
+
+            below = True
+
+            for candle in candles[:3]:
+
+                if body_position(candle)[0] <= level:
+                    below = False
+                    break
+
+            if below:
+                return "SELL"
+
+        return "SELL"
+
+    return None
+
+
+# ============================================================
+# MAIN STRATEGY
+# ============================================================
+
 def analyze_strategy(
     candles
 ):
+
     if not candles:
+
         return {
-            "summary":
-                "No candles detected.",
-            "details": []
+            "decision": "NO SIGNAL",
+            "confidence": 0,
+            "buy_score": 0,
+            "sell_score": 0,
+            "reasons": []
         }
-    details = []
+
     newest = candles[0]
-    details.append(
-        "Candle #1 is the newest/rightmost "
-        f"visible candle: {newest['color']}."
+
+    resistance = find_resistance_zone(
+        candles
     )
-    # --------------------------------------------------------
-    # RESISTANCE
-    # --------------------------------------------------------
-    resistance = (
-        find_resistance_zone(
-            candles
-        )
+
+    support = find_support_zone(
+        candles
     )
-    if resistance:
-        tests = len(
-            resistance["candles"]
-        )
-        details.append(
-            f"Resistance zone: "
-            f"{tests} visible body tests."
-        )
-    else:
-        details.append(
-            "Resistance zone: no repeated "
-            "resistance area confirmed."
-        )
-    # --------------------------------------------------------
-    # SUPPORT
-    # --------------------------------------------------------
-    support = (
-        find_support_zone(
-            candles
-        )
-    )
-    if support:
-        tests = len(
-            support["candles"]
-        )
-        details.append(
-            f"Support zone: "
-            f"{tests} visible body tests."
-        )
-    else:
-        details.append(
-            "Support zone: no repeated "
-            "support area confirmed."
-        )
-    # --------------------------------------------------------
-    # REACTION STRENGTH
-    # --------------------------------------------------------
-    resistance_strength = (
-        zone_reaction_strength(
-            resistance,
-            "RESISTANCE"
-        )
-    )
-    support_strength = (
-        zone_reaction_strength(
-            support,
-            "SUPPORT"
-        )
-    )
-    details.append(
-        "Resistance reaction strength: "
-        +
-        resistance_strength["description"]
-    )
-    details.append(
-        "Support reaction strength: "
-        +
-        support_strength["description"]
-    )
-    # --------------------------------------------------------
-    # CURRENT ZONE BEHAVIOR
-    # --------------------------------------------------------
+
     resistance_result = (
         resistance_behavior(
             candles,
             resistance
         )
     )
-    details.append(
-        "Resistance behavior: "
-        +
-        resistance_result["description"]
-    )
+
     support_result = (
         support_behavior(
             candles,
             support
         )
     )
-    details.append(
-        "Support behavior: "
-        +
-        support_result["description"]
+
+    resistance_strength = (
+        reaction_strength(
+            resistance,
+            candles,
+            True
+        )
     )
-    # --------------------------------------------------------
-    # BODY MOMENTUM
-    # --------------------------------------------------------
+
+    support_strength = (
+        reaction_strength(
+            support,
+            candles,
+            False
+        )
+    )
+
     momentum = (
         analyze_body_momentum(
             candles
         )
     )
-    details.append(
-        "Body momentum: "
-        +
-        momentum["description"]
-    )
-    # --------------------------------------------------------
-    # CONSECUTIVE MOMENTUM
-    # --------------------------------------------------------
+
     consecutive = (
-        analyze_consecutive_momentum(
+        consecutive_momentum(
             candles
         )
     )
-    details.append(
-        "Consecutive momentum: "
-        +
-        consecutive["description"]
+
+    reversal = (
+        body_reversal(
+            candles
+        )
     )
+
+    two_reversal = (
+        two_candle_reversal(
+            candles
+        )
+    )
+
+    three_reversal = (
+        three_candle_reversal(
+            candles
+        )
+    )
+
+    pullback = (
+        detect_pullback(
+            candles
+        )
+    )
+
+    resistance_failure, support_failure = (
+        breakout_failure(
+            candles,
+            resistance,
+            support
+        )
+    )
+
+    resistance_hold = (
+        resistance_breakout_hold(
+            candles,
+            resistance
+        )
+    )
+
+    support_hold = (
+        support_breakdown_hold(
+            candles,
+            support
+        )
+    )
+
+    green_red, red_green = (
+        color_confirmation(
+            candles,
+            resistance,
+            support
+        )
+    )
+
+    continuation = (
+        continuation_structure(
+            candles,
+            resistance,
+            support
+        )
+    )
+
+    # ========================================================
+    # SCORING
+    # ========================================================
+
+    buy_score = 0
+    sell_score = 0
+
+    buy_reasons = []
+    sell_reasons = []
+
+    # --------------------------------------------------------
+    # SUPPORT
+    # --------------------------------------------------------
+
+    if support:
+        buy_score += 1
+
+    if support_result["rejection"]:
+
+        buy_score += 2
+
+        buy_reasons.append(
+            "Bullish rejection from support"
+        )
+
+    if support_failure:
+
+        buy_score += 1
+
+        buy_reasons.append(
+            "Support breakdown failure"
+        )
+
+    # --------------------------------------------------------
+    # RESISTANCE
+    # --------------------------------------------------------
+
+    if resistance:
+        sell_score += 1
+
+    if resistance_result["rejection"]:
+
+        sell_score += 2
+
+        sell_reasons.append(
+            "Bearish rejection at resistance"
+        )
+
+    if resistance_failure:
+
+        sell_score += 1
+
+        sell_reasons.append(
+            "Resistance breakout failure"
+        )
+
+    # --------------------------------------------------------
+    # BREAKOUT HOLD
+    # --------------------------------------------------------
+
+    if resistance_hold:
+
+        buy_score += 3
+
+        buy_reasons.append(
+            "Resistance broken and next body held above the zone"
+        )
+
+    if support_hold:
+
+        sell_score += 3
+
+        sell_reasons.append(
+            "Support broken and next body held below the zone"
+        )
+
+    # --------------------------------------------------------
+    # MOMENTUM
+    # --------------------------------------------------------
+
+    if consecutive == "BUY":
+
+        buy_score += 1
+
+        buy_reasons.append(
+            "Three-candle bullish momentum"
+        )
+
+    if consecutive == "SELL":
+
+        sell_score += 1
+
+        sell_reasons.append(
+            "Three-candle bearish momentum"
+        )
+
     # --------------------------------------------------------
     # CONTINUATION
     # --------------------------------------------------------
-    continuation = (
-        analyze_continuation(
-            candles
+
+    if continuation == "BUY":
+
+        buy_score += 1
+
+        buy_reasons.append(
+            "Bullish continuation structure"
         )
-    )
-    details.append(
-        "Continuation: "
-        +
-        continuation["description"]
-    )
-    # --------------------------------------------------------
-    # BODY CLUSTERING
-    # --------------------------------------------------------
-    clustering = (
-        analyze_body_clustering(
-            candles
+
+    if continuation == "SELL":
+
+        sell_score += 1
+
+        sell_reasons.append(
+            "Bearish continuation structure"
         )
-    )
-    details.append(
-        "Body clustering: "
-        +
-        clustering["description"]
-    )
+
     # --------------------------------------------------------
-    # BODY REVERSAL
+    # REVERSALS
     # --------------------------------------------------------
-    reversal = (
-        analyze_body_reversal(
-            candles
+
+    if reversal == "BUY":
+
+        buy_score += 2
+
+        buy_reasons.append(
+            "Bullish body reversal"
         )
-    )
-    details.append(
-        "Body reversal/engulfing: "
-        +
-        reversal["description"]
-    )
-    # --------------------------------------------------------
-    # 2-CANDLE REVERSAL
-    # --------------------------------------------------------
-    two_reversal = (
-        analyze_two_candle_reversal(
-            candles
+
+    if reversal == "SELL":
+
+        sell_score += 2
+
+        sell_reasons.append(
+            "Bearish body reversal"
         )
-    )
-    details.append(
-        "2-candle reversal: "
-        +
-        two_reversal["description"]
-    )
-    # --------------------------------------------------------
-    # 3-CANDLE REVERSAL
-    # --------------------------------------------------------
-    three_reversal = (
-        analyze_three_candle_reversal(
-            candles
+
+    if two_reversal == "BUY":
+
+        buy_score += 1
+
+        buy_reasons.append(
+            "Two-candle bullish reversal"
         )
-    )
-    details.append(
-        "3-candle reversal: "
-        +
-        three_reversal["description"]
-    )
+
+    if two_reversal == "SELL":
+
+        sell_score += 1
+
+        sell_reasons.append(
+            "Two-candle bearish reversal"
+        )
+
+    if three_reversal == "BUY":
+
+        buy_score += 1
+
+        buy_reasons.append(
+            "Three-candle bullish reversal"
+        )
+
+    if three_reversal == "SELL":
+
+        sell_score += 1
+
+        sell_reasons.append(
+            "Three-candle bearish reversal"
+        )
+
     # --------------------------------------------------------
     # PULLBACK
     # --------------------------------------------------------
-    pullback = (
-        analyze_pullback(
-            candles
+
+    if pullback == "BUY":
+
+        buy_score += 1
+
+        buy_reasons.append(
+            "Bullish pullback structure"
         )
-    )
-    details.append(
-        "Pullback: "
-        +
-        pullback["description"]
-    )
-    # --------------------------------------------------------
-    # RECENT REVERSAL
-    # --------------------------------------------------------
-    recent_reversal = (
-        analyze_recent_reversal(
-            candles
+
+    if pullback == "SELL":
+
+        sell_score += 1
+
+        sell_reasons.append(
+            "Bearish pullback structure"
         )
-    )
-    details.append(
-        "Recent reversal: "
-        +
-        recent_reversal["description"]
-    )
-    # --------------------------------------------------------
-    # TWO-SIDED REJECTION
-    # --------------------------------------------------------
-    two_sided = (
-        resistance is not None
-        and
-        support is not None
-    )
-    if two_sided:
-        details.append(
-            "Two-sided rejection: Repeated "
-            "upper and lower body rejection "
-            "areas are both visible."
-        )
-    else:
-        details.append(
-            "Two-sided rejection: Both "
-            "upper and lower repeated areas "
-            "are not confirmed."
-        )
-    # --------------------------------------------------------
-    # BREAKOUT STRUCTURE
-    # --------------------------------------------------------
-    breakout_structure = (
-        analyze_breakout_structure(
-            candles,
-            resistance,
-            support
-        )
-    )
-    # --------------------------------------------------------
-    # BREAKOUT FAILURE
-    # --------------------------------------------------------
-    breakout = (
-        analyze_breakout_failure(
-            candles,
-            resistance,
-            support
-        )
-    )
-    if breakout_structure[
-        "resistance_hold"
-    ]:
-        details.append(
-            "Resistance breakout hold: YES — "
-            "price moved above the resistance "
-            "area and the following body remained "
-            "above the zone."
-        )
-    elif breakout[
-        "resistance_failure"
-    ]:
-        details.append(
-            "Resistance breakout failure: YES — "
-            "the breakout returned into/below "
-            "the resistance area."
-        )
-    else:
-        details.append(
-            "Resistance breakout failure: NO."
-        )
-    if breakout_structure[
-        "support_hold"
-    ]:
-        details.append(
-            "Support breakdown hold: YES — "
-            "price moved below the support "
-            "area and the following body remained "
-            "below the zone."
-        )
-    elif breakout[
-        "support_failure"
-    ]:
-        details.append(
-            "Support breakout failure: YES — "
-            "the breakdown returned into/above "
-            "the support area."
-        )
-    else:
-        details.append(
-            "Support breakout failure: NO."
-        )
-    # --------------------------------------------------------
-    # BREAKOUT CONFIRMATION
-    # --------------------------------------------------------
-    if breakout_structure[
-        "resistance_hold"
-    ]:
-        details.append(
-            "Resistance breakout confirmation: "
-            "YES — breakout held above resistance."
-        )
-    elif breakout_structure[
-        "resistance_breakout"
-    ]:
-        details.append(
-            "Resistance breakout confirmation: "
-            "YES — resistance was crossed."
-        )
-    else:
-        details.append(
-            "Resistance breakout confirmation: NO."
-        )
-    if breakout_structure[
-        "support_hold"
-    ]:
-        details.append(
-            "Support breakdown confirmation: "
-            "YES — breakdown held below support."
-        )
-    elif breakout_structure[
-        "support_breakdown"
-    ]:
-        details.append(
-            "Support breakdown confirmation: "
-            "YES — support was crossed."
-        )
-    else:
-        details.append(
-            "Support breakdown confirmation: NO."
-        )
+
     # --------------------------------------------------------
     # COLOR CONFIRMATION
     # --------------------------------------------------------
-    confirmation = (
-        analyze_color_confirmation(
-            candles,
-            resistance,
-            support
+
+    if red_green:
+
+        buy_score += 2
+
+        buy_reasons.append(
+            "RED → GREEN confirmation"
         )
-    )
-    if confirmation["green_red"]:
-        details.append(
-            "GREEN → RED confirmation: YES."
+
+    if green_red:
+
+        sell_score += 2
+
+        sell_reasons.append(
+            "GREEN → RED confirmation"
         )
-    else:
-        details.append(
-            "GREEN → RED confirmation: NO."
-        )
-    if confirmation["red_green"]:
-        details.append(
-            "RED → GREEN confirmation: YES."
-        )
-    else:
-        details.append(
-            "RED → GREEN confirmation: NO."
-        )
+
     # ========================================================
-    # STRATEGY SCORING
+    # RAW AGREEMENT
     # ========================================================
-    buy_score = 0
-    sell_score = 0
-    # --------------------------------------------------------
-    # BUY
-    # --------------------------------------------------------
-    if support:
-        buy_score += 1
-    if support_result["rejection"]:
-        buy_score += 2
-    if breakout["support_failure"]:
-        buy_score += 1
-    if confirmation["red_green"]:
-        buy_score += 2
-    if consecutive["direction"] == "UPWARD":
-        buy_score += 1
-    if reversal.get("direction") == "BUY":
-        buy_score += 2
-    if recent_reversal.get(
-        "direction"
-    ) == "SELL_TO_BUY":
-        buy_score += 2
-    if continuation.get(
-        "direction"
-    ) == "BUY":
-        buy_score += 2
-    if two_reversal.get(
-        "direction"
-    ) == "BUY":
-        buy_score += 2
-    if three_reversal.get(
-        "direction"
-    ) == "BUY":
-        buy_score += 2
-    if pullback.get(
-        "direction"
-    ) == "BUY":
-        buy_score += 1
-    # BREAKOUT ABOVE RESISTANCE = BUY
-    if breakout_structure[
-        "resistance_breakout"
-    ]:
-        buy_score += 2
-    # BREAKOUT HOLD = STRONGER BUY
-    if breakout_structure[
-        "resistance_hold"
-    ]:
-        buy_score += 2
-    # --------------------------------------------------------
-    # SELL
-    # --------------------------------------------------------
-    if resistance:
-        sell_score += 1
-    if resistance_result["rejection"]:
-        sell_score += 2
-    if breakout["resistance_failure"]:
-        sell_score += 1
-    if confirmation["green_red"]:
-        sell_score += 2
-    if consecutive["direction"] == "DOWNWARD":
-        sell_score += 1
-    if reversal.get("direction") == "SELL":
-        sell_score += 2
-    if recent_reversal.get(
-        "direction"
-    ) == "BUY_TO_SELL":
-        sell_score += 2
-    if continuation.get(
-        "direction"
-    ) == "SELL":
-        sell_score += 2
-    if two_reversal.get(
-        "direction"
-    ) == "SELL":
-        sell_score += 2
-    if three_reversal.get(
-        "direction"
-    ) == "SELL":
-        sell_score += 2
-    if pullback.get(
-        "direction"
-    ) == "SELL":
-        sell_score += 1
-    # BREAKDOWN BELOW SUPPORT = SELL
-    if breakout_structure[
-        "support_breakdown"
-    ]:
-        sell_score += 2
-    # BREAKDOWN HOLD = STRONGER SELL
-    if breakout_structure[
-        "support_hold"
-    ]:
-        sell_score += 2
-    # --------------------------------------------------------
-    # CONFLICT DETECTION
-    # --------------------------------------------------------
-    difference = abs(
-        buy_score -
-        sell_score
-    )
+
     total_score = (
         buy_score +
         sell_score
     )
+
     if total_score <= 0:
+
         agreement = 0
+
     else:
+
         agreement = round(
             (
                 max(
@@ -1950,151 +1945,161 @@ def analyze_strategy(
                 total_score
             ) * 100
         )
-    conflict = (
-        total_score > 0
-        and
-        difference <= 1
-    )
-    if conflict:
-        details.append(
-            "Conflict detection: Directional "
-            "evidence is too close — no clear "
-            "direction."
-        )
-    else:
-        details.append(
-            "Conflict detection: Directional "
-            "evidence is sufficiently separated."
-        )
-    details.append(
-        f"BUY strategy score: {buy_score}"
-    )
-    details.append(
-        f"SELL strategy score: {sell_score}"
-    )
-    details.append(
-        f"Strategy agreement: {agreement}%"
-    )
-    # --------------------------------------------------------
-    # FINAL DECISION
-    # --------------------------------------------------------
-    if conflict:
-        final = (
-            "NO CLEAR SIGNAL"
-        )
-        confidence = agreement
-    elif (
-        buy_score >
+
+    # ========================================================
+    # CONFLICT PROTECTION
+    # ========================================================
+
+    difference = abs(
+        buy_score -
         sell_score
+    )
+
+    conflict = (
+        difference <= 1
         and
-        buy_score >= 3
-    ):
-        final = (
-            "BUY SIGNAL"
-        )
-        confidence = min(
-            95,
-            max(
-                65,
-                agreement
-            )
-        )
-    elif (
-        sell_score >
-        buy_score
-        and
-        sell_score >= 3
-    ):
-        final = (
-            "SELL SIGNAL"
-        )
-        confidence = min(
-            95,
-            max(
-                65,
-                agreement
-            )
-        )
+        total_score >= 4
+    )
+
+    # ========================================================
+    # FINAL DECISION
+    # ========================================================
+
+    decision = "NO SIGNAL"
+
+    confidence = agreement
+
+    if not conflict:
+
+        if (
+            buy_score > sell_score
+            and
+            buy_score >= 3
+            and
+            agreement >= MIN_SIGNAL_AGREEMENT
+        ):
+
+            decision = "BUY SIGNAL"
+
+        elif (
+            sell_score > buy_score
+            and
+            sell_score >= 3
+            and
+            agreement >= MIN_SIGNAL_AGREEMENT
+        ):
+
+            decision = "SELL SIGNAL"
+
+    # ========================================================
+    # SELECT ONLY STRONGEST 3 REASONS
+    # ========================================================
+
+    if decision == "BUY SIGNAL":
+
+        unique = []
+
+        for reason in buy_reasons:
+
+            if reason not in unique:
+                unique.append(reason)
+
+        reasons = unique[:3]
+
+    elif decision == "SELL SIGNAL":
+
+        unique = []
+
+        for reason in sell_reasons:
+
+            if reason not in unique:
+                unique.append(reason)
+
+        reasons = unique[:3]
+
     else:
-        final = (
-            "NO COMPLETE SIGNAL"
-        )
-        confidence = agreement
-    details.append(
-        f"Final strategy decision: "
-        f"{final}"
-        +
-        (
-            f" — {confidence}% strategy agreement."
-            if final not in (
-                "NO CLEAR SIGNAL",
-                "NO COMPLETE SIGNAL"
-            )
-            else "."
-        )
-    )
-    # --------------------------------------------------------
-    # LIMITATIONS
-    # --------------------------------------------------------
-    details.append(
-        "MACD: NOT READ — this bot is "
-        "candle-body based."
-    )
-    details.append(
-        "Volume: NOT READ — no volume "
-        "data is extracted from the screenshot."
-    )
-    details.append(
-        "Wicks: NOT claimed as exact OHLC "
-        "because this detector reads visible "
-        "candle bodies."
-    )
+
+        reasons = []
+
+    # ========================================================
+    # SAFETY CHECK
+    # ========================================================
+
+    if decision == "NO SIGNAL":
+
+        if conflict:
+
+            reasons = [
+                "BUY and SELL evidence are too close",
+                "No clear directional advantage",
+                "Wait for a stronger candle structure"
+            ]
+
+        elif total_score == 0:
+
+            reasons = [
+                "No qualifying setup detected",
+                "Candle evidence is insufficient",
+                "Do not trade"
+            ]
+
+        else:
+
+            reasons = [
+                "Directional evidence is below the required threshold",
+                "No strong independent confirmation",
+                "Do not trade"
+            ]
+
     return {
-        "summary":
-            f"{final}"
-            +
-            (
-                f" — {confidence}% strategy agreement."
-                if final not in (
-                    "NO CLEAR SIGNAL",
-                    "NO COMPLETE SIGNAL"
-                )
-                else "."
-            ),
-        "details": details,
-        "buy_score":
-            buy_score,
-        "sell_score":
-            sell_score,
-        "agreement":
-            agreement,
-        "confidence":
-            confidence
+        "decision": decision,
+        "confidence": confidence,
+        "buy_score": buy_score,
+        "sell_score": sell_score,
+        "agreement": agreement,
+        "reasons": reasons,
+        "resistance": resistance,
+        "support": support,
+        "resistance_strength": resistance_strength,
+        "support_strength": support_strength,
+        "momentum": momentum,
+        "resistance_hold": resistance_hold,
+        "support_hold": support_hold
     }
+
+
 # ============================================================
 # DETECTION MAP
 # ============================================================
+
 def create_detection_map(
     img,
     candles
 ):
+
     output = img.copy()
+
     for number, candle in enumerate(
         candles,
         start=1
     ):
+
         x = int(
             candle["x"]
         )
+
         y = int(
             candle["y"]
         )
+
         w = int(
             candle["w"]
         )
+
         h = int(
             candle["h"]
         )
+
         cv2.rectangle(
             output,
             (x, y),
@@ -2102,18 +2107,23 @@ def create_detection_map(
             (0, 255, 255),
             2
         )
+
         if candle["color"] == "GREEN":
+
             label_color = (
                 0,
                 255,
                 0
             )
+
         else:
+
             label_color = (
                 0,
                 0,
                 255
             )
+
         cv2.putText(
             output,
             str(number),
@@ -2130,258 +2140,396 @@ def create_detection_map(
             2,
             cv2.LINE_AA
         )
+
     return output
+
+
 # ============================================================
 # TELEGRAM PHOTO HANDLER
 # ============================================================
+
 @bot.message_handler(
     content_types=["photo"]
 )
 def handle_photo(message):
+
     start_time = time.time()
+
     original_path = (
         "strategy_chart.png"
     )
+
     detection_path = (
         "strategy_detection.png"
     )
+
     try:
+
         bot.reply_to(
             message,
             "👁️ Reading candles RIGHT → LEFT...\n"
             "🎯 Candle #1 = newest candle.\n"
-            "🔎 Testing candle strategies..."
+            "🧠 Testing candle structure..."
         )
+
         # ----------------------------------------------------
-        # DOWNLOAD HIGHEST RESOLUTION
+        # DOWNLOAD IMAGE
         # ----------------------------------------------------
+
         file_info = bot.get_file(
             message.photo[-1].file_id
         )
+
         downloaded_file = (
             bot.download_file(
                 file_info.file_path
             )
         )
+
         with open(
             original_path,
             "wb"
         ) as f:
+
             f.write(
                 downloaded_file
             )
+
         # ----------------------------------------------------
         # LOAD
         # ----------------------------------------------------
+
         img = load_image(
             original_path
         )
+
         # ----------------------------------------------------
         # DETECT
         # ----------------------------------------------------
+
         candles = detect_candles(
             img
         )
+
         total = len(
             candles
         )
+
         if total == 0:
+
             bot.reply_to(
                 message,
-                "❌ No reliable candle bodies detected.\n\n"
-                "No strategy analysis was generated."
+                "❌ NO SIGNAL — DON'T TRADE\n\n"
+                "No reliable candle bodies were detected."
             )
+
             return
+
         # ----------------------------------------------------
         # COUNT
         # ----------------------------------------------------
+
         green = sum(
             1
             for c in candles
             if c["color"] == "GREEN"
         )
+
         red = sum(
             1
             for c in candles
             if c["color"] == "RED"
         )
-        # ----------------------------------------------------
-        # CANDLE SEQUENCE
-        # ----------------------------------------------------
-        sequence = []
-        for number, candle in enumerate(
-            candles,
-            start=1
-        ):
-            icon = (
-                "🟢"
-                if candle["color"] == "GREEN"
-                else "🔴"
-            )
-            sequence.append(
-                f"{number}. {icon} "
-                f"{candle['color']}"
-            )
-        sequence_text = "\n".join(
-            sequence[
-                :LOOKBACK_CANDLES
-            ]
-        )
+
         # ----------------------------------------------------
         # STRATEGY
         # ----------------------------------------------------
+
         strategy = (
             analyze_strategy(
                 candles
             )
         )
-        strategy_text = "\n".join(
-            "• " + item
-            for item in strategy["details"]
+
+        signal_time, entry_time = (
+            signal_and_entry_times()
         )
+
+        decision = strategy[
+            "decision"
+        ]
+
+        confidence = strategy[
+            "confidence"
+        ]
+
+        reasons = strategy[
+            "reasons"
+        ]
+
+        # ====================================================
+        # BUY / SELL ALERT
+        # ====================================================
+
+        if decision == "BUY SIGNAL":
+
+            report = (
+                "🟢 **BUY SIGNAL**\n\n"
+                "🕐 Signal Time: "
+                f"{signal_time} Nigeria Time\n"
+                "🎯 Entry Time: "
+                f"{entry_time} Nigeria Time\n"
+                "⏱️ Expiry: 1 Minute\n\n"
+                f"💪 Strength: {confidence}%\n\n"
+                "📌 **CORE REASONS**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+            )
+
+            for reason in reasons:
+                report += (
+                    f"• {reason}\n"
+                )
+
+            report += (
+                "\n⚠️ Manual entry only."
+            )
+
+        elif decision == "SELL SIGNAL":
+
+            report = (
+                "🔴 **SELL SIGNAL**\n\n"
+                "🕐 Signal Time: "
+                f"{signal_time} Nigeria Time\n"
+                "🎯 Entry Time: "
+                f"{entry_time} Nigeria Time\n"
+                "⏱️ Expiry: 1 Minute\n\n"
+                f"💪 Strength: {confidence}%\n\n"
+                "📌 **CORE REASONS**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+            )
+
+            for reason in reasons:
+                report += (
+                    f"• {reason}\n"
+                )
+
+            report += (
+                "\n⚠️ Manual entry only."
+            )
+
+        else:
+
+            report = (
+                "⚪ **NO SIGNAL — DON'T TRADE**\n\n"
+                f"🕐 Analysis Time: "
+                f"{signal_time} Nigeria Time\n\n"
+                f"📊 BUY score: "
+                f"{strategy['buy_score']}\n"
+                f"📊 SELL score: "
+                f"{strategy['sell_score']}\n"
+                f"📊 Agreement: "
+                f"{strategy['agreement']}%\n\n"
+                "📌 **WHY NO TRADE**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+            )
+
+            for reason in reasons:
+
+                report += (
+                    f"• {reason}\n"
+                )
+
+        # ----------------------------------------------------
+        # CANDLE COUNT
+        # ----------------------------------------------------
+
+        report += (
+            "\n\n🕯️ Candles detected: "
+            f"{total}"
+            f"\n🟢 Green: {green}"
+            f"\n🔴 Red: {red}"
+        )
+
         # ----------------------------------------------------
         # PROCESSING TIME
         # ----------------------------------------------------
+
         elapsed = (
-            time.time() -
+            time.time()
+            -
             start_time
         )
-        # ----------------------------------------------------
-        # FINAL REPORT
-        # ----------------------------------------------------
-        report = (
-            "🔎 **OTC CANDLE STRATEGY ANALYSIS**\n\n"
-            "➡️ **SCAN:** RIGHT → LEFT\n"
-            "🎯 **CANDLE #1 = NEWEST "
-            "VISIBLE CANDLE**\n\n"
-            "📊 **CANDLE DETECTION**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"🟢 GREEN: {green}\n"
-            f"🔴 RED: {red}\n"
-            f"📊 TOTAL: {total}\n\n"
-            "🕯️ **NEWEST → OLDEST**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"{sequence_text}\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🧠 **ALL STRATEGY READINGS**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"{strategy_text}\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "🎯 **FINAL TEST RESULT**\n"
-            f"{strategy['summary']}\n\n"
-            "⚠️ **IMPORTANT DETECTION LIMITS**\n"
-            "The detector reads visible candle bodies.\n"
-            "It does not invent OHLC values.\n"
-            "It does not detect currency pairs.\n"
-            "It does not generate random candles.\n"
-            "It does not map the price scale.\n"
-            "It does not connect to Pocket Option.\n"
-            "It does not place trades.\n"
-            "Wicks are not claimed as exact OHLC "
-            "unless they are actually detectable.\n\n"
-            f"⚡ Processing time: "
+
+        report += (
+            f"\n\n⚡ Processing: "
             f"{elapsed:.2f}s"
         )
+
         bot.reply_to(
             message,
             report,
             parse_mode="Markdown"
         )
-        # ----------------------------------------------------
+
+        # ====================================================
         # DETECTION MAP
-        # ----------------------------------------------------
+        # ====================================================
+
         detection_map = (
             create_detection_map(
                 img,
                 candles
             )
         )
+
         cv2.imwrite(
             detection_path,
             detection_map
         )
+
         with open(
             detection_path,
             "rb"
         ) as photo:
+
             bot.send_photo(
                 message.chat.id,
                 photo,
                 caption=(
-                    "🔢 **STRATEGY DETECTION MAP**\n\n"
-                    "Scan order is RIGHT → LEFT.\n"
-                    "Candle #1 = newest.\n\n"
-                    "🟡 Yellow box = detected body.\n"
-                    "🟢 Number = GREEN.\n"
-                    "🔴 Number = RED.\n\n"
-                    "Use this map to check whether "
-                    "the bot is reading the same candles "
-                    "you are using for your strategy."
-                ),
-                parse_mode="Markdown"
+                    "🔢 Detection Map\n\n"
+                    "➡️ RIGHT → LEFT\n"
+                    "🎯 Candle #1 = newest\n\n"
+                    "🟡 Yellow box = detected body\n"
+                    "🟢 Number = GREEN\n"
+                    "🔴 Number = RED"
+                )
             )
+
     except Exception as e:
+
         print(
             "❌ ERROR:",
             repr(e)
         )
+
         bot.reply_to(
             message,
-            f"❌ Strategy test error:\n{str(e)}"
+            "❌ Analysis error:\n"
+            f"{str(e)}"
         )
+
     finally:
+
         for path in [
             original_path,
             detection_path
         ]:
+
             if os.path.exists(path):
+
                 try:
                     os.remove(path)
+
                 except Exception:
                     pass
+
+
 # ============================================================
 # START
 # ============================================================
-print(
-    "========================================"
-)
-print(
-    "🧠 OTC STRATEGY READING TEST"
-)
-print(
-    "========================================"
-)
-print(
-    "RIGHT → LEFT scanning."
-)
-print(
-    "Candle #1 = newest."
-)
-print(
-    "Resistance/support body-zone testing."
-)
-print(
-    "Breakout hold / failed breakout detection."
-)
-print(
-    "No price mapping."
-)
-print(
-    "No pair detection."
-)
-print(
-    "No random candles."
-)
-print(
-    "No trading signals."
-)
-print(
-    "No Pocket Option authorization."
-)
-print(
-    "========================================"
-)
-bot.infinity_polling(
-    timeout=30,
-    long_polling_timeout=30
-)
+
+if __name__ == "__main__":
+
+    print(
+        "========================================"
+    )
+
+    print(
+        "🧠 OTC CANDLE STRATEGY BOT"
+    )
+
+    print(
+        "========================================"
+    )
+
+    print(
+        "RIGHT → LEFT scanning"
+    )
+
+    print(
+        "Candle #1 = newest"
+    )
+
+    print(
+        "Support/resistance body zones"
+    )
+
+    print(
+        "Breakout + breakout-hold detection"
+    )
+
+    print(
+        "Reversal detection"
+    )
+
+    print(
+        "Pullback detection"
+    )
+
+    print(
+        "Continuation detection"
+    )
+
+    print(
+        "Conflict protection"
+    )
+
+    print(
+        "NO SIGNAL protection"
+    )
+
+    print(
+        "Nigeria Time: Africa/Lagos"
+    )
+
+    print(
+        "Next-candle entry timing"
+    )
+
+    print(
+        "No indicators"
+    )
+
+    print(
+        "No price mapping"
+    )
+
+    print(
+        "No pair detection"
+    )
+
+    print(
+        "No random candles"
+    )
+
+    print(
+        "No automatic trading"
+    )
+
+    print(
+        "========================================"
+    )
+
+    # Flask in background
+    flask_thread = threading.Thread(
+        target=run_flask,
+        daemon=True
+    )
+
+    flask_thread.start()
+
+    # Telegram polling
+    bot.infinity_polling(
+        timeout=30,
+        long_polling_timeout=30
+    )
