@@ -1,14 +1,23 @@
 import os
 import cv2
 import numpy as np
-import telebot
 import time
+import asyncio
 import threading
 from flask import Flask
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 # ============================================================
-# TELEGRAM
+# TELEGRAM SETTINGS
 # ============================================================
 TELEGRAM_TOKEN = os.getenv(
     "BOT_TOKEN",
@@ -18,7 +27,6 @@ CHANNEL_ID = os.getenv(
     "CHANNEL_ID",
     "-1004324805205"
 )
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # ============================================================
 # FLASK KEEP-ALIVE
 # ============================================================
@@ -30,7 +38,7 @@ def home():
 def ping():
     return "OK"
 def run_flask():
-    port = int(os.getenv("PORT", 10000))
+    port = int(os.getenv("PORT", "10000"))
     app.run(
         host="0.0.0.0",
         port=port,
@@ -48,9 +56,8 @@ def signal_and_entry_times():
         second=0,
         microsecond=0
     )
-    entry_time = (
-        signal_time +
-        timedelta(minutes=1)
+    entry_time = signal_time + timedelta(
+        minutes=1
     )
     return (
         signal_time.strftime("%H:%M"),
@@ -72,7 +79,7 @@ ZONE_TOLERANCE_RATIO = 0.035
 MIN_SIGNAL_AGREEMENT = 65
 SMALL_BODY_RATIO = 0.35
 # ============================================================
-# LOAD IMAGE
+# IMAGE LOADING
 # ============================================================
 def load_image(path):
     img = cv2.imread(path)
@@ -80,14 +87,14 @@ def load_image(path):
         raise ValueError(
             "Could not read screenshot."
         )
-    h, w = img.shape[:2]
-    if w < 1400:
-        scale = 1400 / w
+    height, width = img.shape[:2]
+    if width < 1400:
+        scale = 1400 / width
         img = cv2.resize(
             img,
             (
-                int(w * scale),
-                int(h * scale)
+                int(width * scale),
+                int(height * scale)
             ),
             interpolation=cv2.INTER_CUBIC
         )
@@ -102,34 +109,47 @@ def get_color_masks(img):
     )
     # GREEN
     green_lower = np.array([
-        30, 35, 35
+        30,
+        35,
+        35
     ])
     green_upper = np.array([
-        90, 255, 255
+        90,
+        255,
+        255
     ])
     green = cv2.inRange(
         hsv,
         green_lower,
         green_upper
     )
-    # RED
+    # RED RANGE 1
     red_lower_1 = np.array([
-        0, 55, 55
+        0,
+        55,
+        55
     ])
     red_upper_1 = np.array([
-        12, 255, 255
-    ])
-    red_lower_2 = np.array([
-        168, 55, 55
-    ])
-    red_upper_2 = np.array([
-        180, 255, 255
+        12,
+        255,
+        255
     ])
     red1 = cv2.inRange(
         hsv,
         red_lower_1,
         red_upper_1
     )
+    # RED RANGE 2
+    red_lower_2 = np.array([
+        168,
+        55,
+        55
+    ])
+    red_upper_2 = np.array([
+        180,
+        255,
+        255
+    ])
     red2 = cv2.inRange(
         hsv,
         red_lower_2,
@@ -192,20 +212,20 @@ def find_candidates(
         )
         if area < min_area:
             continue
-        x, y, w, h = cv2.boundingRect(
+        x, y, width, height = cv2.boundingRect(
             contour
         )
-        if w < MIN_CANDLE_WIDTH:
+        if width < MIN_CANDLE_WIDTH:
             continue
-        if h < min_height:
+        if height < min_height:
             continue
-        if w > max_width:
+        if width > max_width:
             continue
-        if w > h * 6:
+        if width > height * 6:
             continue
         region = cleaned[
-            y:y+h,
-            x:x+w
+            y:y + height,
+            x:x + width
         ]
         colored_pixels = int(
             np.sum(region > 0)
@@ -214,19 +234,19 @@ def find_candidates(
             continue
         density = (
             colored_pixels /
-            float(max(1, w * h))
+            float(max(1, width * height))
         )
         if density < 0.15:
             continue
         center_x = (
             x +
-            w / 2
+            width / 2
         )
         candidates.append({
             "x": x,
             "y": y,
-            "w": w,
-            "h": h,
+            "w": width,
+            "h": height,
             "area": float(area),
             "pixels": colored_pixels,
             "density": density,
@@ -283,29 +303,21 @@ def merge_candidates(candidates):
                     candidate["x"]
                 )
                 right = max(
-                    existing["x"] +
-                    existing["w"],
-                    candidate["x"] +
-                    candidate["w"]
+                    existing["x"] + existing["w"],
+                    candidate["x"] + candidate["w"]
                 )
                 top = min(
                     existing["y"],
                     candidate["y"]
                 )
                 bottom = max(
-                    existing["y"] +
-                    existing["h"],
-                    candidate["y"] +
-                    candidate["h"]
+                    existing["y"] + existing["h"],
+                    candidate["y"] + candidate["h"]
                 )
                 existing["x"] = left
                 existing["y"] = top
-                existing["w"] = (
-                    right - left
-                )
-                existing["h"] = (
-                    bottom - top
-                )
+                existing["w"] = right - left
+                existing["h"] = bottom - top
                 existing["center_x"] = (
                     left +
                     existing["w"] / 2
@@ -326,9 +338,7 @@ def merge_candidates(candidates):
 # ============================================================
 # REMOVE CROSS-COLOR DUPLICATES
 # ============================================================
-def remove_cross_color_duplicates(
-    candles
-):
+def remove_cross_color_duplicates(candles):
     candles = sorted(
         candles,
         key=lambda c: c["center_x"]
@@ -336,9 +346,7 @@ def remove_cross_color_duplicates(
     result = []
     for candle in candles:
         duplicate_index = None
-        for i, existing in enumerate(
-            result
-        ):
+        for index, existing in enumerate(result):
             distance = abs(
                 candle["center_x"]
                 -
@@ -350,7 +358,7 @@ def remove_cross_color_duplicates(
                 2
             ) * 0.65
             if distance <= threshold:
-                duplicate_index = i
+                duplicate_index = index
                 break
         if duplicate_index is None:
             result.append(
@@ -377,9 +385,9 @@ def detect_right_side(
     green_mask,
     red_mask
 ):
-    h, w = chart.shape[:2]
+    height, width = chart.shape[:2]
     right_start = int(
-        w * 0.72
+        width * 0.72
     )
     green_right = green_mask[
         :,
@@ -392,13 +400,13 @@ def detect_right_side(
     green = find_candidates(
         green_right,
         "GREEN",
-        w,
+        width,
         right_side=True
     )
     red = find_candidates(
         red_right,
         "RED",
-        w,
+        width,
         right_side=True
     )
     for candle in green + red:
@@ -411,20 +419,20 @@ def detect_right_side(
 # DETECT CANDLES
 # ============================================================
 def detect_candles(img):
-    h, w = img.shape[:2]
+    height, width = img.shape[:2]
     green_mask, red_mask = (
         get_color_masks(img)
     )
     green = find_candidates(
         green_mask,
         "GREEN",
-        w,
+        width,
         right_side=False
     )
     red = find_candidates(
         red_mask,
         "RED",
-        w,
+        width,
         right_side=False
     )
     green = merge_candidates(
@@ -437,26 +445,20 @@ def detect_candles(img):
         green +
         red
     )
-    right_candidates = (
-        detect_right_side(
-            img,
-            green_mask,
-            red_mask
-        )
+    right_candidates = detect_right_side(
+        img,
+        green_mask,
+        red_mask
     )
     candles.extend(
         right_candidates
     )
-    candles = (
-        remove_cross_color_duplicates(
-            candles
-        )
+    candles = remove_cross_color_duplicates(
+        candles
     )
     candles.sort(
         key=lambda c: c["center_x"]
     )
-    # RIGHT → LEFT
-    # Candle #1 = newest/rightmost
     candles.reverse()
     return candles
 # ============================================================
@@ -475,9 +477,7 @@ def body_position(candle):
 # ============================================================
 # RESISTANCE
 # ============================================================
-def find_resistance_zone(
-    candles
-):
+def find_resistance_zone(candles):
     if not candles:
         return None
     candles_to_check = candles[
@@ -509,7 +509,7 @@ def find_resistance_zone(
     )
     zones = []
     for candle in candles_to_check:
-        top, _ = body_position(
+        top, bottom = body_position(
             candle
         )
         placed = False
@@ -532,9 +532,7 @@ def find_resistance_zone(
         if not placed:
             zones.append({
                 "level": float(top),
-                "candles": [
-                    candle
-                ]
+                "candles": [candle]
             })
     zones.sort(
         key=lambda z: len(
@@ -553,9 +551,7 @@ def find_resistance_zone(
 # ============================================================
 # SUPPORT
 # ============================================================
-def find_support_zone(
-    candles
-):
+def find_support_zone(candles):
     if not candles:
         return None
     candles_to_check = candles[
@@ -565,7 +561,7 @@ def find_support_zone(
         return None
     lowest_points = []
     for candle in candles_to_check:
-        _, bottom = body_position(
+        top, bottom = body_position(
             candle
         )
         lowest_points.append(
@@ -587,7 +583,7 @@ def find_support_zone(
     )
     zones = []
     for candle in candles_to_check:
-        _, bottom = body_position(
+        top, bottom = body_position(
             candle
         )
         placed = False
@@ -610,9 +606,7 @@ def find_support_zone(
         if not placed:
             zones.append({
                 "level": float(bottom),
-                "candles": [
-                    candle
-                ]
+                "candles": [candle]
             })
     zones.sort(
         key=lambda z: len(
@@ -725,9 +719,7 @@ def reaction_strength(
 # ============================================================
 # BODY MOMENTUM
 # ============================================================
-def analyze_body_momentum(
-    candles
-):
+def analyze_body_momentum(candles):
     if len(candles) < 3:
         return "UNKNOWN"
     newest = candles[0]["h"]
@@ -745,9 +737,7 @@ def analyze_body_momentum(
 # ============================================================
 # CONSECUTIVE MOMENTUM
 # ============================================================
-def consecutive_momentum(
-    candles
-):
+def consecutive_momentum(candles):
     if len(candles) < 3:
         return None
     color = candles[0]["color"]
@@ -763,11 +753,9 @@ def consecutive_momentum(
         return "SELL"
     return None
 # ============================================================
-# BODY REVERSAL / ENGULFING
+# BODY REVERSAL
 # ============================================================
-def body_reversal(
-    candles
-):
+def body_reversal(candles):
     if len(candles) < 2:
         return None
     current = candles[0]
@@ -782,9 +770,7 @@ def body_reversal(
 # ============================================================
 # TWO-CANDLE REVERSAL
 # ============================================================
-def two_candle_reversal(
-    candles
-):
+def two_candle_reversal(candles):
     if len(candles) < 2:
         return None
     a = candles[0]
@@ -809,9 +795,7 @@ def two_candle_reversal(
 # ============================================================
 # THREE-CANDLE REVERSAL
 # ============================================================
-def three_candle_reversal(
-    candles
-):
+def three_candle_reversal(candles):
     if len(candles) < 3:
         return None
     a = candles[0]["color"]
@@ -837,9 +821,7 @@ def three_candle_reversal(
 # ============================================================
 # PULLBACK
 # ============================================================
-def detect_pullback(
-    candles
-):
+def detect_pullback(candles):
     if len(candles) < 4:
         return None
     a = candles[0]["color"]
@@ -937,9 +919,7 @@ def resistance_breakout_hold(
         len(candles) - 1,
         LOOKBACK_CANDLES - 1
     )
-    for i in range(
-        maximum
-    ):
+    for i in range(maximum):
         newer = candles[i]
         older = candles[i + 1]
         older_top, older_bottom = (
@@ -989,9 +969,7 @@ def support_breakdown_hold(
         len(candles) - 1,
         LOOKBACK_CANDLES - 1
     )
-    for i in range(
-        maximum
-    ):
+    for i in range(maximum):
         newer = candles[i]
         older = candles[i + 1]
         older_top, older_bottom = (
@@ -1145,79 +1123,57 @@ def continuation_structure(
 # ============================================================
 # MAIN STRATEGY
 # ============================================================
-def analyze_strategy(
-    candles
-):
+def analyze_strategy(candles):
     if not candles:
         return {
             "decision": "NO SIGNAL",
             "confidence": 0,
             "buy_score": 0,
             "sell_score": 0,
+            "agreement": 0,
             "reasons": []
         }
-    newest = candles[0]
     resistance = find_resistance_zone(
         candles
     )
     support = find_support_zone(
         candles
     )
-    resistance_result = (
-        resistance_behavior(
-            candles,
-            resistance
-        )
+    resistance_result = resistance_behavior(
+        candles,
+        resistance
     )
-    support_result = (
-        support_behavior(
-            candles,
-            support
-        )
+    support_result = support_behavior(
+        candles,
+        support
     )
-    resistance_strength = (
-        reaction_strength(
-            resistance,
-            candles,
-            True
-        )
+    resistance_strength = reaction_strength(
+        resistance,
+        candles,
+        True
     )
-    support_strength = (
-        reaction_strength(
-            support,
-            candles,
-            False
-        )
+    support_strength = reaction_strength(
+        support,
+        candles,
+        False
     )
-    momentum = (
-        analyze_body_momentum(
-            candles
-        )
+    momentum = analyze_body_momentum(
+        candles
     )
-    consecutive = (
-        consecutive_momentum(
-            candles
-        )
+    consecutive = consecutive_momentum(
+        candles
     )
-    reversal = (
-        body_reversal(
-            candles
-        )
+    reversal = body_reversal(
+        candles
     )
-    two_reversal = (
-        two_candle_reversal(
-            candles
-        )
+    two_reversal = two_candle_reversal(
+        candles
     )
-    three_reversal = (
-        three_candle_reversal(
-            candles
-        )
+    three_reversal = three_candle_reversal(
+        candles
     )
-    pullback = (
-        detect_pullback(
-            candles
-        )
+    pullback = detect_pullback(
+        candles
     )
     resistance_failure, support_failure = (
         breakout_failure(
@@ -1226,35 +1182,24 @@ def analyze_strategy(
             support
         )
     )
-    resistance_hold = (
-        resistance_breakout_hold(
-            candles,
-            resistance
-        )
+    resistance_hold = resistance_breakout_hold(
+        candles,
+        resistance
     )
-    support_hold = (
-        support_breakdown_hold(
-            candles,
-            support
-        )
+    support_hold = support_breakdown_hold(
+        candles,
+        support
     )
-    green_red, red_green = (
-        color_confirmation(
-            candles,
-            resistance,
-            support
-        )
+    green_red, red_green = color_confirmation(
+        candles,
+        resistance,
+        support
     )
-    continuation = (
-        continuation_structure(
-            candles,
-            resistance,
-            support
-        )
+    continuation = continuation_structure(
+        candles,
+        resistance,
+        support
     )
-    # ========================================================
-    # SCORING
-    # ========================================================
     buy_score = 0
     sell_score = 0
     buy_reasons = []
@@ -1371,9 +1316,7 @@ def analyze_strategy(
         sell_reasons.append(
             "GREEN → RED confirmation"
         )
-    # ========================================================
-    # RAW AGREEMENT
-    # ========================================================
+    # AGREEMENT
     total_score = (
         buy_score +
         sell_score
@@ -1391,9 +1334,7 @@ def analyze_strategy(
                 total_score
             ) * 100
         )
-    # ========================================================
     # CONFLICT PROTECTION
-    # ========================================================
     difference = abs(
         buy_score -
         sell_score
@@ -1403,9 +1344,7 @@ def analyze_strategy(
         and
         total_score >= 4
     )
-    # ========================================================
     # FINAL DECISION
-    # ========================================================
     decision = "NO SIGNAL"
     confidence = agreement
     if not conflict:
@@ -1425,9 +1364,7 @@ def analyze_strategy(
             agreement >= MIN_SIGNAL_AGREEMENT
         ):
             decision = "SELL SIGNAL"
-    # ========================================================
-    # SELECT STRONGEST REASONS
-    # ========================================================
+    # REASONS
     if decision == "BUY SIGNAL":
         unique = []
         for reason in buy_reasons:
@@ -1442,9 +1379,7 @@ def analyze_strategy(
         reasons = unique[:3]
     else:
         reasons = []
-    # ========================================================
-    # SAFETY CHECK
-    # ========================================================
+    # SAFETY
     if decision == "NO SIGNAL":
         if conflict:
             reasons = [
@@ -1493,12 +1428,18 @@ def create_detection_map(
     ):
         x = int(candle["x"])
         y = int(candle["y"])
-        w = int(candle["w"])
-        h = int(candle["h"])
+        width = int(candle["w"])
+        height = int(candle["h"])
         cv2.rectangle(
             output,
-            (x, y),
-            (x + w, y + h),
+            (
+                x,
+                y
+            ),
+            (
+                x + width,
+                y + height
+            ),
             (0, 255, 255),
             2
         )
@@ -1532,82 +1473,101 @@ def create_detection_map(
         )
     return output
 # ============================================================
-# TELEGRAM PHOTO HANDLER
+# TELEGRAM CHANNEL SENDER
 # ============================================================
-@bot.message_handler(
-    content_types=["photo"]
-)
-def handle_photo(message):
-    original_path = "strategy_chart.png"
-    detection_path = "strategy_detection.png"
+async def send_telegram(response):
+    try:
+        application = (
+            Application.builder()
+            .token(TELEGRAM_TOKEN)
+            .build()
+        )
+        await application.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=response,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        await application.shutdown()
+    except Exception as e:
+        print(
+            "❌ Channel send error:",
+            repr(e)
+        )
+# ============================================================
+# START COMMAND
+# ============================================================
+async def start_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    await update.message.reply_text(
+        "🧠 OTC Candle Strategy Bot is ready.\n\n"
+        "Send a Pocket Option OTC screenshot."
+    )
+# ============================================================
+# PHOTO HANDLER
+# ============================================================
+async def handle_photo(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    start_time = time.time()
+    original_path = (
+        f"strategy_chart_{update.message.message_id}.png"
+    )
+    detection_path = (
+        f"strategy_detection_{update.message.message_id}.png"
+    )
     try:
         # ====================================================
-        # STEP 1 — SHOW ANALYZING TO USER
+        # ANALYZING MESSAGE
         # ====================================================
-        bot.reply_to(
-            message,
+        await update.message.reply_text(
             "🔍 Analyzing..."
         )
         # ====================================================
-        # STEP 2 — DOWNLOAD SCREENSHOT
+        # DOWNLOAD PHOTO
         # ====================================================
-        file_info = bot.get_file(
-            message.photo[-1].file_id
+        photo = update.message.photo[-1]
+        telegram_file = await context.bot.get_file(
+            photo.file_id
         )
-        downloaded_file = (
-            bot.download_file(
-                file_info.file_path
-            )
+        await telegram_file.download_to_drive(
+            original_path
         )
-        with open(
-            original_path,
-            "wb"
-        ) as f:
-            f.write(
-                downloaded_file
-            )
         # ====================================================
-        # STEP 3 — LOAD IMAGE
+        # LOAD IMAGE
         # ====================================================
         img = load_image(
             original_path
         )
         # ====================================================
-        # STEP 4 — DETECT CANDLES
+        # DETECT CANDLES
         # ====================================================
         candles = detect_candles(
             img
         )
-        total = len(candles)
+        total = len(
+            candles
+        )
         # ====================================================
         # NO CANDLES
         # ====================================================
         if total == 0:
-            no_signal = (
+            response = (
                 "⚪ **NO SIGNAL — DON'T TRADE**"
             )
-            # NO SIGNAL GOES TO USER ONLY
-            bot.reply_to(
-                message,
-                no_signal,
-                parse_mode="Markdown"
+            await update.message.reply_text(
+                response,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            elapsed = time.time() - start_time
+            print(
+                f"⚪ No signal in {elapsed:.2f} seconds"
             )
             return
         # ====================================================
-        # STEP 5 — BASIC COUNTING
-        # ====================================================
-        green = sum(
-            1
-            for c in candles
-            if c["color"] == "GREEN"
-        )
-        red = sum(
-            1
-            for c in candles
-            if c["color"] == "RED"
-        )
-        # ====================================================
-        # STEP 6 — STRATEGY ENGINE
+        # STRATEGY
         # ====================================================
         strategy = analyze_strategy(
             candles
@@ -1625,10 +1585,10 @@ def handle_photo(message):
             "reasons"
         ]
         # ====================================================
-        # STEP 7 — BUILD RESPONSE
+        # BUILD RESPONSE
         # ====================================================
         if decision == "BUY SIGNAL":
-            report = (
+            response = (
                 "🚨 **SIGNAL ALERT**\n\n"
                 "🟢 **BUY**\n"
                 f"🕐 **Signal Time:** "
@@ -1639,11 +1599,11 @@ def handle_photo(message):
                 f"{confidence}%\n\n"
             )
             for reason in reasons[:3]:
-                report += (
+                response += (
                     f"• {reason}\n"
                 )
         elif decision == "SELL SIGNAL":
-            report = (
+            response = (
                 "🚨 **SIGNAL ALERT**\n\n"
                 "🔴 **SELL**\n"
                 f"🕐 **Signal Time:** "
@@ -1654,63 +1614,51 @@ def handle_photo(message):
                 f"{confidence}%\n\n"
             )
             for reason in reasons[:3]:
-                report += (
+                response += (
                     f"• {reason}\n"
                 )
         else:
-            report = (
+            response = (
                 "⚪ **NO SIGNAL — DON'T TRADE**"
             )
         # ====================================================
-        # STEP 8 — SIGNAL DELIVERY
+        # USER RESPONSE
         #
-        # SIGNAL:
-        # CHANNEL FIRST → USER SECOND
-        #
-        # NO SIGNAL:
-        # USER ONLY
+        # This remains visible to you.
         # ====================================================
-        await context.bot.forward_message(
-            chat_id=CHANNEL_ID,
-            from_chat_id=update.message.chat_id,
-            message_id=update.message.message_id
+        await update.message.reply_text(
+            response,
+            parse_mode=ParseMode.MARKDOWN
         )
-
-        send_telegram(response)
-
-        elapsed = time.time() - start_time
-        print(f"✅ Signal sent in {elapsed:.2f} seconds")
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {str(e)}")
-            # ------------------------------------------------
-            # SECOND: SEND SIGNAL TO USER
-            # ------------------------------------------------
-            bot.reply_to(
-                message,
-                report,
-                parse_mode="Markdown"
-            )
-        else:
-            # ------------------------------------------------
-            # NO SIGNAL → USER ONLY
-            # ------------------------------------------------
-            bot.reply_to(
-                message,
-                report,
-                parse_mode="Markdown"
-            )
         # ====================================================
-        # STEP 9 — CREATE ANALYSIS / DETECTION SCREENSHOT
+        # CHANNEL DELIVERY
         #
-        # This stays in the normal analysis flow.
-        # It is NOT moved to a background thread.
+        # Only signal is sent to channel.
         # ====================================================
-        detection_map = (
-            create_detection_map(
-                img,
-                candles
+        if decision in (
+            "BUY SIGNAL",
+            "SELL SIGNAL"
+        ):
+            await context.bot.forward_message(
+                chat_id=CHANNEL_ID,
+                from_chat_id=update.message.chat_id,
+                message_id=update.message.message_id
             )
+            await send_telegram(response)
+            elapsed = time.time() - start_time
+            print(f"✅ Signal sent in {elapsed:.2f} seconds")
+        else:
+            elapsed = time.time() - start_time
+            print(
+                f"⚪ No signal. Analysis completed in "
+                f"{elapsed:.2f} seconds"
+            )
+        # ====================================================
+        # DETECTION MAP
+        # ====================================================
+        detection_map = create_detection_map(
+            img,
+            candles
         )
         cv2.imwrite(
             detection_path,
@@ -1721,30 +1669,34 @@ def handle_photo(message):
             "❌ ERROR:",
             repr(e)
         )
-        try:
-            bot.reply_to(
-                message,
-                "❌ Analysis error."
-            )
-        except Exception:
-            pass
+        await update.message.reply_text(
+            f"❌ Error: {str(e)}"
+        )
     finally:
-        # ====================================================
-        # CLEAN TEMPORARY FILES
-        # ====================================================
-        for path in [
+        for path in (
             original_path,
             detection_path
-        ]:
+        ):
             if os.path.exists(path):
                 try:
                     os.remove(path)
                 except Exception:
                     pass
 # ============================================================
-# START
+# ERROR HANDLER
 # ============================================================
-if __name__ == "__main__":
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    print(
+        "Telegram error:",
+        repr(context.error)
+    )
+# ============================================================
+# MAIN
+# ============================================================
+def main():
     print(
         "========================================"
     )
@@ -1803,22 +1755,47 @@ if __name__ == "__main__":
         "No automatic trading"
     )
     print(
-        "SIGNAL → CHANNEL FIRST → USER"
-    )
-    print(
-        "NO SIGNAL → USER ONLY"
-    )
-    print(
         "========================================"
     )
-    # Flask in background
+    # ========================================================
+    # FLASK
+    # ========================================================
     flask_thread = threading.Thread(
         target=run_flask,
         daemon=True
     )
     flask_thread.start()
-    # Telegram polling
-    bot.infinity_polling(
-        timeout=30,
-        long_polling_timeout=30
+    # ========================================================
+    # TELEGRAM APPLICATION
+    # ========================================================
+    application = (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .build()
     )
+    application.add_handler(
+        CommandHandler(
+            "start",
+            start_command
+        )
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.PHOTO,
+            handle_photo
+        )
+    )
+    application.add_error_handler(
+        error_handler
+    )
+    print(
+        "🤖 Telegram polling started."
+    )
+    application.run_polling(
+        drop_pending_updates=True
+    )
+# ============================================================
+# RUN
+# ============================================================
+if __name__ == "__main__":
+    main()
