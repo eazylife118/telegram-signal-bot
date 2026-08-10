@@ -4,6 +4,7 @@ import numpy as np
 import telebot
 import time
 import threading
+import requests
 
 from flask import Flask
 from datetime import datetime, timedelta
@@ -19,12 +20,19 @@ TELEGRAM_TOKEN = os.getenv(
     "PASTE_YOUR_BOT_TOKEN_HERE"
 )
 
-CHANNEL_ID = os.getenv(
-    "CHANNEL_ID",
-    "-1004324805205"
+CHAT_ID = os.getenv(
+    "CHAT_ID",
+    ""
 )
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+CHANNEL_ID = os.getenv(
+    "CHANNEL_ID",
+    ""
+)
+
+bot = telebot.TeleBot(
+    TELEGRAM_TOKEN
+)
 
 
 # ============================================================
@@ -45,7 +53,14 @@ def ping():
 
 
 def run_flask():
-    port = int(os.getenv("PORT", 10000))
+
+    port = int(
+        os.getenv(
+            "PORT",
+            10000
+        )
+    )
+
     app.run(
         host="0.0.0.0",
         port=port,
@@ -57,14 +72,20 @@ def run_flask():
 # TIMEZONE
 # ============================================================
 
-NIGERIA_TZ = ZoneInfo("Africa/Lagos")
+NIGERIA_TZ = ZoneInfo(
+    "Africa/Lagos"
+)
 
 
 def nigeria_now():
-    return datetime.now(NIGERIA_TZ)
+
+    return datetime.now(
+        NIGERIA_TZ
+    )
 
 
 def signal_and_entry_times():
+
     now = nigeria_now()
 
     signal_time = now.replace(
@@ -72,8 +93,10 @@ def signal_and_entry_times():
         microsecond=0
     )
 
-    entry_time = signal_time + timedelta(
-        minutes=1
+    entry_time = (
+        signal_time
+        +
+        timedelta(minutes=1)
     )
 
     return (
@@ -113,9 +136,12 @@ SMALL_BODY_RATIO = 0.35
 
 def load_image(path):
 
-    img = cv2.imread(path)
+    img = cv2.imread(
+        path
+    )
 
     if img is None:
+
         raise ValueError(
             "Could not read screenshot."
         )
@@ -151,11 +177,15 @@ def get_color_masks(img):
 
     # GREEN
     green_lower = np.array([
-        30, 35, 35
+        30,
+        35,
+        35
     ])
 
     green_upper = np.array([
-        90, 255, 255
+        90,
+        255,
+        255
     ])
 
     green = cv2.inRange(
@@ -166,19 +196,27 @@ def get_color_masks(img):
 
     # RED
     red_lower_1 = np.array([
-        0, 55, 55
+        0,
+        55,
+        55
     ])
 
     red_upper_1 = np.array([
-        12, 255, 255
+        12,
+        255,
+        255
     ])
 
     red_lower_2 = np.array([
-        168, 55, 55
+        168,
+        55,
+        55
     ])
 
     red_upper_2 = np.array([
-        180, 255, 255
+        180,
+        255,
+        255
     ])
 
     red1 = cv2.inRange(
@@ -291,7 +329,9 @@ def find_candidates(
         ]
 
         colored_pixels = int(
-            np.sum(region > 0)
+            np.sum(
+                region > 0
+            )
         )
 
         if colored_pixels < 5:
@@ -299,7 +339,12 @@ def find_candidates(
 
         density = (
             colored_pixels /
-            float(max(1, w * h))
+            float(
+                max(
+                    1,
+                    w * h
+                )
+            )
         )
 
         if density < 0.15:
@@ -363,14 +408,16 @@ def merge_candidates(candidates):
             candidate_top = candidate["y"]
 
             candidate_bottom = (
-                candidate["y"] +
+                candidate["y"]
+                +
                 candidate["h"]
             )
 
             existing_top = existing["y"]
 
             existing_bottom = (
-                existing["y"] +
+                existing["y"]
+                +
                 existing["h"]
             )
 
@@ -392,9 +439,11 @@ def merge_candidates(candidates):
                 )
 
                 right = max(
-                    existing["x"] +
+                    existing["x"]
+                    +
                     existing["w"],
-                    candidate["x"] +
+                    candidate["x"]
+                    +
                     candidate["w"]
                 )
 
@@ -404,9 +453,11 @@ def merge_candidates(candidates):
                 )
 
                 bottom = max(
-                    existing["y"] +
+                    existing["y"]
+                    +
                     existing["h"],
-                    candidate["y"] +
+                    candidate["y"]
+                    +
                     candidate["h"]
                 )
 
@@ -641,7 +692,8 @@ def body_position(candle):
     top = candle["y"]
 
     bottom = (
-        candle["y"] +
+        candle["y"]
+        +
         candle["h"]
     )
 
@@ -1284,13 +1336,6 @@ def breakout_failure(
 
 # ============================================================
 # RESISTANCE BREAKOUT HOLD
-#
-# IMPORTANT:
-# Detects:
-# GREEN breaks/crosses resistance
-# followed by RED remaining above resistance.
-#
-# Candle size is NOT required to be large.
 # ============================================================
 
 def resistance_breakout_hold(
@@ -2074,79 +2119,166 @@ def analyze_strategy(
 
 
 # ============================================================
-# DETECTION MAP
+# TELEGRAM OUTPUT / DELIVERY
 # ============================================================
 
-def create_detection_map(
-    img,
-    candles
-):
+def send_telegram(message):
 
-    output = img.copy()
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_TOKEN}/sendMessage"
+    )
 
-    for number, candle in enumerate(
-        candles,
-        start=1
-    ):
+    try:
 
-        x = int(
-            candle["x"]
+        # ----------------------------------------------------
+        # PRIVATE CHAT
+        # ----------------------------------------------------
+
+        private_response = requests.post(
+            url,
+            data={
+                "chat_id": CHAT_ID,
+                "text": message,
+                "parse_mode": "Markdown"
+            },
+            timeout=15
         )
 
-        y = int(
-            candle["y"]
+        # ----------------------------------------------------
+        # CHANNEL
+        # ----------------------------------------------------
+
+        channel_response = requests.post(
+            url,
+            data={
+                "chat_id": CHANNEL_ID,
+                "text": message,
+                "parse_mode": "Markdown"
+            },
+            timeout=15
         )
 
-        w = int(
-            candle["w"]
+        print(
+            "Private Telegram:",
+            private_response.status_code
         )
 
-        h = int(
-            candle["h"]
+        print(
+            "Telegram Channel:",
+            channel_response.status_code
         )
 
-        cv2.rectangle(
-            output,
-            (x, y),
-            (x + w, y + h),
-            (0, 255, 255),
-            2
-        )
+        if (
+            private_response.ok
+            and
+            channel_response.ok
+        ):
 
-        if candle["color"] == "GREEN":
-
-            label_color = (
-                0,
-                255,
-                0
+            print(
+                "✅ Signal delivered to private chat and channel"
             )
 
         else:
 
-            label_color = (
-                0,
-                0,
-                255
+            print(
+                "❌ Telegram delivery failed"
             )
 
-        cv2.putText(
-            output,
-            str(number),
-            (
-                x,
-                max(
-                    25,
-                    y - 7
-                )
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.60,
-            label_color,
-            2,
-            cv2.LINE_AA
+            print(
+                "Private response:",
+                private_response.text
+            )
+
+            print(
+                "Channel response:",
+                channel_response.text
+            )
+
+    except Exception as e:
+
+        print(
+            "❌ Telegram delivery error:",
+            repr(e)
         )
 
-    return output
+
+# ============================================================
+# ANALYZING MESSAGE
+# ============================================================
+
+def send_analyzing(message):
+
+    try:
+
+        bot.reply_to(
+            message,
+            "🔎 Analyzing..."
+        )
+
+    except Exception as e:
+
+        print(
+            "❌ Analyzing message error:",
+            repr(e)
+        )
+
+
+# ============================================================
+# SIGNAL RESPONSE
+# ============================================================
+
+def build_signal_response(
+    decision,
+    confidence,
+    reasons,
+    signal_time,
+    entry_time
+):
+
+    if decision == "BUY SIGNAL":
+
+        report = (
+            "🟢 **BUY SIGNAL**\n\n"
+            f"🕐 Signal Time: "
+            f"{signal_time} 🇳🇬\n"
+            f"🎯 Entry Time: "
+            f"{entry_time} 🇳🇬\n"
+            f"💪 Strength: "
+            f"{confidence}%\n\n"
+        )
+
+        for reason in reasons[:3]:
+
+            report += (
+                f"• {reason}\n"
+            )
+
+        return report
+
+    if decision == "SELL SIGNAL":
+
+        report = (
+            "🔴 **SELL SIGNAL**\n\n"
+            f"🕐 Signal Time: "
+            f"{signal_time} 🇳🇬\n"
+            f"🎯 Entry Time: "
+            f"{entry_time} 🇳🇬\n"
+            f"💪 Strength: "
+            f"{confidence}%\n\n"
+        )
+
+        for reason in reasons[:3]:
+
+            report += (
+                f"• {reason}\n"
+            )
+
+        return report
+
+    return (
+        "⚪ **NO SIGNAL — DON'T TRADE**"
+    )
 
 
 # ============================================================
@@ -2162,24 +2294,22 @@ def handle_photo(message):
         "strategy_chart.png"
     )
 
-    detection_path = (
-        "strategy_detection.png"
-    )
-
     try:
 
-        # ====================================================
-        # USER-FACING ANALYZING MESSAGE ONLY
-        # ====================================================
+        # ----------------------------------------------------
+        # ONLY ANALYZING MESSAGE
+        # NO SCREENSHOT IS ATTACHED
+        # ----------------------------------------------------
 
-        bot.reply_to(
-            message,
-            "🔍 Analyzing..."
+        send_analyzing(
+            message
         )
 
-        # ====================================================
-        # DOWNLOAD IMAGE
-        # ====================================================
+        # ----------------------------------------------------
+        # DOWNLOAD SCREENSHOT
+        # ----------------------------------------------------
+        # Used internally only.
+        # Nothing is sent back as an image.
 
         file_info = bot.get_file(
             message.photo[-1].file_id
@@ -2200,76 +2330,52 @@ def handle_photo(message):
                 downloaded_file
             )
 
-        # ====================================================
-        # LOAD
-        # ====================================================
+        # ----------------------------------------------------
+        # LOAD IMAGE
+        # ----------------------------------------------------
 
         img = load_image(
             original_path
         )
 
-        # ====================================================
-        # DETECT
-        # ====================================================
+        # ----------------------------------------------------
+        # DETECT CANDLES
+        # RIGHT → LEFT REMAINS UNCHANGED
+        # ----------------------------------------------------
 
         candles = detect_candles(
             img
         )
 
-        total = len(
-            candles
-        )
+        # ----------------------------------------------------
+        # NO CANDLES / NO SIGNAL
+        # ----------------------------------------------------
 
-        if total == 0:
+        if not candles:
+
+            report = (
+                "⚪ **NO SIGNAL — DON'T TRADE**"
+            )
+
+            # No channel delivery for NO SIGNAL.
+            # Only the user who sent the screenshot sees it.
 
             bot.reply_to(
                 message,
-                "⚪ NO SIGNAL — DON'T TRADE"
+                report,
+                parse_mode="Markdown"
             )
-
-            # Screenshot still goes to channel.
-            try:
-                bot.forward_message(
-                    chat_id=CHANNEL_ID,
-                    from_chat_id=message.chat.id,
-                    message_id=message.message_id
-                )
-            except Exception as channel_error:
-                print(
-                    "Channel screenshot error:",
-                    repr(channel_error)
-                )
 
             return
 
-        # ====================================================
-        # COUNTING / ENGINE PROCESSING
-        # ====================================================
-
-        green = sum(
-            1
-            for c in candles
-            if c["color"] == "GREEN"
-        )
-
-        red = sum(
-            1
-            for c in candles
-            if c["color"] == "RED"
-        )
-
-        # ====================================================
-        # STRATEGY ENGINE
-        # ====================================================
+        # ----------------------------------------------------
+        # RUN COMPLETE STRATEGY ENGINE
+        # ----------------------------------------------------
 
         strategy = (
             analyze_strategy(
                 candles
             )
-        )
-
-        signal_time, entry_time = (
-            signal_and_entry_times()
         )
 
         decision = strategy[
@@ -2284,122 +2390,79 @@ def handle_photo(message):
             "reasons"
         ]
 
-        # ====================================================
-        # FINAL USER-FACING SIGNAL
-        # ====================================================
+        # ----------------------------------------------------
+        # NO SIGNAL
+        # ----------------------------------------------------
 
-        if decision == "BUY SIGNAL":
+        if decision == "NO SIGNAL":
 
-            report = (
-                "🚨 **SIGNAL ALERT**\n\n"
-                "🟢 **BUY**\n"
-                f"🕐 **Signal Time:** "
-                f"{signal_time} 🇳🇬\n"
-                f"🎯 **Entry Time:** "
-                f"{entry_time} 🇳🇬\n"
-                f"💪 **Strength:** "
-                f"{confidence}%\n\n"
-            )
-
-            for reason in reasons[:3]:
-
-                report += (
-                    f"• {reason}\n"
-                )
-
-        elif decision == "SELL SIGNAL":
-
-            report = (
-                "🚨 **SIGNAL ALERT**\n\n"
-                "🔴 **SELL**\n"
-                f"🕐 **Signal Time:** "
-                f"{signal_time} 🇳🇬\n"
-                f"🎯 **Entry Time:** "
-                f"{entry_time} 🇳🇬\n"
-                f"💪 **Strength:** "
-                f"{confidence}%\n\n"
-            )
-
-            for reason in reasons[:3]:
-
-                report += (
-                    f"• {reason}\n"
-                )
-
-        else:
-
-            # ONLY THIS FOR NO SIGNAL
             report = (
                 "⚪ **NO SIGNAL — DON'T TRADE**"
             )
 
-        # ====================================================
-        # SEND RESULT TO USER
-        # ====================================================
+            # No channel delivery for NO SIGNAL.
+            # No reasons are displayed.
 
-        bot.reply_to(
-            message,
-            report,
-            parse_mode="Markdown"
-        )
-
-        # ====================================================
-        # SEND ORIGINAL SCREENSHOT TO CHANNEL
-        #
-        # This is delivery only.
-        # It does NOT change the strategy engine.
-        # ====================================================
-
-        try:
-
-            bot.forward_message(
-                chat_id=CHANNEL_ID,
-                from_chat_id=message.chat.id,
-                message_id=message.message_id
-            )
-
-        except Exception as channel_error:
-
-            print(
-                "Channel screenshot error:",
-                repr(channel_error)
-            )
-
-        # ====================================================
-        # SEND FINAL RESULT TO CHANNEL
-        # ====================================================
-
-        try:
-
-            bot.send_message(
-                CHANNEL_ID,
+            bot.reply_to(
+                message,
                 report,
                 parse_mode="Markdown"
             )
 
-        except Exception as channel_error:
+            return
 
-            print(
-                "Channel result error:",
-                repr(channel_error)
-            )
+        # ----------------------------------------------------
+        # SIGNAL TIME
+        # ----------------------------------------------------
 
-        # ====================================================
-        # DETECTION MAP STILL RUNS IN BACKGROUND
-        #
-        # It is NOT sent to the user or channel.
-        # ====================================================
-
-        detection_map = (
-            create_detection_map(
-                img,
-                candles
-            )
+        signal_time, entry_time = (
+            signal_and_entry_times()
         )
 
-        cv2.imwrite(
-            detection_path,
-            detection_map
+        # ----------------------------------------------------
+        # BUILD FINAL SIGNAL
+        # ----------------------------------------------------
+
+        report = build_signal_response(
+            decision,
+            confidence,
+            reasons,
+            signal_time,
+            entry_time
+        )
+
+        # ----------------------------------------------------
+        # SEND SIGNAL TO:
+        # 1. PRIVATE CHAT
+        # 2. TELEGRAM CHANNEL
+        # ----------------------------------------------------
+
+        send_telegram(
+            report
+        )
+
+        # ----------------------------------------------------
+        # ALSO SHOW THE SIGNAL TO THE USER
+        # WHO SENT THE SCREENSHOT
+        # ----------------------------------------------------
+
+        try:
+
+            bot.reply_to(
+                message,
+                report,
+                parse_mode="Markdown"
+            )
+
+        except Exception as e:
+
+            print(
+                "❌ Direct Telegram reply error:",
+                repr(e)
+            )
+
+        print(
+            "✅ Signal generated and delivered."
         )
 
     except Exception as e:
@@ -2409,25 +2472,34 @@ def handle_photo(message):
             repr(e)
         )
 
-        bot.reply_to(
-            message,
-            "❌ Analysis error."
-        )
+        try:
+
+            bot.reply_to(
+                message,
+                "❌ Analysis error."
+            )
+
+        except Exception:
+            pass
 
     finally:
 
-        for path in [
-            original_path,
-            detection_path
-        ]:
+        # ----------------------------------------------------
+        # CLEANUP ONLY
+        # ----------------------------------------------------
 
-            if os.path.exists(path):
+        if os.path.exists(
+            original_path
+        ):
 
-                try:
-                    os.remove(path)
+            try:
 
-                except Exception:
-                    pass
+                os.remove(
+                    original_path
+                )
+
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -2516,7 +2588,10 @@ if __name__ == "__main__":
         "========================================"
     )
 
-    # Flask in background
+    # --------------------------------------------------------
+    # FLASK IN BACKGROUND
+    # --------------------------------------------------------
+
     flask_thread = threading.Thread(
         target=run_flask,
         daemon=True
@@ -2524,7 +2599,10 @@ if __name__ == "__main__":
 
     flask_thread.start()
 
-    # Telegram polling
+    # --------------------------------------------------------
+    # TELEGRAM POLLING
+    # --------------------------------------------------------
+
     bot.infinity_polling(
         timeout=30,
         long_polling_timeout=30
