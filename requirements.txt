@@ -1,4 +1,5 @@
 
-opencv-python
-pyTelegramBotAPI
+opencv-python-headless
 numpy
+pyTelegramBotAPI
+pytesseract
