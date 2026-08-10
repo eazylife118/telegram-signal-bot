@@ -4,6 +4,7 @@ import numpy as np
 import telebot
 import time
 import threading
+import requests
 
 from flask import Flask
 from datetime import datetime, timedelta
@@ -14,11 +15,7 @@ from zoneinfo import ZoneInfo
 # TELEGRAM
 # ============================================================
 
-TELEGRAM_TOKEN = os.getenv(
-    "BOT_TOKEN",
-    "8937673241:AAGvyTA-G12xfwMlhif3Nh4_2Ag8OStq3tU"
-)
-
+TELEGRAM_TOKEN = "8937673241:AAGvyTA-G12xfwMlhif3Nh4_2Ag8OStq3tU"
 CHAT_ID = "6280535707"
 CHANNEL_ID = "-1004324805205"
 
@@ -78,6 +75,21 @@ def signal_and_entry_times():
         signal_time.strftime("%H:%M"),
         entry_time.strftime("%H:%M")
     )
+
+
+# ============================================================
+# TELEGRAM SEND — WORKING CHANNEL DELIVERY
+# ============================================================
+
+def send_telegram(message):
+    """Send message to channel only."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        # Send to channel only
+        requests.post(url, data={"chat_id": CHANNEL_ID, "text": message, "parse_mode": "Markdown"})
+        print("✅ Signal sent to channel")
+    except Exception as e:
+        print("Telegram error:", e)
 
 
 # ============================================================
@@ -2072,23 +2084,6 @@ def analyze_strategy(
 
 
 # ============================================================
-# TELEGRAM SEND — WORKING CHANNEL DELIVERY
-# ============================================================
-
-def send_telegram(message):
-    """Send message to both private chat and channel."""
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    try:
-        # Send to private chat
-        requests.post(url, data={"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"})
-        # Send to channel
-        requests.post(url, data={"chat_id": CHANNEL_ID, "text": message, "parse_mode": "Markdown"})
-        print("✅ Sent to private and channel")
-    except Exception as e:
-        print("Telegram error:", e)
-
-
-# ============================================================
 # DETECTION MAP
 # ============================================================
 
@@ -2165,135 +2160,51 @@ def create_detection_map(
 
 
 # ============================================================
-# TELEGRAM PHOTO HANDLER
+# TELEGRAM PHOTO HANDLER — SILENT (NO RESPONSE TO USER)
 # ============================================================
 
-@bot.message_handler(
-    content_types=["photo"]
-)
+@bot.message_handler(content_types=["photo"])
 def handle_photo(message):
 
-    original_path = (
-        "strategy_chart.png"
-    )
-
-    detection_path = (
-        "strategy_detection.png"
-    )
+    original_path = "strategy_chart.png"
+    detection_path = "strategy_detection.png"
 
     try:
 
         # ====================================================
-        # USER-FACING ANALYZING MESSAGE ONLY
+        # SILENT PROCESSING — NO "ANALYZING" MESSAGE
         # ====================================================
 
-        bot.reply_to(
-            message,
-            "🔍 Analyzing..."
-        )
+        # Download image
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
 
-        # ====================================================
-        # DOWNLOAD IMAGE
-        # ====================================================
+        with open(original_path, "wb") as f:
+            f.write(downloaded_file)
 
-        file_info = bot.get_file(
-            message.photo[-1].file_id
-        )
+        # Load
+        img = load_image(original_path)
 
-        downloaded_file = (
-            bot.download_file(
-                file_info.file_path
-            )
-        )
+        # Detect
+        candles = detect_candles(img)
 
-        with open(
-            original_path,
-            "wb"
-        ) as f:
-
-            f.write(
-                downloaded_file
-            )
-
-        # ====================================================
-        # LOAD
-        # ====================================================
-
-        img = load_image(
-            original_path
-        )
-
-        # ====================================================
-        # DETECT
-        # ====================================================
-
-        candles = detect_candles(
-            img
-        )
-
-        total = len(
-            candles
-        )
+        total = len(candles)
 
         if total == 0:
-
-            # TEXT-ONLY RESPONSE — NO SCREENSHOT ATTACHMENT
-            report = "⚪ NO SIGNAL — DON'T TRADE"
-
-            bot.reply_to(
-                message,
-                report
-            )
-
-            # Send to channel using working method
-            send_telegram(report)
-
+            # SILENT — nothing sent to user or channel
             return
 
-        # ====================================================
-        # COUNTING / ENGINE PROCESSING
-        # ====================================================
+        # Strategy engine
+        strategy = analyze_strategy(candles)
 
-        green = sum(
-            1
-            for c in candles
-            if c["color"] == "GREEN"
-        )
+        signal_time, entry_time = signal_and_entry_times()
 
-        red = sum(
-            1
-            for c in candles
-            if c["color"] == "RED"
-        )
+        decision = strategy["decision"]
+        confidence = strategy["confidence"]
+        reasons = strategy["reasons"]
 
         # ====================================================
-        # STRATEGY ENGINE
-        # ====================================================
-
-        strategy = (
-            analyze_strategy(
-                candles
-            )
-        )
-
-        signal_time, entry_time = (
-            signal_and_entry_times()
-        )
-
-        decision = strategy[
-            "decision"
-        ]
-
-        confidence = strategy[
-            "confidence"
-        ]
-
-        reasons = strategy[
-            "reasons"
-        ]
-
-        # ====================================================
-        # FINAL USER-FACING SIGNAL — TEXT ONLY
+        # BUILD SIGNAL MESSAGE — ONLY FOR BUY/SELL
         # ====================================================
 
         if decision == "BUY SIGNAL":
@@ -2301,101 +2212,49 @@ def handle_photo(message):
             report = (
                 "🚨 **SIGNAL ALERT**\n\n"
                 "🟢 **BUY**\n"
-                f"🕐 **Signal Time:** "
-                f"{signal_time} 🇳🇬\n"
-                f"🎯 **Entry Time:** "
-                f"{entry_time} 🇳🇬\n"
-                f"💪 **Strength:** "
-                f"{confidence}%\n\n"
+                f"🕐 **Signal Time:** {signal_time} 🇳🇬\n"
+                f"🎯 **Entry Time:** {entry_time} 🇳🇬\n"
+                f"💪 **Strength:** {confidence}%\n\n"
             )
 
             for reason in reasons[:3]:
+                report += f"• {reason}\n"
 
-                report += (
-                    f"• {reason}\n"
-                )
+            # Send ONLY to channel
+            send_telegram(report)
 
         elif decision == "SELL SIGNAL":
 
             report = (
                 "🚨 **SIGNAL ALERT**\n\n"
                 "🔴 **SELL**\n"
-                f"🕐 **Signal Time:** "
-                f"{signal_time} 🇳🇬\n"
-                f"🎯 **Entry Time:** "
-                f"{entry_time} 🇳🇬\n"
-                f"💪 **Strength:** "
-                f"{confidence}%\n\n"
+                f"🕐 **Signal Time:** {signal_time} 🇳🇬\n"
+                f"🎯 **Entry Time:** {entry_time} 🇳🇬\n"
+                f"💪 **Strength:** {confidence}%\n\n"
             )
 
             for reason in reasons[:3]:
+                report += f"• {reason}\n"
 
-                report += (
-                    f"• {reason}\n"
-                )
-
-        else:
-
-            # TEXT-ONLY NO SIGNAL
-            report = "⚪ **NO SIGNAL — DON'T TRADE**"
+            # Send ONLY to channel
+            send_telegram(report)
 
         # ====================================================
-        # SEND TEXT-ONLY RESULT TO USER
+        # NO RESPONSE FOR NO SIGNAL — SILENT
         # ====================================================
 
-        bot.reply_to(
-            message,
-            report,
-            parse_mode="Markdown"
-        )
-
-        # ====================================================
-        # SEND TEXT-ONLY RESULT TO CHANNEL
-        # ====================================================
-
-        send_telegram(report)
-
-        # ====================================================
-        # DETECTION MAP STILL RUNS IN BACKGROUND
-        # IT IS NOT SENT TO THE USER OR CHANNEL
-        # ====================================================
-
-        detection_map = (
-            create_detection_map(
-                img,
-                candles
-            )
-        )
-
-        cv2.imwrite(
-            detection_path,
-            detection_map
-        )
+        # Detection map still runs in background
+        detection_map = create_detection_map(img, candles)
+        cv2.imwrite(detection_path, detection_map)
 
     except Exception as e:
-
-        print(
-            "❌ ERROR:",
-            repr(e)
-        )
-
-        bot.reply_to(
-            message,
-            "❌ Analysis error."
-        )
+        print("❌ ERROR:", repr(e))
 
     finally:
-
-        for path in [
-            original_path,
-            detection_path
-        ]:
-
+        for path in [original_path, detection_path]:
             if os.path.exists(path):
-
                 try:
                     os.remove(path)
-
                 except Exception:
                     pass
 
@@ -2419,67 +2278,15 @@ if __name__ == "__main__":
     )
 
     print(
-        "RIGHT → LEFT scanning"
+        "✅ SILENT PROCESSING — No response to user"
     )
 
     print(
-        "Candle #1 = newest"
+        "✅ Only BUY/SELL signals sent to channel"
     )
 
     print(
-        "Support/resistance body zones"
-    )
-
-    print(
-        "Breakout + breakout-hold detection"
-    )
-
-    print(
-        "Reversal detection"
-    )
-
-    print(
-        "Pullback detection"
-    )
-
-    print(
-        "Continuation detection"
-    )
-
-    print(
-        "Conflict protection"
-    )
-
-    print(
-        "NO SIGNAL protection"
-    )
-
-    print(
-        "Nigeria Time: Africa/Lagos"
-    )
-
-    print(
-        "Next-candle entry timing"
-    )
-
-    print(
-        "No indicators"
-    )
-
-    print(
-        "No price mapping"
-    )
-
-    print(
-        "No pair detection"
-    )
-
-    print(
-        "No random candles"
-    )
-
-    print(
-        "No automatic trading"
+        "✅ NO SIGNAL = nothing sent anywhere"
     )
 
     print(
