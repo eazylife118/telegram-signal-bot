@@ -1,4 +1,4 @@
-Flask
+python-telegram-bot==22.5
 opencv-python-headless
 numpy
-pyTelegramBotAPI
+Flask
