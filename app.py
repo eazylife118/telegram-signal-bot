@@ -6,10 +6,6 @@ import time
 # ============================================================
 # TELEGRAM
 # ============================================================
-# Keep your real token in Render as:
-# BOT_TOKEN = your Telegram bot token
-#
-# Do NOT put the real token directly into this file.
 TELEGRAM_TOKEN = os.getenv(
     "BOT_TOKEN",
     "PASTE_YOUR_BOT_TOKEN_HERE"
@@ -18,44 +14,21 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # ============================================================
 # DETECTION SETTINGS
 # ============================================================
-# Minimum candle-body evidence
 MIN_BODY_AREA = 10
 MIN_BODY_HEIGHT = 2
 MIN_CANDLE_WIDTH = 2
-# Newest/right-side candles
+# Slightly more sensitive for newest/right-side candles
 RIGHT_MIN_BODY_AREA = 6
 RIGHT_MIN_BODY_HEIGHT = 2
-# Maximum candle width relative to screenshot
 MAX_CANDLE_WIDTH_RATIO = 0.045
-# Very close pieces of the same candle can be merged
 MERGE_DISTANCE_RATIO = 0.55
 # ============================================================
-# STRICT COLOR SETTINGS
+# COLOR CONFIDENCE
 # ============================================================
-# Minimum HSV saturation.
-# This helps reject white/gray chart elements.
-MIN_RED_SATURATION = 80
-MIN_GREEN_SATURATION = 60
-# Minimum brightness/value.
-MIN_RED_VALUE = 50
-MIN_GREEN_VALUE = 45
-# Red hue ranges
-RED_HUE_1_LOW = 0
-RED_HUE_1_HIGH = 10
-RED_HUE_2_LOW = 172
-RED_HUE_2_HIGH = 180
-# Green hue range
-GREEN_HUE_LOW = 35
-GREEN_HUE_HIGH = 85
-# Minimum percentage of pixels that must satisfy
-# the color condition inside the detected body.
-MIN_COLOR_DENSITY = 0.25
-# A red candidate must have clearly stronger red evidence
-# than green evidence.
-RED_DOMINANCE_RATIO = 1.35
-# A green candidate must have clearly stronger green evidence
-# than red evidence.
-GREEN_DOMINANCE_RATIO = 1.25
+# A candle must have enough pixels of its color
+# before it can be classified.
+MIN_COLOR_PIXELS = 8
+MIN_COLOR_RATIO = 0.45
 # ============================================================
 # LOAD IMAGE
 # ============================================================
@@ -66,7 +39,6 @@ def load_image(path):
             "Could not read screenshot."
         )
     h, w = img.shape[:2]
-    # Upscale smaller screenshots slightly.
     if w < 1400:
         scale = 1400 / w
         img = cv2.resize(
@@ -86,16 +58,16 @@ def get_color_masks(img):
         img,
         cv2.COLOR_BGR2HSV
     )
-    # ========================================================
+    # --------------------------------------------------------
     # GREEN
-    # ========================================================
+    # --------------------------------------------------------
     green_lower = np.array([
-        GREEN_HUE_LOW,
-        MIN_GREEN_SATURATION,
-        MIN_GREEN_VALUE
+        30,
+        45,
+        45
     ])
     green_upper = np.array([
-        GREEN_HUE_HIGH,
+        90,
         255,
         255
     ])
@@ -104,26 +76,26 @@ def get_color_masks(img):
         green_lower,
         green_upper
     )
-    # ========================================================
+    # --------------------------------------------------------
     # RED
-    # ========================================================
+    # --------------------------------------------------------
     red_lower_1 = np.array([
-        RED_HUE_1_LOW,
-        MIN_RED_SATURATION,
-        MIN_RED_VALUE
+        0,
+        50,
+        50
     ])
     red_upper_1 = np.array([
-        RED_HUE_1_HIGH,
+        15,
         255,
         255
     ])
     red_lower_2 = np.array([
-        RED_HUE_2_LOW,
-        MIN_RED_SATURATION,
-        MIN_RED_VALUE
+        165,
+        50,
+        50
     ])
     red_upper_2 = np.array([
-        RED_HUE_2_HIGH,
+        180,
         255,
         255
     ])
@@ -141,52 +113,6 @@ def get_color_masks(img):
         red1,
         red2
     )
-    # ========================================================
-    # BGR COLOR-DOMINANCE FILTER
-    # ========================================================
-    #
-    # HSV alone can sometimes classify another reddish/orange
-    # object as red.
-    #
-    # This additional check requires the actual red channel
-    # to dominate the green/blue channels.
-    # ========================================================
-    b, g, r = cv2.split(img)
-    red_dominance = (
-        (r.astype(np.int16) >
-         g.astype(np.int16) * 1.15)
-        &
-        (r.astype(np.int16) >
-         b.astype(np.int16) * 1.15)
-        &
-        (r.astype(np.int16) > 60)
-    )
-    red_dominance_mask = (
-        red_dominance.astype(np.uint8) * 255
-    )
-    red = cv2.bitwise_and(
-        red,
-        red_dominance_mask
-    )
-    # ========================================================
-    # GREEN DOMINANCE
-    # ========================================================
-    green_dominance = (
-        (g.astype(np.int16) >
-         r.astype(np.int16) * 1.05)
-        &
-        (g.astype(np.int16) >
-         b.astype(np.int16) * 1.00)
-        &
-        (g.astype(np.int16) > 50)
-    )
-    green_dominance_mask = (
-        green_dominance.astype(np.uint8) * 255
-    )
-    green = cv2.bitwise_and(
-        green,
-        green_dominance_mask
-    )
     return green, red
 # ============================================================
 # FIND CANDIDATES
@@ -197,7 +123,6 @@ def find_candidates(
     image_width,
     right_side=False
 ):
-    # Very small morphology.
     kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (2, 2)
@@ -250,12 +175,9 @@ def find_candidates(
             continue
         if w > max_width:
             continue
-        # Reject long horizontal objects.
+        # Reject long horizontal objects
         if w > h * 6:
             continue
-        # ====================================================
-        # BODY PIXEL DENSITY
-        # ====================================================
         region = cleaned[
             y:y+h,
             x:x+w
@@ -263,27 +185,14 @@ def find_candidates(
         colored_pixels = int(
             np.sum(region > 0)
         )
-        if colored_pixels < 5:
+        if colored_pixels < MIN_COLOR_PIXELS:
             continue
         density = (
             colored_pixels /
-            float(
-                max(
-                    1,
-                    w * h
-                )
-            )
+            float(max(1, w * h))
         )
-        if density < MIN_COLOR_DENSITY:
+        if density < 0.15:
             continue
-        # ====================================================
-        # COLOR CONFIDENCE CHECK
-        # ====================================================
-        # Get original HSV region.
-        # This prevents a tiny number of colored pixels
-        # from creating a candle detection.
-        #
-        # ====================================================
         center_x = (
             x +
             w / 2
@@ -303,9 +212,7 @@ def find_candidates(
 # ============================================================
 # MERGE SAME-COLOR PIECES
 # ============================================================
-def merge_candidates(
-    candidates
-):
+def merge_candidates(candidates):
     if not candidates:
         return []
     candidates = sorted(
@@ -326,26 +233,22 @@ def merge_candidates(
                 existing["w"],
                 2
             ) * MERGE_DISTANCE_RATIO
-            candidate_top = (
-                candidate["y"]
-            )
+            candidate_top = candidate["y"]
             candidate_bottom = (
-                candidate["y"] +
+                candidate["y"]
+                +
                 candidate["h"]
             )
-            existing_top = (
-                existing["y"]
-            )
+            existing_top = existing["y"]
             existing_bottom = (
-                existing["y"] +
+                existing["y"]
+                +
                 existing["h"]
             )
             vertical_overlap = not (
-                candidate_bottom <
-                existing_top
+                candidate_bottom < existing_top
                 or
-                candidate_top >
-                existing_bottom
+                candidate_top > existing_bottom
             )
             if (
                 distance <= allowed
@@ -375,12 +278,10 @@ def merge_candidates(
                 existing["x"] = left
                 existing["y"] = top
                 existing["w"] = (
-                    right -
-                    left
+                    right - left
                 )
                 existing["h"] = (
-                    bottom -
-                    top
+                    bottom - top
                 )
                 existing["center_x"] = (
                     left +
@@ -412,9 +313,7 @@ def remove_cross_color_duplicates(
     result = []
     for candle in candles:
         duplicate_index = None
-        for i, existing in enumerate(
-            result
-        ):
+        for i, existing in enumerate(result):
             distance = abs(
                 candle["center_x"]
                 -
@@ -436,7 +335,7 @@ def remove_cross_color_duplicates(
             existing = result[
                 duplicate_index
             ]
-            # Keep stronger actual color evidence.
+            # Keep stronger color evidence
             if (
                 candle["pixels"]
                 >
@@ -454,14 +353,10 @@ def detect_right_side(
     green_mask,
     red_mask
 ):
-    """
-    Controlled second pass.
-    Only the newest/right-side section gets the
-    slightly smaller-body allowance.
-    """
     h, w = chart.shape[:2]
+    # Newest portion of chart
     right_start = int(
-        w * 0.72
+        w * 0.70
     )
     green_right = green_mask[
         :,
@@ -487,9 +382,7 @@ def detect_right_side(
         green +
         red
     ):
-        candle["x"] += (
-            right_start
-        )
+        candle["x"] += right_start
         candle["center_x"] += (
             right_start
         )
@@ -500,16 +393,14 @@ def detect_right_side(
 # ============================================================
 # DETECT CANDLES
 # ============================================================
-def detect_candles(
-    img
-):
+def detect_candles(img):
     h, w = img.shape[:2]
     green_mask, red_mask = (
         get_color_masks(img)
     )
-    # ========================================================
+    # --------------------------------------------------------
     # MAIN DETECTION
-    # ========================================================
+    # --------------------------------------------------------
     green = find_candidates(
         green_mask,
         "GREEN",
@@ -532,9 +423,9 @@ def detect_candles(
         green +
         red
     )
-    # ========================================================
-    # RIGHT-SIDE PASS
-    # ========================================================
+    # --------------------------------------------------------
+    # RIGHT-SIDE PRIORITY PASS
+    # --------------------------------------------------------
     right_candidates = (
         detect_right_side(
             img,
@@ -545,28 +436,21 @@ def detect_candles(
     candles.extend(
         right_candidates
     )
-    # ========================================================
+    # --------------------------------------------------------
     # REMOVE DUPLICATES
-    # ========================================================
+    # --------------------------------------------------------
     candles = (
         remove_cross_color_duplicates(
             candles
         )
     )
-    # ========================================================
-    # RIGHT → LEFT
-    # ========================================================
-    #
+    # --------------------------------------------------------
     # IMPORTANT:
+    # SORT LEFT → RIGHT FIRST
+    # THEN REVERSE FOR FINAL READING.
     #
-    # The newest/rightmost candle becomes #1.
-    #
-    # Then the detector moves:
-    #
-    # #1 → #2 → #3 → #4 ...
-    #
-    # from RIGHT to LEFT.
-    # ========================================================
+    # This makes the newest/rightmost candle #1.
+    # --------------------------------------------------------
     candles.sort(
         key=lambda c: c["center_x"],
         reverse=True
@@ -575,9 +459,7 @@ def detect_candles(
 # ============================================================
 # REPORT
 # ============================================================
-def create_report(
-    candles
-):
+def create_report(candles):
     green = sum(
         1
         for c in candles
@@ -597,37 +479,24 @@ def create_detection_map(
     candles
 ):
     output = img.copy()
-    # ========================================================
-    # RIGHT → LEFT NUMBERING
-    # ========================================================
+    # Candles are already right → left.
+    # Number 1 = newest/rightmost.
     for number, candle in enumerate(
         candles,
         start=1
     ):
-        x = int(
-            candle["x"]
-        )
-        y = int(
-            candle["y"]
-        )
-        w = int(
-            candle["w"]
-        )
-        h = int(
-            candle["h"]
-        )
-        # Yellow detection box.
+        x = int(candle["x"])
+        y = int(candle["y"])
+        w = int(candle["w"])
+        h = int(candle["h"])
+        # Yellow detection box
         cv2.rectangle(
             output,
             (x, y),
-            (
-                x + w,
-                y + h
-            ),
+            (x + w, y + h),
             (0, 255, 255),
             2
         )
-        # Color-specific number.
         if candle["color"] == "GREEN":
             label_color = (
                 0,
@@ -663,9 +532,7 @@ def create_detection_map(
 @bot.message_handler(
     content_types=["photo"]
 )
-def handle_photo(
-    message
-):
+def handle_photo(message):
     start_time = time.time()
     original_path = (
         "chart_screenshot.png"
@@ -678,11 +545,11 @@ def handle_photo(
             message,
             "👁️ Reading visible candles...\n"
             "➡️ Scanning RIGHT → LEFT.\n"
-            "🔎 Checking strict GREEN/RED classification."
+            "🎯 Newest candle has priority."
         )
-        # ====================================================
+        # ----------------------------------------------------
         # DOWNLOAD HIGHEST RESOLUTION
-        # ====================================================
+        # ----------------------------------------------------
         file_info = bot.get_file(
             message.photo[-1].file_id
         )
@@ -698,36 +565,32 @@ def handle_photo(
             f.write(
                 downloaded_file
             )
-        # ====================================================
+        # ----------------------------------------------------
         # LOAD
-        # ====================================================
+        # ----------------------------------------------------
         img = load_image(
             original_path
         )
-        # ====================================================
+        # ----------------------------------------------------
         # DETECT
-        # ====================================================
+        # ----------------------------------------------------
         candles = detect_candles(
             img
         )
-        # ====================================================
-        # COUNT
-        # ====================================================
         green, red = (
             create_report(
                 candles
             )
         )
-        total = len(
-            candles
-        )
+        total = len(candles)
         elapsed = (
-            time.time() -
+            time.time()
+            -
             start_time
         )
-        # ====================================================
+        # ----------------------------------------------------
         # RIGHT → LEFT SEQUENCE
-        # ====================================================
+        # ----------------------------------------------------
         sequence = []
         for number, candle in enumerate(
             candles,
@@ -737,18 +600,16 @@ def handle_photo(
                 sequence.append(
                     f"{number}. 🟢 GREEN"
                 )
-            else:
+            elif candle["color"] == "RED":
                 sequence.append(
                     f"{number}. 🔴 RED"
                 )
-        sequence_text = (
-            "\n".join(
-                sequence
-            )
+        sequence_text = "\n".join(
+            sequence
         )
-        # ====================================================
+        # ----------------------------------------------------
         # RESULT
-        # ====================================================
+        # ----------------------------------------------------
         if total == 0:
             bot.reply_to(
                 message,
@@ -760,26 +621,30 @@ def handle_photo(
             return
         report = (
             "🔎 **CANDLE READING TEST**\n\n"
-            "➡️ **SCAN DIRECTION:** "
-            "RIGHT → LEFT\n\n"
+            "➡️ **SCAN DIRECTION: "
+            "RIGHT → LEFT**\n"
+            "🎯 **CANDLE #1 = NEWEST "
+            "VISIBLE CANDLE**\n\n"
             "📊 **WHAT THE BOT ACTUALLY DETECTED:**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"🟢 GREEN: {green}\n"
             f"🔴 RED: {red}\n"
             f"📊 TOTAL: {total}\n\n"
-            "🕯️ **RIGHT → LEFT CANDLE READING:**\n"
+            "🕯️ **CANDLE-BY-CANDLE READING:**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             f"{sequence_text}\n\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "🎯 **COLOR CHECK:**\n"
-            "🟢 = Bot believes the candle is GREEN\n"
-            "🔴 = Bot believes the candle is RED\n\n"
-            "🔢 **NUMBER 1 = NEWEST/RIGHTMOST "
-            "DETECTED CANDLE**\n\n"
-            "⚠️ This is ONLY a candle-reading test.\n"
+            "🟢 = Bot detected a sufficiently "
+            "strong GREEN body\n"
+            "🔴 = Bot detected a sufficiently "
+            "strong RED body\n\n"
+            "⚠️ This is the strategy-reading "
+            "test stage.\n\n"
             "No OHLC data is generated.\n"
             "No random candles are added.\n"
-            "No trading signal is generated.\n\n"
+            "No trading signal is generated.\n"
+            "No pair detection is performed.\n\n"
             f"⚡ Processing time: "
             f"{elapsed:.2f}s"
         )
@@ -788,9 +653,9 @@ def handle_photo(
             report,
             parse_mode="Markdown"
         )
-        # ====================================================
+        # ----------------------------------------------------
         # CREATE DETECTION MAP
-        # ====================================================
+        # ----------------------------------------------------
         detection_map = (
             create_detection_map(
                 img,
@@ -801,9 +666,9 @@ def handle_photo(
             detection_path,
             detection_map
         )
-        # ====================================================
+        # ----------------------------------------------------
         # SEND MAP
-        # ====================================================
+        # ----------------------------------------------------
         with open(
             detection_path,
             "rb"
@@ -812,16 +677,17 @@ def handle_photo(
                 message.chat.id,
                 photo,
                 caption=(
-                    "🔢 **RIGHT → LEFT CANDLE MAP**\n\n"
-                    "Number 1 = newest/rightmost "
+                    "🔢 **CANDLE DETECTION MAP**\n\n"
+                    "➡️ Reading direction: "
+                    "RIGHT → LEFT\n\n"
+                    "🎯 #1 = newest/rightmost "
                     "detected candle.\n\n"
-                    "➡️ Counting continues "
-                    "from RIGHT → LEFT.\n\n"
-                    "🟨 Yellow box = detected candle body.\n"
-                    "🟢 Number = classified GREEN.\n"
-                    "🔴 Number = classified RED.\n\n"
-                    "Compare every box with the actual "
-                    "candles in your screenshot."
+                    "🟨 Yellow box = detected "
+                    "candle body.\n"
+                    "🟢 Number = GREEN.\n"
+                    "🔴 Number = RED.\n\n"
+                    "Check every box against the "
+                    "actual candle in your screenshot."
                 ),
                 parse_mode="Markdown"
             )
@@ -839,9 +705,7 @@ def handle_photo(
             original_path,
             detection_path
         ]:
-            if os.path.exists(
-                path
-            ):
+            if os.path.exists(path):
                 try:
                     os.remove(
                         path
@@ -855,7 +719,7 @@ print(
     "========================================"
 )
 print(
-    "🕯️ CANDLE READING TEST"
+    "🕯️ CANDLE READING / STRATEGY TEST"
 )
 print(
     "========================================"
@@ -864,13 +728,19 @@ print(
     "➡️ Scan direction: RIGHT → LEFT"
 )
 print(
-    "🔢 Number 1 = newest/rightmost candle"
+    "🎯 Newest/rightmost candle = #1"
 )
 print(
-    "🔴 Strict red detection enabled"
+    "🟢 GREEN detection enabled"
 )
 print(
-    "🟢 Strict green detection enabled"
+    "🔴 RED detection enabled"
+)
+print(
+    "🚫 Unrelated colors are ignored"
+)
+print(
+    "🚫 No pair detection"
 )
 print(
     "🚫 No OHLC generation"
