@@ -1,5 +1,4 @@
-pocket-option==0.4.0
+
+opencv-python
 pyTelegramBotAPI
-Flask
-aiohttp
-pydantic
+numpy
