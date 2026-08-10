@@ -1,354 +1,890 @@
 import os
-import asyncio
-import threading
-import logging
-
+import cv2
+import numpy as np
 import telebot
-from flask import Flask
-
-from pocket_option import PocketOptionClient
-from pocket_option.constants import Regions
-from pocket_option.contrib.default_init import default_init
-from pocket_option.models import Asset, AuthorizationData
-
-
-# ============================================================
-# LOGGING
-# ============================================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
-
-logger = logging.getLogger(__name__)
-
-
-# ============================================================
-# FLASK / RENDER
-# ============================================================
-
-app = Flask(__name__)
-
-
-@app.route("/")
-def home():
-    return "Telegram + Pocket Option connection test is running."
-
-
-@app.route("/ping")
-def ping():
-    return "OK"
-
-
-# ============================================================
-# RENDER ENVIRONMENT VARIABLES
-# ============================================================
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-PO_SESSION = os.getenv("PO_SESSION")
-PO_UID = os.getenv("PO_UID")
-
-
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing.")
-
-if not PO_SESSION:
-    raise RuntimeError("PO_SESSION is missing.")
-
-if not PO_UID:
-    raise RuntimeError("PO_UID is missing.")
-
-
+import time
 # ============================================================
 # TELEGRAM
 # ============================================================
-
-bot = telebot.TeleBot(BOT_TOKEN)
-
-
-# ============================================================
-# POCKET OPTION STATUS
-# ============================================================
-
-po_status = "CONNECTING"
-po_error = None
-
-po_client = None
-
-
-# ============================================================
-# POCKET OPTION CONNECTION
-# ============================================================
-
-async def pocket_option_connection():
-
-    global po_status
-    global po_error
-    global po_client
-
-    try:
-
-        logger.info("Starting Pocket Option connection...")
-
-        po_status = "CONNECTING"
-
-        client = PocketOptionClient(logger=True)
-
-        po_client = client
-
-        authorization = AuthorizationData.model_validate(
-            {
-                "session": PO_SESSION,
-                "isDemo": 1,
-                "uid": int(PO_UID),
-                "platform": 2,
-                "isFastHistory": True,
-                "isOptimized": True,
-            }
-        )
-
-        logger.info("Initializing OTC subscription...")
-
-        default_init(
-            client,
-            authorization=authorization,
-            sub_assets=[Asset.AUDCAD_otc],
-            sub_period=60,
-        )
-
-        logger.info("Connecting to Pocket Option WebSocket...")
-
-        await client.connect(Regions.DEMO)
-
-        logger.info("Waiting for authorization...")
-
-        await asyncio.wait_for(
-            client.authorized_event.wait(),
-            timeout=20,
-        )
-
-        po_status = "CONNECTED"
-        po_error = None
-
-        logger.info(
-            "========================================"
-        )
-        logger.info(
-            "POCKET OPTION CONNECTED"
-        )
-        logger.info(
-            "========================================"
-        )
-
-        # Keep connection alive.
-        while True:
-            await asyncio.sleep(30)
-
-    except asyncio.TimeoutError:
-
-        po_status = "FAILED"
-
-        po_error = (
-            "Pocket Option authorization timed out."
-        )
-
-        logger.error(
-            "Pocket Option authorization timed out."
-        )
-
-    except Exception as e:
-
-        po_status = "FAILED"
-
-        po_error = str(e)
-
-        logger.exception(
-            "Pocket Option connection failed."
-        )
-
-
-# ============================================================
-# POCKET OPTION BACKGROUND THREAD
-# ============================================================
-
-def run_pocket_connection():
-
-    loop = asyncio.new_event_loop()
-
-    asyncio.set_event_loop(loop)
-
-    try:
-
-        loop.run_until_complete(
-            pocket_option_connection()
-        )
-
-    except Exception as e:
-
-        logger.exception(
-            "Pocket Option thread stopped: %s",
-            e,
-        )
-
-    finally:
-
-        loop.close()
-
-
-# ============================================================
-# TELEGRAM /START
-# ============================================================
-
-@bot.message_handler(commands=["start"])
-def start_command(message):
-
-    logger.info(
-        "Received /start from Telegram chat %s",
-        message.chat.id,
-    )
-
-    # Telegram test first.
-    bot.reply_to(
-        message,
-        "📱 Telegram: ✅ CONNECTED\n\n"
-        "🔎 Checking Pocket Option connection..."
-    )
-
-    # Give Pocket Option a moment, but DON'T block Telegram.
-    if po_status == "CONNECTED":
-
-        bot.send_message(
-            message.chat.id,
-            "🟢 POCKET OPTION: CONNECTED\n\n"
-            "📱 Telegram: ✅ Connected\n"
-            "🟢 Pocket Option: ✅ Connected\n"
-            "💱 OTC connection: ✅ Active\n"
-            "🤖 Automatic trading: 🔴 OFF\n\n"
-            "Connection test successful."
-        )
-
-    elif po_status == "CONNECTING":
-
-        bot.send_message(
-            message.chat.id,
-            "🟡 POCKET OPTION: STILL CONNECTING\n\n"
-            "Telegram is working correctly.\n"
-            "Pocket Option is still attempting authorization.\n\n"
-            "Send /status again in a few seconds."
-        )
-
-    else:
-
-        bot.send_message(
-            message.chat.id,
-            "🔴 POCKET OPTION: NOT CONNECTED\n\n"
-            "📱 Telegram: ✅ Connected\n"
-            "🔴 Pocket Option: ❌ Failed\n"
-            "🤖 Automatic trading: 🔴 OFF\n\n"
-            f"Reason:\n{po_error or 'Unknown error'}"
-        )
-
-
-# ============================================================
-# TELEGRAM /STATUS
-# ============================================================
-
-@bot.message_handler(commands=["status"])
-def status_command(message):
-
-    if po_status == "CONNECTED":
-
-        text = (
-            "🟢 CONNECTION STATUS\n\n"
-            "📱 Telegram: ✅ CONNECTED\n"
-            "🟢 Pocket Option: ✅ CONNECTED\n"
-            "💱 OTC: ✅ ACTIVE\n"
-            "🤖 Automatic trading: 🔴 OFF"
-        )
-
-    elif po_status == "CONNECTING":
-
-        text = (
-            "🟡 CONNECTION STATUS\n\n"
-            "📱 Telegram: ✅ CONNECTED\n"
-            "🟡 Pocket Option: ⏳ CONNECTING\n"
-            "💱 OTC: ⏳ WAITING\n"
-            "🤖 Automatic trading: 🔴 OFF"
-        )
-
-    else:
-
-        text = (
-            "🔴 CONNECTION STATUS\n\n"
-            "📱 Telegram: ✅ CONNECTED\n"
-            "🔴 Pocket Option: ❌ FAILED\n"
-            "🤖 Automatic trading: 🔴 OFF\n\n"
-            f"Error:\n{po_error or 'Unknown error'}"
-        )
-
-    bot.reply_to(
-        message,
-        text,
-    )
-
-
-# ============================================================
-# TELEGRAM ERROR HANDLER
-# ============================================================
-
-@bot.message_handler(
-    func=lambda message: True
+# Keep your real token in Render as:
+# BOT_TOKEN = your Telegram bot token
+#
+# Do NOT put the real token directly into this file.
+TELEGRAM_TOKEN = os.getenv(
+    "BOT_TOKEN",
+    "PASTE_YOUR_BOT_TOKEN_HERE"
 )
-def unknown_message(message):
-
-    bot.reply_to(
-        message,
-        "🟢 Telegram is connected.\n\n"
-        "Send /start to run the connection test."
-    )
-
-
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # ============================================================
-# MAIN
+# DETECTION SETTINGS
 # ============================================================
-
-if __name__ == "__main__":
-
-    print("========================================")
-    print("POCKET OPTION TELEGRAM CONNECTION TEST")
-    print("========================================")
-    print("BOT_TOKEN: loaded from Render")
-    print("PO_SESSION: loaded from Render")
-    print("PO_UID: loaded from Render")
-    print("Automatic trading: OFF")
-    print("Screenshot analysis: OFF")
-    print("Signals: OFF")
-    print("========================================")
-
-    # Start Pocket Option separately.
-    threading.Thread(
-        target=run_pocket_connection,
-        daemon=True,
-    ).start()
-
-    # Start Telegram separately.
-    threading.Thread(
-        target=lambda: bot.infinity_polling(
-            timeout=30,
-            long_polling_timeout=30,
-            skip_pending=True,
-        ),
-        daemon=True,
-    ).start()
-
-    # Start Render web server.
-    port = int(
-        os.getenv("PORT", "10000")
+# Minimum candle-body evidence
+MIN_BODY_AREA = 10
+MIN_BODY_HEIGHT = 2
+MIN_CANDLE_WIDTH = 2
+# Newest/right-side candles
+RIGHT_MIN_BODY_AREA = 6
+RIGHT_MIN_BODY_HEIGHT = 2
+# Maximum candle width relative to screenshot
+MAX_CANDLE_WIDTH_RATIO = 0.045
+# Very close pieces of the same candle can be merged
+MERGE_DISTANCE_RATIO = 0.55
+# ============================================================
+# STRICT COLOR SETTINGS
+# ============================================================
+# Minimum HSV saturation.
+# This helps reject white/gray chart elements.
+MIN_RED_SATURATION = 80
+MIN_GREEN_SATURATION = 60
+# Minimum brightness/value.
+MIN_RED_VALUE = 50
+MIN_GREEN_VALUE = 45
+# Red hue ranges
+RED_HUE_1_LOW = 0
+RED_HUE_1_HIGH = 10
+RED_HUE_2_LOW = 172
+RED_HUE_2_HIGH = 180
+# Green hue range
+GREEN_HUE_LOW = 35
+GREEN_HUE_HIGH = 85
+# Minimum percentage of pixels that must satisfy
+# the color condition inside the detected body.
+MIN_COLOR_DENSITY = 0.25
+# A red candidate must have clearly stronger red evidence
+# than green evidence.
+RED_DOMINANCE_RATIO = 1.35
+# A green candidate must have clearly stronger green evidence
+# than red evidence.
+GREEN_DOMINANCE_RATIO = 1.25
+# ============================================================
+# LOAD IMAGE
+# ============================================================
+def load_image(path):
+    img = cv2.imread(path)
+    if img is None:
+        raise ValueError(
+            "Could not read screenshot."
+        )
+    h, w = img.shape[:2]
+    # Upscale smaller screenshots slightly.
+    if w < 1400:
+        scale = 1400 / w
+        img = cv2.resize(
+            img,
+            (
+                int(w * scale),
+                int(h * scale)
+            ),
+            interpolation=cv2.INTER_CUBIC
+        )
+    return img
+# ============================================================
+# COLOR MASKS
+# ============================================================
+def get_color_masks(img):
+    hsv = cv2.cvtColor(
+        img,
+        cv2.COLOR_BGR2HSV
     )
-
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False,
+    # ========================================================
+    # GREEN
+    # ========================================================
+    green_lower = np.array([
+        GREEN_HUE_LOW,
+        MIN_GREEN_SATURATION,
+        MIN_GREEN_VALUE
+    ])
+    green_upper = np.array([
+        GREEN_HUE_HIGH,
+        255,
+        255
+    ])
+    green = cv2.inRange(
+        hsv,
+        green_lower,
+        green_upper
     )
+    # ========================================================
+    # RED
+    # ========================================================
+    red_lower_1 = np.array([
+        RED_HUE_1_LOW,
+        MIN_RED_SATURATION,
+        MIN_RED_VALUE
+    ])
+    red_upper_1 = np.array([
+        RED_HUE_1_HIGH,
+        255,
+        255
+    ])
+    red_lower_2 = np.array([
+        RED_HUE_2_LOW,
+        MIN_RED_SATURATION,
+        MIN_RED_VALUE
+    ])
+    red_upper_2 = np.array([
+        RED_HUE_2_HIGH,
+        255,
+        255
+    ])
+    red1 = cv2.inRange(
+        hsv,
+        red_lower_1,
+        red_upper_1
+    )
+    red2 = cv2.inRange(
+        hsv,
+        red_lower_2,
+        red_upper_2
+    )
+    red = cv2.bitwise_or(
+        red1,
+        red2
+    )
+    # ========================================================
+    # BGR COLOR-DOMINANCE FILTER
+    # ========================================================
+    #
+    # HSV alone can sometimes classify another reddish/orange
+    # object as red.
+    #
+    # This additional check requires the actual red channel
+    # to dominate the green/blue channels.
+    # ========================================================
+    b, g, r = cv2.split(img)
+    red_dominance = (
+        (r.astype(np.int16) >
+         g.astype(np.int16) * 1.15)
+        &
+        (r.astype(np.int16) >
+         b.astype(np.int16) * 1.15)
+        &
+        (r.astype(np.int16) > 60)
+    )
+    red_dominance_mask = (
+        red_dominance.astype(np.uint8) * 255
+    )
+    red = cv2.bitwise_and(
+        red,
+        red_dominance_mask
+    )
+    # ========================================================
+    # GREEN DOMINANCE
+    # ========================================================
+    green_dominance = (
+        (g.astype(np.int16) >
+         r.astype(np.int16) * 1.05)
+        &
+        (g.astype(np.int16) >
+         b.astype(np.int16) * 1.00)
+        &
+        (g.astype(np.int16) > 50)
+    )
+    green_dominance_mask = (
+        green_dominance.astype(np.uint8) * 255
+    )
+    green = cv2.bitwise_and(
+        green,
+        green_dominance_mask
+    )
+    return green, red
+# ============================================================
+# FIND CANDIDATES
+# ============================================================
+def find_candidates(
+    mask,
+    color,
+    image_width,
+    right_side=False
+):
+    # Very small morphology.
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (2, 2)
+    )
+    cleaned = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_OPEN,
+        kernel
+    )
+    close_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (3, 3)
+    )
+    cleaned = cv2.morphologyEx(
+        cleaned,
+        cv2.MORPH_CLOSE,
+        close_kernel
+    )
+    contours, _ = cv2.findContours(
+        cleaned,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+    candidates = []
+    max_width = max(
+        10,
+        int(
+            image_width *
+            MAX_CANDLE_WIDTH_RATIO
+        )
+    )
+    if right_side:
+        min_area = RIGHT_MIN_BODY_AREA
+        min_height = RIGHT_MIN_BODY_HEIGHT
+    else:
+        min_area = MIN_BODY_AREA
+        min_height = MIN_BODY_HEIGHT
+    for contour in contours:
+        area = cv2.contourArea(
+            contour
+        )
+        if area < min_area:
+            continue
+        x, y, w, h = cv2.boundingRect(
+            contour
+        )
+        if w < MIN_CANDLE_WIDTH:
+            continue
+        if h < min_height:
+            continue
+        if w > max_width:
+            continue
+        # Reject long horizontal objects.
+        if w > h * 6:
+            continue
+        # ====================================================
+        # BODY PIXEL DENSITY
+        # ====================================================
+        region = cleaned[
+            y:y+h,
+            x:x+w
+        ]
+        colored_pixels = int(
+            np.sum(region > 0)
+        )
+        if colored_pixels < 5:
+            continue
+        density = (
+            colored_pixels /
+            float(
+                max(
+                    1,
+                    w * h
+                )
+            )
+        )
+        if density < MIN_COLOR_DENSITY:
+            continue
+        # ====================================================
+        # COLOR CONFIDENCE CHECK
+        # ====================================================
+        # Get original HSV region.
+        # This prevents a tiny number of colored pixels
+        # from creating a candle detection.
+        #
+        # ====================================================
+        center_x = (
+            x +
+            w / 2
+        )
+        candidates.append({
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "area": float(area),
+            "pixels": colored_pixels,
+            "density": density,
+            "center_x": center_x,
+            "color": color
+        })
+    return candidates
+# ============================================================
+# MERGE SAME-COLOR PIECES
+# ============================================================
+def merge_candidates(
+    candidates
+):
+    if not candidates:
+        return []
+    candidates = sorted(
+        candidates,
+        key=lambda c: c["center_x"]
+    )
+    merged = []
+    for candidate in candidates:
+        merged_into_existing = False
+        for existing in merged:
+            distance = abs(
+                candidate["center_x"]
+                -
+                existing["center_x"]
+            )
+            allowed = max(
+                candidate["w"],
+                existing["w"],
+                2
+            ) * MERGE_DISTANCE_RATIO
+            candidate_top = (
+                candidate["y"]
+            )
+            candidate_bottom = (
+                candidate["y"] +
+                candidate["h"]
+            )
+            existing_top = (
+                existing["y"]
+            )
+            existing_bottom = (
+                existing["y"] +
+                existing["h"]
+            )
+            vertical_overlap = not (
+                candidate_bottom <
+                existing_top
+                or
+                candidate_top >
+                existing_bottom
+            )
+            if (
+                distance <= allowed
+                and
+                vertical_overlap
+            ):
+                left = min(
+                    existing["x"],
+                    candidate["x"]
+                )
+                right = max(
+                    existing["x"] +
+                    existing["w"],
+                    candidate["x"] +
+                    candidate["w"]
+                )
+                top = min(
+                    existing["y"],
+                    candidate["y"]
+                )
+                bottom = max(
+                    existing["y"] +
+                    existing["h"],
+                    candidate["y"] +
+                    candidate["h"]
+                )
+                existing["x"] = left
+                existing["y"] = top
+                existing["w"] = (
+                    right -
+                    left
+                )
+                existing["h"] = (
+                    bottom -
+                    top
+                )
+                existing["center_x"] = (
+                    left +
+                    existing["w"] / 2
+                )
+                existing["area"] += (
+                    candidate["area"]
+                )
+                existing["pixels"] += (
+                    candidate["pixels"]
+                )
+                merged_into_existing = True
+                break
+        if not merged_into_existing:
+            merged.append(
+                candidate.copy()
+            )
+    return merged
+# ============================================================
+# REMOVE CROSS-COLOR DUPLICATES
+# ============================================================
+def remove_cross_color_duplicates(
+    candles
+):
+    candles = sorted(
+        candles,
+        key=lambda c: c["center_x"]
+    )
+    result = []
+    for candle in candles:
+        duplicate_index = None
+        for i, existing in enumerate(
+            result
+        ):
+            distance = abs(
+                candle["center_x"]
+                -
+                existing["center_x"]
+            )
+            threshold = max(
+                candle["w"],
+                existing["w"],
+                2
+            ) * 0.65
+            if distance <= threshold:
+                duplicate_index = i
+                break
+        if duplicate_index is None:
+            result.append(
+                candle
+            )
+        else:
+            existing = result[
+                duplicate_index
+            ]
+            # Keep stronger actual color evidence.
+            if (
+                candle["pixels"]
+                >
+                existing["pixels"]
+            ):
+                result[
+                    duplicate_index
+                ] = candle
+    return result
+# ============================================================
+# MILD RIGHT-SIDE IMPROVEMENT
+# ============================================================
+def detect_right_side(
+    chart,
+    green_mask,
+    red_mask
+):
+    """
+    Controlled second pass.
+    Only the newest/right-side section gets the
+    slightly smaller-body allowance.
+    """
+    h, w = chart.shape[:2]
+    right_start = int(
+        w * 0.72
+    )
+    green_right = green_mask[
+        :,
+        right_start:
+    ]
+    red_right = red_mask[
+        :,
+        right_start:
+    ]
+    green = find_candidates(
+        green_right,
+        "GREEN",
+        w,
+        right_side=True
+    )
+    red = find_candidates(
+        red_right,
+        "RED",
+        w,
+        right_side=True
+    )
+    for candle in (
+        green +
+        red
+    ):
+        candle["x"] += (
+            right_start
+        )
+        candle["center_x"] += (
+            right_start
+        )
+    return (
+        green +
+        red
+    )
+# ============================================================
+# DETECT CANDLES
+# ============================================================
+def detect_candles(
+    img
+):
+    h, w = img.shape[:2]
+    green_mask, red_mask = (
+        get_color_masks(img)
+    )
+    # ========================================================
+    # MAIN DETECTION
+    # ========================================================
+    green = find_candidates(
+        green_mask,
+        "GREEN",
+        w,
+        right_side=False
+    )
+    red = find_candidates(
+        red_mask,
+        "RED",
+        w,
+        right_side=False
+    )
+    green = merge_candidates(
+        green
+    )
+    red = merge_candidates(
+        red
+    )
+    candles = (
+        green +
+        red
+    )
+    # ========================================================
+    # RIGHT-SIDE PASS
+    # ========================================================
+    right_candidates = (
+        detect_right_side(
+            img,
+            green_mask,
+            red_mask
+        )
+    )
+    candles.extend(
+        right_candidates
+    )
+    # ========================================================
+    # REMOVE DUPLICATES
+    # ========================================================
+    candles = (
+        remove_cross_color_duplicates(
+            candles
+        )
+    )
+    # ========================================================
+    # RIGHT → LEFT
+    # ========================================================
+    #
+    # IMPORTANT:
+    #
+    # The newest/rightmost candle becomes #1.
+    #
+    # Then the detector moves:
+    #
+    # #1 → #2 → #3 → #4 ...
+    #
+    # from RIGHT to LEFT.
+    # ========================================================
+    candles.sort(
+        key=lambda c: c["center_x"],
+        reverse=True
+    )
+    return candles
+# ============================================================
+# REPORT
+# ============================================================
+def create_report(
+    candles
+):
+    green = sum(
+        1
+        for c in candles
+        if c["color"] == "GREEN"
+    )
+    red = sum(
+        1
+        for c in candles
+        if c["color"] == "RED"
+    )
+    return green, red
+# ============================================================
+# NUMBERED DETECTION MAP
+# ============================================================
+def create_detection_map(
+    img,
+    candles
+):
+    output = img.copy()
+    # ========================================================
+    # RIGHT → LEFT NUMBERING
+    # ========================================================
+    for number, candle in enumerate(
+        candles,
+        start=1
+    ):
+        x = int(
+            candle["x"]
+        )
+        y = int(
+            candle["y"]
+        )
+        w = int(
+            candle["w"]
+        )
+        h = int(
+            candle["h"]
+        )
+        # Yellow detection box.
+        cv2.rectangle(
+            output,
+            (x, y),
+            (
+                x + w,
+                y + h
+            ),
+            (0, 255, 255),
+            2
+        )
+        # Color-specific number.
+        if candle["color"] == "GREEN":
+            label_color = (
+                0,
+                255,
+                0
+            )
+        else:
+            label_color = (
+                0,
+                0,
+                255
+            )
+        cv2.putText(
+            output,
+            str(number),
+            (
+                x,
+                max(
+                    25,
+                    y - 7
+                )
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.60,
+            label_color,
+            2,
+            cv2.LINE_AA
+        )
+    return output
+# ============================================================
+# TELEGRAM PHOTO HANDLER
+# ============================================================
+@bot.message_handler(
+    content_types=["photo"]
+)
+def handle_photo(
+    message
+):
+    start_time = time.time()
+    original_path = (
+        "chart_screenshot.png"
+    )
+    detection_path = (
+        "candle_detection.png"
+    )
+    try:
+        bot.reply_to(
+            message,
+            "👁️ Reading visible candles...\n"
+            "➡️ Scanning RIGHT → LEFT.\n"
+            "🔎 Checking strict GREEN/RED classification."
+        )
+        # ====================================================
+        # DOWNLOAD HIGHEST RESOLUTION
+        # ====================================================
+        file_info = bot.get_file(
+            message.photo[-1].file_id
+        )
+        downloaded_file = (
+            bot.download_file(
+                file_info.file_path
+            )
+        )
+        with open(
+            original_path,
+            "wb"
+        ) as f:
+            f.write(
+                downloaded_file
+            )
+        # ====================================================
+        # LOAD
+        # ====================================================
+        img = load_image(
+            original_path
+        )
+        # ====================================================
+        # DETECT
+        # ====================================================
+        candles = detect_candles(
+            img
+        )
+        # ====================================================
+        # COUNT
+        # ====================================================
+        green, red = (
+            create_report(
+                candles
+            )
+        )
+        total = len(
+            candles
+        )
+        elapsed = (
+            time.time() -
+            start_time
+        )
+        # ====================================================
+        # RIGHT → LEFT SEQUENCE
+        # ====================================================
+        sequence = []
+        for number, candle in enumerate(
+            candles,
+            start=1
+        ):
+            if candle["color"] == "GREEN":
+                sequence.append(
+                    f"{number}. 🟢 GREEN"
+                )
+            else:
+                sequence.append(
+                    f"{number}. 🔴 RED"
+                )
+        sequence_text = (
+            "\n".join(
+                sequence
+            )
+        )
+        # ====================================================
+        # RESULT
+        # ====================================================
+        if total == 0:
+            bot.reply_to(
+                message,
+                "❌ No reliable candle bodies detected.\n\n"
+                "No candle was generated.\n"
+                "No random candle was added.\n"
+                "No signal was generated."
+            )
+            return
+        report = (
+            "🔎 **CANDLE READING TEST**\n\n"
+            "➡️ **SCAN DIRECTION:** "
+            "RIGHT → LEFT\n\n"
+            "📊 **WHAT THE BOT ACTUALLY DETECTED:**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🟢 GREEN: {green}\n"
+            f"🔴 RED: {red}\n"
+            f"📊 TOTAL: {total}\n\n"
+            "🕯️ **RIGHT → LEFT CANDLE READING:**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"{sequence_text}\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "🎯 **COLOR CHECK:**\n"
+            "🟢 = Bot believes the candle is GREEN\n"
+            "🔴 = Bot believes the candle is RED\n\n"
+            "🔢 **NUMBER 1 = NEWEST/RIGHTMOST "
+            "DETECTED CANDLE**\n\n"
+            "⚠️ This is ONLY a candle-reading test.\n"
+            "No OHLC data is generated.\n"
+            "No random candles are added.\n"
+            "No trading signal is generated.\n\n"
+            f"⚡ Processing time: "
+            f"{elapsed:.2f}s"
+        )
+        bot.reply_to(
+            message,
+            report,
+            parse_mode="Markdown"
+        )
+        # ====================================================
+        # CREATE DETECTION MAP
+        # ====================================================
+        detection_map = (
+            create_detection_map(
+                img,
+                candles
+            )
+        )
+        cv2.imwrite(
+            detection_path,
+            detection_map
+        )
+        # ====================================================
+        # SEND MAP
+        # ====================================================
+        with open(
+            detection_path,
+            "rb"
+        ) as photo:
+            bot.send_photo(
+                message.chat.id,
+                photo,
+                caption=(
+                    "🔢 **RIGHT → LEFT CANDLE MAP**\n\n"
+                    "Number 1 = newest/rightmost "
+                    "detected candle.\n\n"
+                    "➡️ Counting continues "
+                    "from RIGHT → LEFT.\n\n"
+                    "🟨 Yellow box = detected candle body.\n"
+                    "🟢 Number = classified GREEN.\n"
+                    "🔴 Number = classified RED.\n\n"
+                    "Compare every box with the actual "
+                    "candles in your screenshot."
+                ),
+                parse_mode="Markdown"
+            )
+    except Exception as e:
+        print(
+            "❌ ERROR:",
+            repr(e)
+        )
+        bot.reply_to(
+            message,
+            f"❌ Detection error:\n{str(e)}"
+        )
+    finally:
+        for path in [
+            original_path,
+            detection_path
+        ]:
+            if os.path.exists(
+                path
+            ):
+                try:
+                    os.remove(
+                        path
+                    )
+                except Exception:
+                    pass
+# ============================================================
+# START
+# ============================================================
+print(
+    "========================================"
+)
+print(
+    "🕯️ CANDLE READING TEST"
+)
+print(
+    "========================================"
+)
+print(
+    "➡️ Scan direction: RIGHT → LEFT"
+)
+print(
+    "🔢 Number 1 = newest/rightmost candle"
+)
+print(
+    "🔴 Strict red detection enabled"
+)
+print(
+    "🟢 Strict green detection enabled"
+)
+print(
+    "🚫 No OHLC generation"
+)
+print(
+    "🚫 No random candles"
+)
+print(
+    "🚫 No trading signals"
+)
+print(
+    "========================================"
+)
+bot.infinity_polling(
+    timeout=30,
+    long_polling_timeout=30
+)
