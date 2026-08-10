@@ -1670,27 +1670,19 @@ def handle_photo(message):
         # NO SIGNAL:
         # USER ONLY
         # ====================================================
-        if decision in (
-            "BUY SIGNAL",
-            "SELL SIGNAL"
-        ):
-            # ------------------------------------------------
-            # FIRST: SEND SIGNAL TO CHANNEL
-            # ------------------------------------------------
-            try:
-                bot.send_message(
-                    CHANNEL_ID,
-                    report,
-                    parse_mode="Markdown"
-                )
-                print(
-                    "✅ Signal sent to channel first."
-                )
-            except Exception as channel_error:
-                print(
-                    "❌ Channel signal error:",
-                    repr(channel_error)
-                )
+        await context.bot.forward_message(
+            chat_id=CHANNEL_ID,
+            from_chat_id=update.message.chat_id,
+            message_id=update.message.message_id
+        )
+
+        send_telegram(response)
+
+        elapsed = time.time() - start_time
+        print(f"✅ Signal sent in {elapsed:.2f} seconds")
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
             # ------------------------------------------------
             # SECOND: SEND SIGNAL TO USER
             # ------------------------------------------------
