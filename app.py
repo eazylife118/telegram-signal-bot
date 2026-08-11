@@ -37,16 +37,13 @@ CHANNEL_ID = os.getenv(
 
 app = Flask(__name__)
 
-
 @app.route("/")
 def home():
     return "OTC Candle Strategy Bot is running."
 
-
 @app.route("/ping")
 def ping():
     return "OK"
-
 
 def run_flask():
     port = int(os.getenv("PORT", "10000"))
@@ -57,17 +54,14 @@ def run_flask():
         use_reloader=False
     )
 
-
 # ============================================================
 # TIMEZONE
 # ============================================================
 
 NIGERIA_TZ = ZoneInfo("Africa/Lagos")
 
-
 def nigeria_now():
     return datetime.now(NIGERIA_TZ)
-
 
 def signal_and_entry_times():
     now = nigeria_now()
@@ -85,7 +79,6 @@ def signal_and_entry_times():
         signal_time.strftime("%H:%M"),
         entry_time.strftime("%H:%M")
     )
-
 
 # ============================================================
 # DETECTION SETTINGS
@@ -125,9 +118,47 @@ TREND_STRENGTH_THRESHOLD = 0.55
 CHOP_ALTERNATION_THRESHOLD = 0.65
 
 # ============================================================
-# IMAGE LOADING
+# NEW TECHNICAL CONFIRMATION SETTINGS
+#
+# IMPORTANT:
+# These are calculated from candles detected from the screenshot.
+# They are NOT broker OHLC/true volume.
 # ============================================================
 
+SMA_SHORT_PERIOD = 20
+SMA_LONG_PERIOD = 50
+
+EMA_LONG_PERIOD = 200
+
+RSI_PERIOD = 14
+
+MACD_FAST_PERIOD = 12
+MACD_SLOW_PERIOD = 26
+MACD_SIGNAL_PERIOD = 9
+
+BOLLINGER_PERIOD = 20
+BOLLINGER_STD = 2.0
+
+# ============================================================
+# SMALL FILTER SETTINGS
+# ============================================================
+
+# If BUY and SELL scores are this close, reject the setup.
+BALANCED_SCORE_DIFFERENCE = 2
+
+# Minimum directional candle evidence.
+MIN_CANDLE_EVIDENCE = 0.30
+
+# Technical confirmation requirement.
+# Technical confirmation is a filter, not a new signal engine.
+MIN_TECHNICAL_CONFIRMATIONS = 3
+
+# Minimum activity compared with recent candle activity.
+MIN_ACTIVITY_RATIO = 0.55
+
+# ============================================================
+# IMAGE LOADING
+# ============================================================
 
 def load_image(path):
 
@@ -155,11 +186,9 @@ def load_image(path):
 
     return img
 
-
 # ============================================================
 # COLOR MASKS
 # ============================================================
-
 
 def get_color_masks(img):
 
@@ -235,11 +264,9 @@ def get_color_masks(img):
 
     return green, red
 
-
 # ============================================================
 # FIND CANDIDATES
 # ============================================================
-
 
 def find_candidates(
     mask,
@@ -360,11 +387,9 @@ def find_candidates(
 
     return candidates
 
-
 # ============================================================
 # MERGE SAME-COLOR PIECES
 # ============================================================
-
 
 def merge_candidates(candidates):
 
@@ -472,11 +497,9 @@ def merge_candidates(candidates):
 
     return merged
 
-
 # ============================================================
 # REMOVE CROSS-COLOR DUPLICATES
 # ============================================================
-
 
 def remove_cross_color_duplicates(candles):
 
@@ -535,11 +558,9 @@ def remove_cross_color_duplicates(candles):
 
     return result
 
-
 # ============================================================
 # RIGHT SIDE DETECTION
 # ============================================================
-
 
 def detect_right_side(
     chart,
@@ -587,11 +608,9 @@ def detect_right_side(
 
     return green + red
 
-
 # ============================================================
 # DETECT CANDLES
 # ============================================================
-
 
 def detect_candles(img):
 
@@ -650,11 +669,9 @@ def detect_candles(img):
 
     return candles
 
-
 # ============================================================
 # BODY POSITION
 # ============================================================
-
 
 def body_position(candle):
 
@@ -670,11 +687,9 @@ def body_position(candle):
         bottom
     )
 
-
 # ============================================================
 # PRICE-ACTION HELPERS
 # ============================================================
-
 
 def candle_midpoint(candle):
 
@@ -687,14 +702,12 @@ def candle_midpoint(candle):
         bottom
     ) / 2
 
-
 def candle_range(candle):
 
     return max(
         1,
         candle["h"]
     )
-
 
 def directional_value(candle):
 
@@ -703,7 +716,6 @@ def directional_value(candle):
     )
 
     return midpoint
-
 
 def price_higher(
     candle_a,
@@ -716,7 +728,6 @@ def price_higher(
         candle_b
     )
 
-
 def price_lower(
     candle_a,
     candle_b
@@ -727,7 +738,6 @@ def price_lower(
     ) > candle_midpoint(
         candle_b
     )
-
 
 def body_strength(candle):
 
@@ -740,11 +750,9 @@ def body_strength(candle):
         )
     )
 
-
 # ============================================================
 # RESISTANCE
 # ============================================================
-
 
 def find_resistance_zone(candles):
 
@@ -847,11 +855,9 @@ def find_resistance_zone(candles):
 
     return strongest
 
-
 # ============================================================
 # SUPPORT
 # ============================================================
-
 
 def find_support_zone(candles):
 
@@ -954,11 +960,9 @@ def find_support_zone(candles):
 
     return strongest
 
-
 # ============================================================
 # RESISTANCE REACTION
 # ============================================================
-
 
 def resistance_behavior(
     candles,
@@ -1005,11 +1009,9 @@ def resistance_behavior(
         "rejection": rejection
     }
 
-
 # ============================================================
 # SUPPORT REACTION
 # ============================================================
-
 
 def support_behavior(
     candles,
@@ -1056,11 +1058,9 @@ def support_behavior(
         "rejection": rejection
     }
 
-
 # ============================================================
 # REACTION STRENGTH
 # ============================================================
-
 
 def reaction_strength(
     zone,
@@ -1086,11 +1086,9 @@ def reaction_strength(
 
     return 0
 
-
 # ============================================================
 # BODY MOMENTUM
 # ============================================================
-
 
 def analyze_body_momentum(candles):
 
@@ -1116,11 +1114,9 @@ def analyze_body_momentum(candles):
 
     return "NORMAL"
 
-
 # ============================================================
 # CONSECUTIVE MOMENTUM
 # ============================================================
-
 
 def consecutive_momentum(candles):
 
@@ -1150,11 +1146,9 @@ def consecutive_momentum(candles):
 
     return None
 
-
 # ============================================================
 # BODY REVERSAL
 # ============================================================
-
 
 def body_reversal(candles):
 
@@ -1177,11 +1171,9 @@ def body_reversal(candles):
 
     return None
 
-
 # ============================================================
 # TWO-CANDLE REVERSAL
 # ============================================================
-
 
 def two_candle_reversal(candles):
 
@@ -1213,11 +1205,9 @@ def two_candle_reversal(candles):
 
     return None
 
-
 # ============================================================
 # THREE-CANDLE REVERSAL
 # ============================================================
-
 
 def three_candle_reversal(candles):
 
@@ -1250,11 +1240,9 @@ def three_candle_reversal(candles):
 
     return None
 
-
 # ============================================================
 # PULLBACK
 # ============================================================
-
 
 def detect_pullback(candles):
 
@@ -1281,11 +1269,9 @@ def detect_pullback(candles):
 
     return None
 
-
 # ============================================================
 # BREAKOUT FAILURE
 # ============================================================
-
 
 def breakout_failure(
     candles,
@@ -1371,11 +1357,9 @@ def breakout_failure(
         support_failure
     )
 
-
 # ============================================================
 # RESISTANCE BREAKOUT HOLD
 # ============================================================
-
 
 def resistance_breakout_hold(
     candles,
@@ -1439,11 +1423,9 @@ def resistance_breakout_hold(
 
     return False
 
-
 # ============================================================
 # SUPPORT BREAKDOWN HOLD
 # ============================================================
-
 
 def support_breakdown_hold(
     candles,
@@ -1507,11 +1489,9 @@ def support_breakdown_hold(
 
     return False
 
-
 # ============================================================
 # COLOR CONFIRMATION
 # ============================================================
-
 
 def color_confirmation(
     candles,
@@ -1601,11 +1581,9 @@ def color_confirmation(
         red_green
     )
 
-
 # ============================================================
 # CONTINUATION
 # ============================================================
-
 
 def continuation_structure(
     candles,
@@ -1673,12 +1651,10 @@ def continuation_structure(
 
     return None
 
-
 # ============================================================
 # NEW LAYER 1
 # HIGHER HIGH / HIGHER LOW
 # ============================================================
-
 
 def higher_high_higher_low(candles):
 
@@ -1714,8 +1690,6 @@ def higher_high_higher_low(candles):
             older2
         )
 
-        # Smaller screen Y = higher price.
-
         if (
             newest_mid < older_mid
             and
@@ -1729,12 +1703,10 @@ def higher_high_higher_low(candles):
 
     return None
 
-
 # ============================================================
 # NEW LAYER 2
 # LOWER HIGH / LOWER LOW
 # ============================================================
-
 
 def lower_high_lower_low(candles):
 
@@ -1783,12 +1755,10 @@ def lower_high_lower_low(candles):
 
     return None
 
-
 # ============================================================
 # NEW LAYER 3
 # OVERALL TREND DIRECTION
 # ============================================================
-
 
 def overall_trend_direction(candles):
 
@@ -1846,12 +1816,10 @@ def overall_trend_direction(candles):
 
     return "SIDEWAYS"
 
-
 # ============================================================
 # NEW LAYER 4
 # TREND STRENGTH
 # ============================================================
-
 
 def trend_strength(candles):
 
@@ -1898,12 +1866,10 @@ def trend_strength(candles):
         1
     )
 
-
 # ============================================================
 # NEW LAYER 5
 # PULLBACK QUALITY
 # ============================================================
-
 
 def pullback_quality(candles):
 
@@ -1933,9 +1899,6 @@ def pullback_quality(candles):
         recent.count("RED") >= 1
     ):
 
-        # Small counter-move followed by
-        # bullish pressure.
-
         if (
             candles[0]["h"]
             <=
@@ -1960,12 +1923,10 @@ def pullback_quality(candles):
 
     return None
 
-
 # ============================================================
 # NEW LAYER 6
 # BREAKOUT + RETEST
 # ============================================================
-
 
 def breakout_retest(
     candles,
@@ -1975,8 +1936,6 @@ def breakout_retest(
 
     if len(candles) < 4:
         return None
-
-    # Bullish breakout and retest.
 
     if resistance:
 
@@ -2027,8 +1986,6 @@ def breakout_retest(
                 ):
 
                     return "BUY"
-
-    # Bearish breakout and retest.
 
     if support:
 
@@ -2082,12 +2039,10 @@ def breakout_retest(
 
     return None
 
-
 # ============================================================
 # NEW LAYER 7
 # SWING REJECTION
 # ============================================================
-
 
 def swing_rejection(
     candles,
@@ -2150,12 +2105,10 @@ def swing_rejection(
 
     return None
 
-
 # ============================================================
 # NEW LAYER 8
 # TREND EXHAUSTION
 # ============================================================
-
 
 def trend_exhaustion(candles):
 
@@ -2195,12 +2148,10 @@ def trend_exhaustion(candles):
 
     return None
 
-
 # ============================================================
 # NEW LAYER 9
 # CANDLE SEQUENCE QUALITY
 # ============================================================
-
 
 def candle_sequence_quality(candles):
 
@@ -2258,12 +2209,10 @@ def candle_sequence_quality(candles):
 
     return None
 
-
 # ============================================================
 # NEW LAYER 10
 # IMPULSE VS CORRECTION
 # ============================================================
-
 
 def impulse_vs_correction(candles):
 
@@ -2327,12 +2276,10 @@ def impulse_vs_correction(candles):
 
     return None
 
-
 # ============================================================
 # NEW LAYER 11
 # STRUCTURE-BREAK CONFIRMATION
 # ============================================================
-
 
 def structure_break_confirmation(candles):
 
@@ -2375,12 +2322,10 @@ def structure_break_confirmation(candles):
 
     return None
 
-
 # ============================================================
 # NEW LAYER 12
 # FAKE BREAKOUT DETECTION
 # ============================================================
-
 
 def fake_breakout_detection(
     candles,
@@ -2456,12 +2401,10 @@ def fake_breakout_detection(
 
     return None
 
-
 # ============================================================
 # NEW LAYER 13
 # TREND TRANSITION DETECTION
 # ============================================================
-
 
 def trend_transition_detection(candles):
 
@@ -2521,12 +2464,10 @@ def trend_transition_detection(candles):
 
     return None
 
-
 # ============================================================
 # NEW LAYER 14
 # MULTI-CANDLE DIRECTIONAL AGREEMENT
 # ============================================================
-
 
 def multi_candle_directional_agreement(candles):
 
@@ -2573,12 +2514,10 @@ def multi_candle_directional_agreement(candles):
 
     return None
 
-
 # ============================================================
 # NEW LAYER 15
 # SIDEWAYS / CHOPPY MARKET FILTER
 # ============================================================
-
 
 def sideways_choppy_filter(candles):
 
@@ -2618,9 +2557,6 @@ def sideways_choppy_filter(candles):
         changes /
         possible_changes
     )
-
-    # Frequent alternation without
-    # structural progress = choppy.
 
     if (
         alternation_ratio
@@ -2664,11 +2600,1068 @@ def sideways_choppy_filter(candles):
 
     return False
 
+# ============================================================
+# SCREENSHOT-DERIVED PRICE SERIES
+# ============================================================
+
+def get_price_series(candles):
+
+    if not candles:
+        return []
+
+    # candles[0] is newest.
+    # Reverse so calculations run oldest -> newest.
+
+    ordered = list(
+        reversed(candles)
+    )
+
+    prices = []
+
+    for candle in ordered:
+
+        # Screen Y increases downward.
+        # Negative midpoint converts this into
+        # a price-direction representation.
+
+        price = -float(
+            candle_midpoint(candle)
+        )
+
+        prices.append(
+            price
+        )
+
+    return prices
+
+# ============================================================
+# SMA
+# ============================================================
+
+def calculate_sma(
+    values,
+    period
+):
+
+    if not values:
+        return None
+
+    period = max(
+        1,
+        int(period)
+    )
+
+    if len(values) < period:
+
+        return float(
+            np.mean(values)
+        )
+
+    return float(
+        np.mean(
+            values[-period:]
+        )
+    )
+
+# ============================================================
+# EMA
+# ============================================================
+
+def calculate_ema(
+    values,
+    period
+):
+
+    if not values:
+        return None
+
+    period = max(
+        1,
+        int(period)
+    )
+
+    alpha = (
+        2.0 /
+        (period + 1.0)
+    )
+
+    ema = float(
+        values[0]
+    )
+
+    for value in values[1:]:
+
+        ema = (
+            alpha * float(value)
+            +
+            (1.0 - alpha) * ema
+        )
+
+    return float(ema)
+
+# ============================================================
+# RSI
+# ============================================================
+
+def calculate_rsi(
+    values,
+    period=14
+):
+
+    if len(values) < 2:
+        return None
+
+    period = max(
+        1,
+        int(period)
+    )
+
+    changes = np.diff(
+        np.array(
+            values,
+            dtype=float
+        )
+    )
+
+    gains = np.where(
+        changes > 0,
+        changes,
+        0
+    )
+
+    losses = np.where(
+        changes < 0,
+        -changes,
+        0
+    )
+
+    if len(changes) < period:
+
+        average_gain = float(
+            np.mean(gains)
+        )
+
+        average_loss = float(
+            np.mean(losses)
+        )
+
+    else:
+
+        average_gain = float(
+            np.mean(
+                gains[-period:]
+            )
+        )
+
+        average_loss = float(
+            np.mean(
+                losses[-period:]
+            )
+        )
+
+    if average_loss == 0:
+
+        if average_gain > 0:
+            return 100.0
+
+        return 50.0
+
+    rs = (
+        average_gain /
+        average_loss
+    )
+
+    rsi = (
+        100.0 -
+        (
+            100.0 /
+            (1.0 + rs)
+        )
+    )
+
+    return float(
+        max(
+            0,
+            min(
+                100,
+                rsi
+            )
+        )
+    )
+
+# ============================================================
+# MACD
+# ============================================================
+
+def calculate_macd(
+    values
+):
+
+    if not values:
+        return {
+            "macd": None,
+            "signal": None,
+            "histogram": None
+        }
+
+    fast_ema = []
+
+    slow_ema = []
+
+    fast_period = MACD_FAST_PERIOD
+    slow_period = MACD_SLOW_PERIOD
+    signal_period = MACD_SIGNAL_PERIOD
+
+    fast_alpha = (
+        2.0 /
+        (fast_period + 1.0)
+    )
+
+    slow_alpha = (
+        2.0 /
+        (slow_period + 1.0)
+    )
+
+    fast_value = float(
+        values[0]
+    )
+
+    slow_value = float(
+        values[0]
+    )
+
+    for value in values:
+
+        value = float(value)
+
+        fast_value = (
+            fast_alpha * value
+            +
+            (1.0 - fast_alpha)
+            * fast_value
+        )
+
+        slow_value = (
+            slow_alpha * value
+            +
+            (1.0 - slow_alpha)
+            * slow_value
+        )
+
+        fast_ema.append(
+            fast_value
+        )
+
+        slow_ema.append(
+            slow_value
+        )
+
+    macd_series = [
+        fast - slow
+        for fast, slow
+        in zip(
+            fast_ema,
+            slow_ema
+        )
+    ]
+
+    signal_value = calculate_ema(
+        macd_series,
+        signal_period
+    )
+
+    macd_value = (
+        macd_series[-1]
+        if macd_series
+        else None
+    )
+
+    histogram = None
+
+    if (
+        macd_value is not None
+        and
+        signal_value is not None
+    ):
+
+        histogram = (
+            macd_value -
+            signal_value
+        )
+
+    return {
+        "macd": macd_value,
+        "signal": signal_value,
+        "histogram": histogram
+    }
+
+# ============================================================
+# BOLLINGER BANDS
+# ============================================================
+
+def calculate_bollinger_bands(
+    values
+):
+
+    if not values:
+        return {
+            "middle": None,
+            "upper": None,
+            "lower": None
+        }
+
+    period = BOLLINGER_PERIOD
+
+    if len(values) < period:
+
+        sample = np.array(
+            values,
+            dtype=float
+        )
+
+    else:
+
+        sample = np.array(
+            values[-period:],
+            dtype=float
+        )
+
+    middle = float(
+        np.mean(sample)
+    )
+
+    standard_deviation = float(
+        np.std(sample)
+    )
+
+    upper = (
+        middle
+        +
+        BOLLINGER_STD
+        *
+        standard_deviation
+    )
+
+    lower = (
+        middle
+        -
+        BOLLINGER_STD
+        *
+        standard_deviation
+    )
+
+    return {
+        "middle": middle,
+        "upper": upper,
+        "lower": lower
+    }
+
+# ============================================================
+# ACTIVITY / VOLUME PROXY
+# ============================================================
+
+def calculate_activity_proxy(
+    candles
+):
+
+    if not candles:
+        return {
+            "current": 0.0,
+            "average": 0.0,
+            "ratio": 0.0,
+            "strong": False
+        }
+
+    sample = candles[
+        :min(
+            len(candles),
+            20
+        )
+    ]
+
+    activity_values = []
+
+    for candle in sample:
+
+        body = float(
+            max(
+                1,
+                candle["h"]
+            )
+        )
+
+        width = float(
+            max(
+                1,
+                candle["w"]
+            )
+        )
+
+        pixels = float(
+            max(
+                1,
+                candle["pixels"]
+            )
+        )
+
+        # Screenshot activity proxy:
+        # body size + candle width + detected colored pixels.
+
+        activity = (
+            body
+            *
+            max(
+                1.0,
+                width
+            )
+            +
+            pixels
+        )
+
+        activity_values.append(
+            activity
+        )
+
+    current = float(
+        activity_values[0]
+    )
+
+    if len(activity_values) > 1:
+
+        average = float(
+            np.mean(
+                activity_values[1:]
+            )
+        )
+
+    else:
+
+        average = current
+
+    if average <= 0:
+
+        ratio = 1.0
+
+    else:
+
+        ratio = (
+            current /
+            average
+        )
+
+    return {
+        "current": current,
+        "average": average,
+        "ratio": ratio,
+        "strong": (
+            ratio >= MIN_ACTIVITY_RATIO
+        )
+    }
+
+# ============================================================
+# TECHNICAL BIAS
+#
+# This does NOT create a new signal.
+# It only confirms or rejects an already-created
+# BUY/SELL candidate.
+# ============================================================
+
+def calculate_technical_confirmation(
+    candles
+):
+
+    prices = get_price_series(
+        candles
+    )
+
+    if not prices:
+
+        return {
+            "bias": "NEUTRAL",
+            "buy_confirmations": 0,
+            "sell_confirmations": 0,
+            "total_confirmations": 0,
+            "sma20": None,
+            "sma50": None,
+            "ema200": None,
+            "rsi": None,
+            "macd": None,
+            "macd_signal": None,
+            "macd_histogram": None,
+            "bb_middle": None,
+            "bb_upper": None,
+            "bb_lower": None,
+            "activity_ratio": 0.0,
+            "activity_strong": False
+        }
+
+    current_price = float(
+        prices[-1]
+    )
+
+    sma20 = calculate_sma(
+        prices,
+        SMA_SHORT_PERIOD
+    )
+
+    sma50 = calculate_sma(
+        prices,
+        SMA_LONG_PERIOD
+    )
+
+    ema200 = calculate_ema(
+        prices,
+        EMA_LONG_PERIOD
+    )
+
+    rsi = calculate_rsi(
+        prices,
+        RSI_PERIOD
+    )
+
+    macd = calculate_macd(
+        prices
+    )
+
+    bollinger = calculate_bollinger_bands(
+        prices
+    )
+
+    activity = calculate_activity_proxy(
+        candles
+    )
+
+    buy_confirmations = 0
+    sell_confirmations = 0
+
+    # --------------------------------------------------------
+    # SMA 20
+    # --------------------------------------------------------
+
+    if sma20 is not None:
+
+        if current_price > sma20:
+            buy_confirmations += 1
+
+        elif current_price < sma20:
+            sell_confirmations += 1
+
+    # --------------------------------------------------------
+    # SMA 50
+    # --------------------------------------------------------
+
+    if sma50 is not None:
+
+        if current_price > sma50:
+            buy_confirmations += 1
+
+        elif current_price < sma50:
+            sell_confirmations += 1
+
+    # --------------------------------------------------------
+    # EMA 200
+    # --------------------------------------------------------
+
+    if ema200 is not None:
+
+        if current_price > ema200:
+            buy_confirmations += 1
+
+        elif current_price < ema200:
+            sell_confirmations += 1
+
+    # --------------------------------------------------------
+    # RSI
+    #
+    # RSI above 50 = bullish bias.
+    # RSI below 50 = bearish bias.
+    # Extreme 70/30 conditions are not automatically
+    # treated as entries.
+    # --------------------------------------------------------
+
+    if rsi is not None:
+
+        if rsi > 50:
+            buy_confirmations += 1
+
+        elif rsi < 50:
+            sell_confirmations += 1
+
+    # --------------------------------------------------------
+    # MACD
+    # --------------------------------------------------------
+
+    if (
+        macd["macd"] is not None
+        and
+        macd["signal"] is not None
+    ):
+
+        if (
+            macd["macd"]
+            >
+            macd["signal"]
+        ):
+
+            buy_confirmations += 1
+
+        elif (
+            macd["macd"]
+            <
+            macd["signal"]
+        ):
+
+            sell_confirmations += 1
+
+    # --------------------------------------------------------
+    # BOLLINGER BANDS
+    #
+    # Price above middle = bullish bias.
+    # Price below middle = bearish bias.
+    # --------------------------------------------------------
+
+    bb_middle = bollinger[
+        "middle"
+    ]
+
+    if bb_middle is not None:
+
+        if current_price > bb_middle:
+            buy_confirmations += 1
+
+        elif current_price < bb_middle:
+            sell_confirmations += 1
+
+    # --------------------------------------------------------
+    # ACTIVITY PROXY
+    #
+    # Activity does not choose direction.
+    # It only confirms that there is enough recent
+    # candle activity to trust the setup.
+    # --------------------------------------------------------
+
+    total_confirmations = (
+        buy_confirmations +
+        sell_confirmations
+    )
+
+    if (
+        buy_confirmations
+        >
+        sell_confirmations
+        and
+        buy_confirmations >=
+        MIN_TECHNICAL_CONFIRMATIONS
+    ):
+
+        bias = "BUY"
+
+    elif (
+        sell_confirmations
+        >
+        buy_confirmations
+        and
+        sell_confirmations >=
+        MIN_TECHNICAL_CONFIRMATIONS
+    ):
+
+        bias = "SELL"
+
+    else:
+
+        bias = "NEUTRAL"
+
+    return {
+        "bias": bias,
+        "buy_confirmations": buy_confirmations,
+        "sell_confirmations": sell_confirmations,
+        "total_confirmations": total_confirmations,
+        "sma20": sma20,
+        "sma50": sma50,
+        "ema200": ema200,
+        "rsi": rsi,
+        "macd": macd["macd"],
+        "macd_signal": macd["signal"],
+        "macd_histogram": macd["histogram"],
+        "bb_middle": bollinger["middle"],
+        "bb_upper": bollinger["upper"],
+        "bb_lower": bollinger["lower"],
+        "activity_ratio": activity["ratio"],
+        "activity_strong": activity["strong"]
+    }
+
+# ============================================================
+# CANDLE EVIDENCE FILTER
+# ============================================================
+
+def candle_evidence_quality(
+    candles
+):
+
+    if not candles:
+
+        return {
+            "buy": 0.0,
+            "sell": 0.0,
+            "dominant": "NEUTRAL",
+            "weak": True
+        }
+
+    sample = candles[
+        :min(
+            len(candles),
+            6
+        )
+    ]
+
+    total_weight = 0.0
+    buy_weight = 0.0
+    sell_weight = 0.0
+
+    for index, candle in enumerate(sample):
+
+        # Newest candles have more importance.
+
+        weight = (
+            len(sample) -
+            index
+        )
+
+        strength = min(
+            1.0,
+            max(
+                0.05,
+                body_strength(candle)
+            )
+        )
+
+        weighted = (
+            weight *
+            strength
+        )
+
+        total_weight += weighted
+
+        if candle["color"] == "GREEN":
+
+            buy_weight += weighted
+
+        else:
+
+            sell_weight += weighted
+
+    if total_weight <= 0:
+
+        return {
+            "buy": 0.0,
+            "sell": 0.0,
+            "dominant": "NEUTRAL",
+            "weak": True
+        }
+
+    buy_ratio = (
+        buy_weight /
+        total_weight
+    )
+
+    sell_ratio = (
+        sell_weight /
+        total_weight
+    )
+
+    if (
+        buy_ratio >
+        sell_ratio
+    ):
+
+        dominant = "BUY"
+
+    elif (
+        sell_ratio >
+        buy_ratio
+    ):
+
+        dominant = "SELL"
+
+    else:
+
+        dominant = "NEUTRAL"
+
+    strongest_ratio = max(
+        buy_ratio,
+        sell_ratio
+    )
+
+    # Weak evidence means neither side has enough
+    # meaningful candle structure.
+
+    weak = (
+        strongest_ratio <
+        MIN_CANDLE_EVIDENCE
+    )
+
+    return {
+        "buy": round(
+            buy_ratio * 100,
+            1
+        ),
+        "sell": round(
+            sell_ratio * 100,
+            1
+        ),
+        "dominant": dominant,
+        "weak": weak
+    }
+
+# ============================================================
+# APPLY SMALL SAFETY FILTERS
+#
+# These filters DO NOT build another strategy.
+# They only reject weak/conflicting setups.
+# ============================================================
+
+def apply_small_setup_filters(
+    candles,
+    decision,
+    buy_score,
+    sell_score,
+    choppy,
+    technical
+):
+
+    filters_result = {
+        "balanced": False,
+        "choppy": bool(choppy),
+        "against_structure": False,
+        "weak_candle_evidence": False,
+        "technical_conflict": False,
+        "activity_too_weak": False,
+        "allowed": True,
+        "reasons": []
+    }
+
+    # --------------------------------------------------------
+    # FILTER 1
+    # BUY / SELL EVIDENCE NEARLY BALANCED
+    # --------------------------------------------------------
+
+    score_difference = abs(
+        buy_score -
+        sell_score
+    )
+
+    if (
+        score_difference
+        <=
+        BALANCED_SCORE_DIFFERENCE
+        and
+        (
+            buy_score +
+            sell_score
+        ) >= 4
+    ):
+
+        filters_result[
+            "balanced"
+        ] = True
+
+        filters_result[
+            "allowed"
+        ] = False
+
+        filters_result[
+            "reasons"
+        ].append(
+            "BUY and SELL evidence are nearly balanced"
+        )
+
+    # --------------------------------------------------------
+    # FILTER 2
+    # CLEARLY CHOPPY
+    # --------------------------------------------------------
+
+    if choppy:
+
+        filters_result[
+            "allowed"
+        ] = False
+
+        filters_result[
+            "reasons"
+        ].append(
+            "Recent candles are clearly choppy"
+        )
+
+    # --------------------------------------------------------
+    # FILTER 3
+    # WEAK CANDLE EVIDENCE
+    # --------------------------------------------------------
+
+    evidence = candle_evidence_quality(
+        candles
+    )
+
+    if evidence["weak"]:
+
+        filters_result[
+            "weak_candle_evidence"
+        ] = True
+
+        filters_result[
+            "allowed"
+        ] = False
+
+        filters_result[
+            "reasons"
+        ].append(
+            "Candle evidence is too weak"
+        )
+
+    # --------------------------------------------------------
+    # FILTER 4
+    # AGAINST DOMINANT CANDLE STRUCTURE
+    # --------------------------------------------------------
+
+    dominant_structure = (
+        evidence["dominant"]
+    )
+
+    if (
+        decision == "BUY SIGNAL"
+        and
+        dominant_structure == "SELL"
+    ):
+
+        filters_result[
+            "against_structure"
+        ] = True
+
+        filters_result[
+            "allowed"
+        ] = False
+
+        filters_result[
+            "reasons"
+        ].append(
+            "BUY is against the dominant candle structure"
+        )
+
+    elif (
+        decision == "SELL SIGNAL"
+        and
+        dominant_structure == "BUY"
+    ):
+
+        filters_result[
+            "against_structure"
+        ] = True
+
+        filters_result[
+            "allowed"
+        ] = False
+
+        filters_result[
+            "reasons"
+        ].append(
+            "SELL is against the dominant candle structure"
+        )
+
+    # --------------------------------------------------------
+    # FILTER 5
+    # TECHNICAL CONFIRMATION CONFLICT
+    #
+    # Only used when there is enough technical data.
+    # It rejects a candidate when the technical side
+    # strongly points the other way.
+    # --------------------------------------------------------
+
+    technical_bias = technical.get(
+        "bias",
+        "NEUTRAL"
+    )
+
+    if (
+        decision == "BUY SIGNAL"
+        and
+        technical_bias == "SELL"
+    ):
+
+        filters_result[
+            "technical_conflict"
+        ] = True
+
+        filters_result[
+            "allowed"
+        ] = False
+
+        filters_result[
+            "reasons"
+        ].append(
+            "Technical confirmation is against BUY"
+        )
+
+    elif (
+        decision == "SELL SIGNAL"
+        and
+        technical_bias == "BUY"
+    ):
+
+        filters_result[
+            "technical_conflict"
+        ] = True
+
+        filters_result[
+            "allowed"
+        ] = False
+
+        filters_result[
+            "reasons"
+        ].append(
+            "Technical confirmation is against SELL"
+        )
+
+    # --------------------------------------------------------
+    # FILTER 6
+    # VERY LOW ACTIVITY
+    #
+    # This is a volume/activity proxy only.
+    # It does not pretend to be true broker volume.
+    # --------------------------------------------------------
+
+    activity_ratio = technical.get(
+        "activity_ratio",
+        0.0
+    )
+
+    if (
+        activity_ratio > 0
+        and
+        activity_ratio <
+        MIN_ACTIVITY_RATIO
+    ):
+
+        filters_result[
+            "activity_too_weak"
+        ] = True
+
+        filters_result[
+            "allowed"
+        ] = False
+
+        filters_result[
+            "reasons"
+        ].append(
+            "Recent candle activity is too weak"
+        )
+
+    return (
+        filters_result,
+        evidence
+    )
 
 # ============================================================
 # NEW LAYER SCORING
 # ============================================================
-
 
 def apply_new_price_action_layers(
     candles,
@@ -3086,10 +4079,6 @@ def apply_new_price_action_layers(
 
     if choppy:
 
-        # The filter does not create a direction.
-        # It penalizes both sides so the engine
-        # is less likely to force a signal.
-
         buy_score = max(
             0,
             buy_score - 3
@@ -3116,11 +4105,9 @@ def apply_new_price_action_layers(
         layer_results
     )
 
-
 # ============================================================
 # MAIN STRATEGY
 # ============================================================
-
 
 def analyze_strategy(candles):
 
@@ -3132,7 +4119,9 @@ def analyze_strategy(candles):
             "buy_score": 0,
             "sell_score": 0,
             "agreement": 0,
-            "reasons": []
+            "reasons": [],
+            "technical": {},
+            "filters": {}
         }
 
     resistance = find_resistance_zone(
@@ -3412,7 +4401,7 @@ def analyze_strategy(candles):
         )
 
     # ========================================================
-    # ADD ALL 15 NEW PRICE-ACTION LAYERS
+    # ADD ALL EXISTING 15 PRICE-ACTION LAYERS
     # ========================================================
 
     (
@@ -3432,6 +4421,16 @@ def analyze_strategy(candles):
     )
 
     # ========================================================
+    # TECHNICAL CONFIRMATION
+    #
+    # Calculated from the same detected candles.
+    # ========================================================
+
+    technical = calculate_technical_confirmation(
+        candles
+    )
+
+    # ========================================================
     # CHOPPY MARKET HARD PROTECTION
     # ========================================================
 
@@ -3441,10 +4440,6 @@ def analyze_strategy(candles):
     )
 
     if choppy:
-
-        # If the chart is clearly alternating
-        # without meaningful structural progress,
-        # do not allow the engine to force a signal.
 
         if (
             abs(
@@ -3498,7 +4493,10 @@ def analyze_strategy(candles):
     )
 
     # ========================================================
-    # FINAL DECISION
+    # INITIAL DECISION
+    #
+    # This is still based on the original strategy
+    # plus the 15 existing layers.
     # ========================================================
 
     decision = "NO SIGNAL"
@@ -3530,6 +4528,42 @@ def analyze_strategy(candles):
         ):
 
             decision = "SELL SIGNAL"
+
+    # ========================================================
+    # SMALL FILTERS
+    #
+    # This is the new safety stage.
+    # It rejects weak setups instead of creating
+    # another giant strategy engine.
+    # ========================================================
+
+    filters_result, candle_evidence = (
+        apply_small_setup_filters(
+            candles,
+            decision,
+            buy_score,
+            sell_score,
+            choppy,
+            technical
+        )
+    )
+
+    # ========================================================
+    # APPLY FILTER DECISION
+    # ========================================================
+
+    if (
+        decision in (
+            "BUY SIGNAL",
+            "SELL SIGNAL"
+        )
+        and
+        not filters_result["allowed"]
+    ):
+
+        decision = "NO SIGNAL"
+
+        confidence = 0
 
     # ========================================================
     # REASONS
@@ -3568,12 +4602,28 @@ def analyze_strategy(candles):
         reasons = []
 
     # ========================================================
-    # SAFETY
+    # SAFETY REASONS
     # ========================================================
 
     if decision == "NO SIGNAL":
 
-        if choppy:
+        if filters_result["reasons"]:
+
+            reasons = []
+
+            for reason in filters_result[
+                "reasons"
+            ]:
+
+                if reason not in reasons:
+
+                    reasons.append(
+                        reason
+                    )
+
+            reasons = reasons[:3]
+
+        elif choppy:
 
             reasons = [
                 "Market structure is choppy",
@@ -3605,6 +4655,21 @@ def analyze_strategy(candles):
                 "Do not trade"
             ]
 
+    # ========================================================
+    # FINAL CONFIDENCE
+    # ========================================================
+
+    if decision in (
+        "BUY SIGNAL",
+        "SELL SIGNAL"
+    ):
+
+        confidence = agreement
+
+    else:
+
+        confidence = 0
+
     return {
         "decision": decision,
         "confidence": confidence,
@@ -3619,14 +4684,15 @@ def analyze_strategy(candles):
         "momentum": momentum,
         "resistance_hold": resistance_hold,
         "support_hold": support_hold,
-        "layer_results": layer_results
+        "layer_results": layer_results,
+        "technical": technical,
+        "candle_evidence": candle_evidence,
+        "filters": filters_result
     }
-
 
 # ============================================================
 # DETECTION MAP
 # ============================================================
-
 
 def create_detection_map(
     img,
@@ -3694,11 +4760,9 @@ def create_detection_map(
 
     return output
 
-
 # ============================================================
 # TELEGRAM CHANNEL SENDER
 # ============================================================
-
 
 async def send_telegram(response):
 
@@ -3725,11 +4789,9 @@ async def send_telegram(response):
             repr(e)
         )
 
-
 # ============================================================
 # START COMMAND
 # ============================================================
-
 
 async def start_command(
     update: Update,
@@ -3741,11 +4803,9 @@ async def start_command(
         "Send a Pocket Option OTC screenshot."
     )
 
-
 # ============================================================
 # PHOTO HANDLER
 # ============================================================
-
 
 async def handle_photo(
     update: Update,
@@ -3998,11 +5058,9 @@ async def handle_photo(
 
                     pass
 
-
 # ============================================================
 # ERROR HANDLER
 # ============================================================
-
 
 async def error_handler(
     update: object,
@@ -4014,11 +5072,9 @@ async def error_handler(
         repr(context.error)
     )
 
-
 # ============================================================
 # MAIN
 # ============================================================
-
 
 def main():
 
@@ -4071,7 +5127,7 @@ def main():
     )
 
     print(
-        "15 NEW PRICE-ACTION LAYERS ENABLED"
+        "15 EXISTING PRICE-ACTION LAYERS ENABLED"
     )
 
     print(
@@ -4135,19 +5191,99 @@ def main():
     )
 
     print(
+        "========================================"
+    )
+
+    print(
+        "TECHNICAL CONFIRMATION FILTERS"
+    )
+
+    print(
+        "SMA 20"
+    )
+
+    print(
+        "SMA 50"
+    )
+
+    print(
+        "EMA 200"
+    )
+
+    print(
+        "RSI 14"
+    )
+
+    print(
+        "MACD 12/26/9"
+    )
+
+    print(
+        "Bollinger Bands 20 / 2"
+    )
+
+    print(
+        "Candle Activity / Volume Proxy"
+    )
+
+    print(
+        "========================================"
+    )
+
+    print(
+        "SMALL SETUP PROTECTION FILTERS"
+    )
+
+    print(
+        "BUY/SELL balance protection"
+    )
+
+    print(
+        "Choppy-market rejection"
+    )
+
+    print(
+        "Dominant-structure protection"
+    )
+
+    print(
+        "Weak-candle-evidence rejection"
+    )
+
+    print(
+        "Technical-direction conflict protection"
+    )
+
+    print(
+        "Low-activity protection"
+    )
+
+    print(
+        "========================================"
+    )
+
+    print(
+        "IMPORTANT:"
+    )
+
+    print(
+        "Indicators use screenshot-detected candles."
+    )
+
+    print(
+        "Activity is a candle-derived proxy,"
+    )
+
+    print(
+        "NOT true broker volume."
+    )
+
+    print(
         "Nigeria Time: Africa/Lagos"
     )
 
     print(
         "Next-candle entry timing"
-    )
-
-    print(
-        "No new indicators"
-    )
-
-    print(
-        "No price mapping"
     )
 
     print(
@@ -4213,11 +5349,9 @@ def main():
         drop_pending_updates=True
     )
 
-
 # ============================================================
 # RUN
 # ============================================================
-
 
 if __name__ == "__main__":
 
