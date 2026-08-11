@@ -3193,7 +3193,7 @@ def analyze_independent_engine(candles):
         sell_count
     )
 
-    if agreeing_count < 3:
+    if agreeing_count < 1:
 
         direction = None
         confidence = 0
@@ -3219,7 +3219,7 @@ def analyze_independent_engine(candles):
         "confidence": confidence,
         "buy_count": buy_count,
         "sell_count": sell_count,
-        "required_confirmations": 3,
+        "required_confirmations": 1,
         "reasons": reasons[:5]
     }
 
@@ -3724,7 +3724,7 @@ def final_engine_decision(candles):
         engine_c["sell_count"]
     )
 
-    if independent_count < 3:
+    if independent_count < 1:
 
         return {
             "decision": "NO SIGNAL",
