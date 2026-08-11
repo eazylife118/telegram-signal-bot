@@ -109,25 +109,10 @@ MIN_SIGNAL_AGREEMENT = 65
 
 SMALL_BODY_RATIO = 0.35
 
-# ============================================================
-# NEW PRICE-ACTION LAYER SETTINGS
-# ============================================================
-
-STRUCTURE_LOOKBACK = 12
-TREND_LOOKBACK = 10
-SEQUENCE_LOOKBACK = 8
-CHOP_LOOKBACK = 8
-
-MIN_SWING_DISTANCE = 2
-SWING_EQUAL_TOLERANCE = 0.015
-
-TREND_STRENGTH_THRESHOLD = 0.55
-CHOP_ALTERNATION_THRESHOLD = 0.65
 
 # ============================================================
 # IMAGE LOADING
 # ============================================================
-
 
 def load_image(path):
 
@@ -160,7 +145,6 @@ def load_image(path):
 # COLOR MASKS
 # ============================================================
 
-
 def get_color_masks(img):
 
     hsv = cv2.cvtColor(
@@ -169,7 +153,6 @@ def get_color_masks(img):
     )
 
     # GREEN
-
     green_lower = np.array([
         30,
         35,
@@ -189,7 +172,6 @@ def get_color_masks(img):
     )
 
     # RED RANGE 1
-
     red_lower_1 = np.array([
         0,
         55,
@@ -209,7 +191,6 @@ def get_color_masks(img):
     )
 
     # RED RANGE 2
-
     red_lower_2 = np.array([
         168,
         55,
@@ -239,7 +220,6 @@ def get_color_masks(img):
 # ============================================================
 # FIND CANDIDATES
 # ============================================================
-
 
 def find_candidates(
     mask,
@@ -365,7 +345,6 @@ def find_candidates(
 # MERGE SAME-COLOR PIECES
 # ============================================================
 
-
 def merge_candidates(candidates):
 
     if not candidates:
@@ -461,7 +440,6 @@ def merge_candidates(candidates):
                 )
 
                 merged_into_existing = True
-
                 break
 
         if not merged_into_existing:
@@ -476,7 +454,6 @@ def merge_candidates(candidates):
 # ============================================================
 # REMOVE CROSS-COLOR DUPLICATES
 # ============================================================
-
 
 def remove_cross_color_duplicates(candles):
 
@@ -508,7 +485,6 @@ def remove_cross_color_duplicates(candles):
             if distance <= threshold:
 
                 duplicate_index = index
-
                 break
 
         if duplicate_index is None:
@@ -539,7 +515,6 @@ def remove_cross_color_duplicates(candles):
 # ============================================================
 # RIGHT SIDE DETECTION
 # ============================================================
-
 
 def detect_right_side(
     chart,
@@ -591,7 +566,6 @@ def detect_right_side(
 # ============================================================
 # DETECT CANDLES
 # ============================================================
-
 
 def detect_candles(img):
 
@@ -655,7 +629,6 @@ def detect_candles(img):
 # BODY POSITION
 # ============================================================
 
-
 def body_position(candle):
 
     top = candle["y"]
@@ -672,11 +645,10 @@ def body_position(candle):
 
 
 # ============================================================
-# PRICE-ACTION HELPERS
+# BODY CENTER
 # ============================================================
 
-
-def candle_midpoint(candle):
+def body_center(candle):
 
     top, bottom = body_position(
         candle
@@ -688,7 +660,11 @@ def candle_midpoint(candle):
     ) / 2
 
 
-def candle_range(candle):
+# ============================================================
+# BODY SIZE
+# ============================================================
+
+def body_size(candle):
 
     return max(
         1,
@@ -696,55 +672,9 @@ def candle_range(candle):
     )
 
 
-def directional_value(candle):
-
-    midpoint = candle_midpoint(
-        candle
-    )
-
-    return midpoint
-
-
-def price_higher(
-    candle_a,
-    candle_b
-):
-
-    return candle_midpoint(
-        candle_a
-    ) < candle_midpoint(
-        candle_b
-    )
-
-
-def price_lower(
-    candle_a,
-    candle_b
-):
-
-    return candle_midpoint(
-        candle_a
-    ) > candle_midpoint(
-        candle_b
-    )
-
-
-def body_strength(candle):
-
-    return min(
-        1.0,
-        candle["h"] /
-        max(
-            1.0,
-            candle["w"] * 3.0
-        )
-    )
-
-
 # ============================================================
 # RESISTANCE
 # ============================================================
-
 
 def find_resistance_zone(candles):
 
@@ -817,7 +747,6 @@ def find_resistance_zone(candles):
                 )
 
                 placed = True
-
                 break
 
         if not placed:
@@ -851,7 +780,6 @@ def find_resistance_zone(candles):
 # ============================================================
 # SUPPORT
 # ============================================================
-
 
 def find_support_zone(candles):
 
@@ -924,7 +852,6 @@ def find_support_zone(candles):
                 )
 
                 placed = True
-
                 break
 
         if not placed:
@@ -958,7 +885,6 @@ def find_support_zone(candles):
 # ============================================================
 # RESISTANCE REACTION
 # ============================================================
-
 
 def resistance_behavior(
     candles,
@@ -1010,7 +936,6 @@ def resistance_behavior(
 # SUPPORT REACTION
 # ============================================================
 
-
 def support_behavior(
     candles,
     support
@@ -1061,7 +986,6 @@ def support_behavior(
 # REACTION STRENGTH
 # ============================================================
 
-
 def reaction_strength(
     zone,
     candles,
@@ -1091,16 +1015,13 @@ def reaction_strength(
 # BODY MOMENTUM
 # ============================================================
 
-
 def analyze_body_momentum(candles):
 
     if len(candles) < 3:
         return "UNKNOWN"
 
     newest = candles[0]["h"]
-
     previous = candles[1]["h"]
-
     older = candles[2]["h"]
 
     average_previous = (
@@ -1121,7 +1042,6 @@ def analyze_body_momentum(candles):
 # CONSECUTIVE MOMENTUM
 # ============================================================
 
-
 def consecutive_momentum(candles):
 
     if len(candles) < 3:
@@ -1134,11 +1054,8 @@ def consecutive_momentum(candles):
     for candle in candles:
 
         if candle["color"] == color:
-
             count += 1
-
         else:
-
             break
 
     if count >= 3:
@@ -1155,14 +1072,12 @@ def consecutive_momentum(candles):
 # BODY REVERSAL
 # ============================================================
 
-
 def body_reversal(candles):
 
     if len(candles) < 2:
         return None
 
     current = candles[0]
-
     previous = candles[1]
 
     if current["color"] == previous["color"]:
@@ -1181,7 +1096,6 @@ def body_reversal(candles):
 # ============================================================
 # TWO-CANDLE REVERSAL
 # ============================================================
-
 
 def two_candle_reversal(candles):
 
@@ -1217,7 +1131,6 @@ def two_candle_reversal(candles):
 # ============================================================
 # THREE-CANDLE REVERSAL
 # ============================================================
-
 
 def three_candle_reversal(candles):
 
@@ -1255,7 +1168,6 @@ def three_candle_reversal(candles):
 # PULLBACK
 # ============================================================
 
-
 def detect_pullback(candles):
 
     if len(candles) < 4:
@@ -1285,7 +1197,6 @@ def detect_pullback(candles):
 # ============================================================
 # BREAKOUT FAILURE
 # ============================================================
-
 
 def breakout_failure(
     candles,
@@ -1328,7 +1239,6 @@ def breakout_failure(
             ):
 
                 resistance_failure = True
-
                 break
 
     if support:
@@ -1363,7 +1273,6 @@ def breakout_failure(
             ):
 
                 support_failure = True
-
                 break
 
     return (
@@ -1375,7 +1284,6 @@ def breakout_failure(
 # ============================================================
 # RESISTANCE BREAKOUT HOLD
 # ============================================================
-
 
 def resistance_breakout_hold(
     candles,
@@ -1444,7 +1352,6 @@ def resistance_breakout_hold(
 # SUPPORT BREAKDOWN HOLD
 # ============================================================
 
-
 def support_breakdown_hold(
     candles,
     support
@@ -1512,7 +1419,6 @@ def support_breakdown_hold(
 # COLOR CONFIRMATION
 # ============================================================
 
-
 def color_confirmation(
     candles,
     resistance,
@@ -1556,7 +1462,6 @@ def color_confirmation(
             ):
 
                 green_red = True
-
                 break
 
     if support:
@@ -1593,7 +1498,6 @@ def color_confirmation(
             ):
 
                 red_green = True
-
                 break
 
     return (
@@ -1605,7 +1509,6 @@ def color_confirmation(
 # ============================================================
 # CONTINUATION
 # ============================================================
-
 
 def continuation_structure(
     candles,
@@ -1630,7 +1533,6 @@ def continuation_structure(
         if resistance:
 
             level = resistance["level"]
-
             above = True
 
             for candle in candles[:3]:
@@ -1638,7 +1540,6 @@ def continuation_structure(
                 if body_position(candle)[1] >= level:
 
                     above = False
-
                     break
 
             if above:
@@ -1655,7 +1556,6 @@ def continuation_structure(
         if support:
 
             level = support["level"]
-
             below = True
 
             for candle in candles[:3]:
@@ -1663,7 +1563,6 @@ def continuation_structure(
                 if body_position(candle)[0] <= level:
 
                     below = False
-
                     break
 
             if below:
@@ -1675,237 +1574,258 @@ def continuation_structure(
 
 
 # ============================================================
-# NEW LAYER 1
-# HIGHER HIGH / HIGHER LOW
+# ============================================================
+# ENGINE B — 15 STRUCTURAL LAYERS
+# ============================================================
 # ============================================================
 
+# ------------------------------------------------------------
+# STRUCTURAL SWING HELPERS
+# ------------------------------------------------------------
 
-def higher_high_higher_low(candles):
+def get_body_high(candle):
+    return body_position(candle)[0]
 
-    if len(candles) < 5:
-        return None
 
-    recent = candles[
-        :min(
-            len(candles),
-            STRUCTURE_LOOKBACK
-        )
+def get_body_low(candle):
+    return body_position(candle)[1]
+
+
+def get_recent_highs(candles, count=8):
+    return [
+        get_body_high(c)
+        for c in candles[:count]
     ]
 
-    bullish_moves = 0
 
-    for i in range(
-        len(recent) - 2
-    ):
+def get_recent_lows(candles, count=8):
+    return [
+        get_body_low(c)
+        for c in candles[:count]
+    ]
 
-        newest = recent[i]
-        older = recent[i + 1]
-        older2 = recent[i + 2]
 
-        newest_mid = candle_midpoint(
-            newest
-        )
+# ------------------------------------------------------------
+# 1. HIGHER HIGH / HIGHER LOW
+# ------------------------------------------------------------
 
-        older_mid = candle_midpoint(
-            older
-        )
+def detect_higher_high_higher_low(candles):
 
-        older2_mid = candle_midpoint(
-            older2
-        )
+    if len(candles) < 6:
+        return None
 
-        # Smaller screen Y = higher price.
+    recent = candles[:8]
 
-        if (
-            newest_mid < older_mid
-            and
-            older_mid < older2_mid
-        ):
+    highs = [
+        get_body_high(c)
+        for c in recent
+    ]
 
-            bullish_moves += 1
+    lows = [
+        get_body_low(c)
+        for c in recent
+    ]
 
-    if bullish_moves >= 2:
+    midpoint = len(recent) // 2
+
+    recent_high = min(
+        highs[:midpoint]
+    )
+
+    older_high = min(
+        highs[midpoint:]
+    )
+
+    recent_low = max(
+        lows[:midpoint]
+    )
+
+    older_low = max(
+        lows[midpoint:]
+    )
+
+    bullish_high = (
+        recent_high < older_high
+    )
+
+    bullish_low = (
+        recent_low < older_low
+    )
+
+    if bullish_high and bullish_low:
         return "BUY"
 
     return None
 
 
-# ============================================================
-# NEW LAYER 2
-# LOWER HIGH / LOWER LOW
-# ============================================================
+# ------------------------------------------------------------
+# 2. LOWER HIGH / LOWER LOW
+# ------------------------------------------------------------
 
+def detect_lower_high_lower_low(candles):
 
-def lower_high_lower_low(candles):
-
-    if len(candles) < 5:
+    if len(candles) < 6:
         return None
 
-    recent = candles[
-        :min(
-            len(candles),
-            STRUCTURE_LOOKBACK
-        )
+    recent = candles[:8]
+
+    highs = [
+        get_body_high(c)
+        for c in recent
     ]
 
-    bearish_moves = 0
+    lows = [
+        get_body_low(c)
+        for c in recent
+    ]
 
-    for i in range(
-        len(recent) - 2
-    ):
+    midpoint = len(recent) // 2
 
-        newest = recent[i]
-        older = recent[i + 1]
-        older2 = recent[i + 2]
+    recent_high = min(
+        highs[:midpoint]
+    )
 
-        newest_mid = candle_midpoint(
-            newest
-        )
+    older_high = min(
+        highs[midpoint:]
+    )
 
-        older_mid = candle_midpoint(
-            older
-        )
+    recent_low = max(
+        lows[:midpoint]
+    )
 
-        older2_mid = candle_midpoint(
-            older2
-        )
+    older_low = max(
+        lows[midpoint:]
+    )
 
-        if (
-            newest_mid > older_mid
-            and
-            older_mid > older2_mid
-        ):
+    bearish_high = (
+        recent_high > older_high
+    )
 
-            bearish_moves += 1
+    bearish_low = (
+        recent_low > older_low
+    )
 
-    if bearish_moves >= 2:
+    if bearish_high and bearish_low:
         return "SELL"
 
     return None
 
 
-# ============================================================
-# NEW LAYER 3
-# OVERALL TREND DIRECTION
-# ============================================================
+# ------------------------------------------------------------
+# 3. OVERALL TREND DIRECTION
+# ------------------------------------------------------------
 
-
-def overall_trend_direction(candles):
+def detect_overall_trend(candles):
 
     if len(candles) < 6:
         return "SIDEWAYS"
 
-    sample = candles[
-        :min(
-            len(candles),
-            TREND_LOOKBACK
-        )
+    recent = candles[:10]
+
+    centers = [
+        body_center(c)
+        for c in recent
     ]
 
-    bullish = 0
-    bearish = 0
+    green_count = sum(
+        1
+        for c in recent
+        if c["color"] == "GREEN"
+    )
 
-    for i in range(
-        len(sample) - 1
+    red_count = sum(
+        1
+        for c in recent
+        if c["color"] == "RED"
+    )
+
+    first_half = np.mean(
+        centers[:5]
+    )
+
+    second_half = np.mean(
+        centers[5:]
+    )
+
+    movement = (
+        second_half -
+        first_half
+    )
+
+    threshold = max(
+        2,
+        np.mean(
+            [
+                body_size(c)
+                for c in recent
+            ]
+        ) * 0.20
+    )
+
+    if (
+        movement < -threshold
+        and
+        green_count >= 6
     ):
-
-        current = candle_midpoint(
-            sample[i]
-        )
-
-        previous = candle_midpoint(
-            sample[i + 1]
-        )
-
-        if current < previous:
-            bullish += 1
-
-        elif current > previous:
-            bearish += 1
-
-    total = bullish + bearish
-
-    if total == 0:
-        return "SIDEWAYS"
-
-    bullish_ratio = (
-        bullish /
-        total
-    )
-
-    bearish_ratio = (
-        bearish /
-        total
-    )
-
-    if bullish_ratio >= 0.60:
         return "BULLISH"
 
-    if bearish_ratio >= 0.60:
+    if (
+        movement > threshold
+        and
+        red_count >= 6
+    ):
+        return "BEARISH"
+
+    if green_count >= red_count + 3:
+        return "BULLISH"
+
+    if red_count >= green_count + 3:
         return "BEARISH"
 
     return "SIDEWAYS"
 
 
-# ============================================================
-# NEW LAYER 4
-# TREND STRENGTH
-# ============================================================
+# ------------------------------------------------------------
+# 4. TREND STRENGTH
+# ------------------------------------------------------------
 
-
-def trend_strength(candles):
+def detect_trend_strength(candles):
 
     if len(candles) < 6:
-        return 0.0
+        return 0
 
-    sample = candles[
-        :min(
-            len(candles),
-            TREND_LOOKBACK
-        )
-    ]
+    recent = candles[:10]
 
-    directional = 0
-    total = 0
+    green = sum(
+        c["color"] == "GREEN"
+        for c in recent
+    )
 
-    for i in range(
-        len(sample) - 1
-    ):
+    red = sum(
+        c["color"] == "RED"
+        for c in recent
+    )
 
-        current = candle_midpoint(
-            sample[i]
-        )
+    directional = max(
+        green,
+        red
+    )
 
-        previous = candle_midpoint(
-            sample[i + 1]
-        )
-
-        total += 1
-
-        if current != previous:
-            directional += 1
-
-    if total == 0:
-        return 0.0
-
-    consistency = (
+    strength = (
         directional /
-        total
+        len(recent)
+    ) * 100
+
+    return int(
+        round(strength)
     )
 
-    return round(
-        consistency * 100,
-        1
-    )
 
+# ------------------------------------------------------------
+# 5. PULLBACK QUALITY
+# ------------------------------------------------------------
 
-# ============================================================
-# NEW LAYER 5
-# PULLBACK QUALITY
-# ============================================================
-
-
-def pullback_quality(candles):
+def detect_pullback_quality(candles):
 
     if len(candles) < 5:
         return None
@@ -1915,59 +1835,47 @@ def pullback_quality(candles):
         for c in candles[:5]
     ]
 
-    first_three = colors[2:5]
-
-    recent = colors[:2]
-
-    bullish_base = (
-        first_three.count("GREEN") >= 2
-    )
-
-    bearish_base = (
-        first_three.count("RED") >= 2
-    )
+    bodies = [
+        body_size(c)
+        for c in candles[:5]
+    ]
 
     if (
-        bullish_base
+        colors[1] == "GREEN"
         and
-        recent.count("RED") >= 1
+        colors[2] == "GREEN"
+        and
+        colors[3] == "GREEN"
+        and
+        colors[0] == "RED"
     ):
 
-        # Small counter-move followed by
-        # bullish pressure.
-
-        if (
-            candles[0]["h"]
-            <=
-            candles[2]["h"] * 1.35
-        ):
+        if bodies[0] <= np.mean(bodies[1:]):
 
             return "BUY"
 
     if (
-        bearish_base
+        colors[1] == "RED"
         and
-        recent.count("GREEN") >= 1
+        colors[2] == "RED"
+        and
+        colors[3] == "RED"
+        and
+        colors[0] == "GREEN"
     ):
 
-        if (
-            candles[0]["h"]
-            <=
-            candles[2]["h"] * 1.35
-        ):
+        if bodies[0] <= np.mean(bodies[1:]):
 
             return "SELL"
 
     return None
 
 
-# ============================================================
-# NEW LAYER 6
-# BREAKOUT + RETEST
-# ============================================================
+# ------------------------------------------------------------
+# 6. BREAKOUT + RETEST
+# ------------------------------------------------------------
 
-
-def breakout_retest(
+def detect_breakout_retest(
     candles,
     resistance,
     support
@@ -1976,120 +1884,64 @@ def breakout_retest(
     if len(candles) < 4:
         return None
 
-    # Bullish breakout and retest.
-
     if resistance:
 
         level = resistance["level"]
 
-        broke = False
+        older = candles[2]
+        retest = candles[1]
+        newest = candles[0]
 
-        for candle in candles[2:5]:
-
-            top, bottom = body_position(
-                candle
+        if (
+            get_body_high(older) < level
+            and
+            get_body_low(retest) <= level
+            and
+            get_body_low(retest) >= level - max(
+                4,
+                body_size(retest)
             )
+            and
+            newest["color"] == "GREEN"
+            and
+            get_body_low(newest) < level
+        ):
 
-            if (
-                candle["color"] == "GREEN"
-                and
-                bottom < level
-            ):
-
-                broke = True
-
-                break
-
-        if broke:
-
-            for candle in candles[:2]:
-
-                top, bottom = body_position(
-                    candle
-                )
-
-                near_level = (
-                    abs(
-                        bottom -
-                        level
-                    )
-                    <=
-                    max(
-                        5,
-                        candle["h"] * 1.5
-                    )
-                )
-
-                if (
-                    near_level
-                    and
-                    candle["color"] == "GREEN"
-                ):
-
-                    return "BUY"
-
-    # Bearish breakout and retest.
+            return "BUY"
 
     if support:
 
         level = support["level"]
 
-        broke = False
+        older = candles[2]
+        retest = candles[1]
+        newest = candles[0]
 
-        for candle in candles[2:5]:
-
-            top, bottom = body_position(
-                candle
+        if (
+            get_body_low(older) > level
+            and
+            get_body_high(retest) >= level
+            and
+            get_body_high(retest) <= level + max(
+                4,
+                body_size(retest)
             )
+            and
+            newest["color"] == "RED"
+            and
+            get_body_high(newest) > level
+        ):
 
-            if (
-                candle["color"] == "RED"
-                and
-                top > level
-            ):
-
-                broke = True
-
-                break
-
-        if broke:
-
-            for candle in candles[:2]:
-
-                top, bottom = body_position(
-                    candle
-                )
-
-                near_level = (
-                    abs(
-                        top -
-                        level
-                    )
-                    <=
-                    max(
-                        5,
-                        candle["h"] * 1.5
-                    )
-                )
-
-                if (
-                    near_level
-                    and
-                    candle["color"] == "RED"
-                ):
-
-                    return "SELL"
+            return "SELL"
 
     return None
 
 
-# ============================================================
-# NEW LAYER 7
-# SWING REJECTION
-# ============================================================
+# ------------------------------------------------------------
+# 7. SWING REJECTION
+# ------------------------------------------------------------
 
-
-def swing_rejection(
+def detect_swing_rejection(
     candles,
     resistance,
     support
@@ -2104,19 +1956,14 @@ def swing_rejection(
 
         level = resistance["level"]
 
-        top, bottom = body_position(
-            newest
-        )
-
         if (
             abs(
-                top -
+                get_body_high(newest) -
                 level
             )
-            <=
-            max(
-                6,
-                newest["h"] * 1.5
+            <= max(
+                4,
+                body_size(newest)
             )
             and
             newest["color"] == "RED"
@@ -2128,19 +1975,14 @@ def swing_rejection(
 
         level = support["level"]
 
-        top, bottom = body_position(
-            newest
-        )
-
         if (
             abs(
-                bottom -
+                get_body_low(newest) -
                 level
             )
-            <=
-            max(
-                6,
-                newest["h"] * 1.5
+            <= max(
+                4,
+                body_size(newest)
             )
             and
             newest["color"] == "GREEN"
@@ -2151,13 +1993,11 @@ def swing_rejection(
     return None
 
 
-# ============================================================
-# NEW LAYER 8
-# TREND EXHAUSTION
-# ============================================================
+# ------------------------------------------------------------
+# 8. TREND EXHAUSTION
+# ------------------------------------------------------------
 
-
-def trend_exhaustion(candles):
+def detect_trend_exhaustion(candles):
 
     if len(candles) < 5:
         return None
@@ -2167,91 +2007,43 @@ def trend_exhaustion(candles):
         for c in candles[:5]
     ]
 
-    if colors.count("GREEN") >= 4:
-
-        newest = candles[0]
-        previous = candles[1]
-
-        if (
-            newest["h"]
-            <
-            previous["h"]
-        ):
-
-            return "SELL"
-
-    if colors.count("RED") >= 4:
-
-        newest = candles[0]
-        previous = candles[1]
-
-        if (
-            newest["h"]
-            <
-            previous["h"]
-        ):
-
-            return "BUY"
-
-    return None
-
-
-# ============================================================
-# NEW LAYER 9
-# CANDLE SEQUENCE QUALITY
-# ============================================================
-
-
-def candle_sequence_quality(candles):
-
-    if len(candles) < 5:
-        return None
-
-    sample = candles[
-        :min(
-            len(candles),
-            SEQUENCE_LOOKBACK
-        )
+    bodies = [
+        body_size(c)
+        for c in candles[:5]
     ]
 
-    green_count = sum(
-        1
-        for c in sample
-        if c["color"] == "GREEN"
-    )
-
-    red_count = sum(
-        1
-        for c in sample
-        if c["color"] == "RED"
-    )
-
-    if green_count >= 6:
-
-        recent_heights = [
-            c["h"]
-            for c in sample[:4]
-        ]
+    if (
+        colors[0] == "RED"
+        and
+        colors[1] == "RED"
+        and
+        colors[2] == "RED"
+        and
+        colors[3] == "RED"
+    ):
 
         if (
-            recent_heights[0]
-            >=
-            recent_heights[-1] * 0.80
+            bodies[0] <
+            bodies[1] <
+            bodies[2]
         ):
 
             return "BUY"
 
-    if red_count >= 6:
-
-        recent_heights = [
-            c["h"]
-            for c in sample[:4]
-        ]
+    if (
+        colors[0] == "GREEN"
+        and
+        colors[1] == "GREEN"
+        and
+        colors[2] == "GREEN"
+        and
+        colors[3] == "GREEN"
+    ):
 
         if (
-            recent_heights[0]
-            >=
-            recent_heights[-1] * 0.80
+            bodies[0] <
+            bodies[1] <
+            bodies[2]
         ):
 
             return "SELL"
@@ -2259,108 +2051,137 @@ def candle_sequence_quality(candles):
     return None
 
 
-# ============================================================
-# NEW LAYER 10
-# IMPULSE VS CORRECTION
-# ============================================================
+# ------------------------------------------------------------
+# 9. CANDLE SEQUENCE QUALITY
+# ------------------------------------------------------------
 
-
-def impulse_vs_correction(candles):
+def detect_sequence_quality(candles):
 
     if len(candles) < 5:
         return None
 
-    main = candles[2]
+    recent = candles[:5]
 
-    recent = candles[:2]
-
-    recent_counter = 0
-
-    for candle in recent:
-
-        if (
-            candle["color"]
-            !=
-            main["color"]
-        ):
-
-            recent_counter += 1
-
-    if recent_counter == 0:
-        return None
-
-    counter_size = sum(
-        c["h"]
+    green = sum(
+        c["color"] == "GREEN"
         for c in recent
-        if c["color"] != main["color"]
     )
 
-    impulse_size = sum(
-        c["h"]
-        for c in candles[2:5]
-        if c["color"] == main["color"]
+    red = sum(
+        c["color"] == "RED"
+        for c in recent
     )
 
-    if impulse_size <= 0:
+    bodies = [
+        body_size(c)
+        for c in recent
+    ]
+
+    if green >= 4:
+
+        if bodies[0] >= np.mean(bodies[1:]):
+            return "BUY"
+
+    if red >= 4:
+
+        if bodies[0] >= np.mean(bodies[1:]):
+            return "SELL"
+
+    return None
+
+
+# ------------------------------------------------------------
+# 10. IMPULSE VS CORRECTION
+# ------------------------------------------------------------
+
+def detect_impulse_vs_correction(candles):
+
+    if len(candles) < 5:
         return None
 
-    ratio = (
-        counter_size /
-        impulse_size
+    recent = candles[:5]
+
+    first_three = recent[2:5]
+
+    impulse_color = first_three[0]["color"]
+
+    if not all(
+        c["color"] == impulse_color
+        for c in first_three
+    ):
+        return None
+
+    impulse_average = np.mean(
+        [
+            body_size(c)
+            for c in first_three
+        ]
     )
 
-    if (
-        ratio <= 0.65
-        and
-        main["color"] == "GREEN"
-    ):
+    latest = recent[0]
 
-        return "BUY"
+    previous = recent[1]
 
     if (
-        ratio <= 0.65
+        latest["color"] != impulse_color
         and
-        main["color"] == "RED"
+        body_size(latest) <
+        impulse_average
+        and
+        body_size(previous) <
+        impulse_average
     ):
+
+        if impulse_color == "GREEN":
+            return "BUY"
+
+        return "SELL"
+
+    if (
+        latest["color"] == impulse_color
+        and
+        body_size(latest) >=
+        impulse_average
+    ):
+
+        if impulse_color == "GREEN":
+            return "BUY"
 
         return "SELL"
 
     return None
 
 
-# ============================================================
-# NEW LAYER 11
-# STRUCTURE-BREAK CONFIRMATION
-# ============================================================
+# ------------------------------------------------------------
+# 11. STRUCTURE BREAK
+# ------------------------------------------------------------
 
+def detect_structure_break(candles):
 
-def structure_break_confirmation(candles):
-
-    if len(candles) < 5:
+    if len(candles) < 6:
         return None
 
-    recent = candles[:4]
-
-    newest = recent[0]
+    newest = candles[0]
 
     previous_high = min(
-        candle_midpoint(c)
-        for c in recent[1:]
+        [
+            get_body_high(c)
+            for c in candles[1:6]
+        ]
     )
 
     previous_low = max(
-        candle_midpoint(c)
-        for c in recent[1:]
-    )
-
-    current_price = candle_midpoint(
-        newest
+        [
+            get_body_low(c)
+            for c in candles[1:6]
+        ]
     )
 
     if (
         newest["color"] == "GREEN"
         and
-        current_price < previous_high
+        get_body_low(newest) <
+        previous_high
     ):
 
         return "BUY"
@@ -2368,7 +2189,8 @@ def structure_break_confirmation(candles):
     if (
         newest["color"] == "RED"
         and
-        current_price > previous_low
+        get_body_high(newest) >
+        previous_low
     ):
 
         return "SELL"
@@ -2376,13 +2198,11 @@ def structure_break_confirmation(candles):
     return None
 
 
-# ============================================================
-# NEW LAYER 12
-# FAKE BREAKOUT DETECTION
-# ============================================================
+# ------------------------------------------------------------
+# 12. FAKE BREAKOUT
+# ------------------------------------------------------------
 
-
-def fake_breakout_detection(
+def detect_fake_breakout(
     candles,
     resistance,
     support
@@ -2391,33 +2211,17 @@ def fake_breakout_detection(
     if len(candles) < 3:
         return None
 
-    newest = candles[0]
-    previous = candles[1]
-
     if resistance:
 
         level = resistance["level"]
 
-        previous_top, previous_bottom = (
-            body_position(previous)
-        )
-
-        newest_top, newest_bottom = (
-            body_position(newest)
-        )
-
-        previous_above = (
-            previous_bottom < level
-        )
-
-        newest_back_inside = (
-            newest_top >= level
-        )
+        newest = candles[0]
+        previous = candles[1]
 
         if (
-            previous_above
+            get_body_high(previous) < level
             and
-            newest_back_inside
+            get_body_high(newest) >= level
             and
             newest["color"] == "RED"
         ):
@@ -2428,26 +2232,13 @@ def fake_breakout_detection(
 
         level = support["level"]
 
-        previous_top, previous_bottom = (
-            body_position(previous)
-        )
-
-        newest_top, newest_bottom = (
-            body_position(newest)
-        )
-
-        previous_below = (
-            previous_top > level
-        )
-
-        newest_back_inside = (
-            newest_bottom <= level
-        )
+        newest = candles[0]
+        previous = candles[1]
 
         if (
-            previous_below
+            get_body_low(previous) > level
             and
-            newest_back_inside
+            get_body_low(newest) <= level
             and
             newest["color"] == "GREEN"
         ):
@@ -2457,64 +2248,50 @@ def fake_breakout_detection(
     return None
 
 
-# ============================================================
-# NEW LAYER 13
-# TREND TRANSITION DETECTION
-# ============================================================
+# ------------------------------------------------------------
+# 13. TREND TRANSITION
+# ------------------------------------------------------------
 
-
-def trend_transition_detection(candles):
+def detect_trend_transition(candles):
 
     if len(candles) < 7:
         return None
 
-    older = candles[4:7]
-    newer = candles[:3]
+    old = candles[5:7]
+    recent = candles[:3]
 
-    older_green = sum(
-        1
-        for c in older
-        if c["color"] == "GREEN"
+    old_green = sum(
+        c["color"] == "GREEN"
+        for c in old
     )
 
-    older_red = sum(
-        1
-        for c in older
-        if c["color"] == "RED"
+    old_red = sum(
+        c["color"] == "RED"
+        for c in old
     )
 
-    newer_green = sum(
-        1
-        for c in newer
-        if c["color"] == "GREEN"
+    recent_green = sum(
+        c["color"] == "GREEN"
+        for c in recent
     )
 
-    newer_red = sum(
-        1
-        for c in newer
-        if c["color"] == "RED"
+    recent_red = sum(
+        c["color"] == "RED"
+        for c in recent
     )
 
     if (
-        older_red >= 2
+        old_red == 2
         and
-        newer_green >= 2
-        and
-        candle_midpoint(candles[0])
-        <
-        candle_midpoint(candles[3])
+        recent_green >= 2
     ):
 
         return "BUY"
 
     if (
-        older_green >= 2
+        old_green == 2
         and
-        newer_red >= 2
-        and
-        candle_midpoint(candles[0])
-        >
-        candle_midpoint(candles[3])
+        recent_red >= 2
     ):
 
         return "SELL"
@@ -2522,51 +2299,386 @@ def trend_transition_detection(candles):
     return None
 
 
-# ============================================================
-# NEW LAYER 14
-# MULTI-CANDLE DIRECTIONAL AGREEMENT
-# ============================================================
+# ------------------------------------------------------------
+# 14. MULTI-CANDLE DIRECTIONAL AGREEMENT
+# ------------------------------------------------------------
 
-
-def multi_candle_directional_agreement(candles):
+def detect_multi_candle_direction(candles):
 
     if len(candles) < 6:
         return None
 
-    sample = candles[:6]
+    recent = candles[:6]
 
     green = sum(
-        1
-        for c in sample
-        if c["color"] == "GREEN"
+        c["color"] == "GREEN"
+        for c in recent
     )
 
     red = sum(
-        1
-        for c in sample
-        if c["color"] == "RED"
+        c["color"] == "RED"
+        for c in recent
     )
 
-    first_price = candle_midpoint(
-        sample[-1]
+    if green >= 5:
+        return "BUY"
+
+    if red >= 5:
+        return "SELL"
+
+    return None
+
+
+# ------------------------------------------------------------
+# 15. SIDEWAYS / CHOPPY FILTER
+# ------------------------------------------------------------
+
+def detect_choppy_market(candles):
+
+    if len(candles) < 8:
+        return False
+
+    recent = candles[:8]
+
+    alternating = 0
+
+    for i in range(
+        len(recent) - 1
+    ):
+
+        if (
+            recent[i]["color"]
+            !=
+            recent[i + 1]["color"]
+        ):
+
+            alternating += 1
+
+    green = sum(
+        c["color"] == "GREEN"
+        for c in recent
     )
 
-    latest_price = candle_midpoint(
-        sample[0]
+    red = sum(
+        c["color"] == "RED"
+        for c in recent
     )
+
+    directional_difference = abs(
+        green - red
+    )
+
+    return (
+        alternating >= 5
+        and
+        directional_difference <= 2
+    )
+
+
+# ============================================================
+# ENGINE B ANALYZER
+# ============================================================
+
+def analyze_structural_engine(candles):
+
+    if len(candles) < 6:
+
+        return {
+            "direction": None,
+            "confidence": 0,
+            "buy_count": 0,
+            "sell_count": 0,
+            "choppy": False,
+            "reasons": []
+        }
+
+    resistance = find_resistance_zone(
+        candles
+    )
+
+    support = find_support_zone(
+        candles
+    )
+
+    results = []
+
+    # 1
+    result = detect_higher_high_higher_low(
+        candles
+    )
+
+    if result:
+        results.append(
+            ("Higher High / Higher Low", result)
+        )
+
+    # 2
+    result = detect_lower_high_lower_low(
+        candles
+    )
+
+    if result:
+        results.append(
+            ("Lower High / Lower Low", result)
+        )
+
+    # 3
+    trend = detect_overall_trend(
+        candles
+    )
+
+    if trend == "BULLISH":
+        results.append(
+            ("Overall Structure Trend", "BUY")
+        )
+
+    elif trend == "BEARISH":
+        results.append(
+            ("Overall Structure Trend", "SELL")
+        )
+
+    # 4
+    trend_strength = detect_trend_strength(
+        candles
+    )
+
+    # 5
+    result = detect_pullback_quality(
+        candles
+    )
+
+    if result:
+        results.append(
+            ("Pullback Quality", result)
+        )
+
+    # 6
+    result = detect_breakout_retest(
+        candles,
+        resistance,
+        support
+    )
+
+    if result:
+        results.append(
+            ("Breakout + Retest", result)
+        )
+
+    # 7
+    result = detect_swing_rejection(
+        candles,
+        resistance,
+        support
+    )
+
+    if result:
+        results.append(
+            ("Swing Rejection", result)
+        )
+
+    # 8
+    result = detect_trend_exhaustion(
+        candles
+    )
+
+    if result:
+        results.append(
+            ("Trend Exhaustion", result)
+        )
+
+    # 9
+    result = detect_sequence_quality(
+        candles
+    )
+
+    if result:
+        results.append(
+            ("Candle Sequence Quality", result)
+        )
+
+    # 10
+    result = detect_impulse_vs_correction(
+        candles
+    )
+
+    if result:
+        results.append(
+            ("Impulse vs Correction", result)
+        )
+
+    # 11
+    result = detect_structure_break(
+        candles
+    )
+
+    if result:
+        results.append(
+            ("Structure Break", result)
+        )
+
+    # 12
+    result = detect_fake_breakout(
+        candles,
+        resistance,
+        support
+    )
+
+    if result:
+        results.append(
+            ("Fake Breakout", result)
+        )
+
+    # 13
+    result = detect_trend_transition(
+        candles
+    )
+
+    if result:
+        results.append(
+            ("Trend Transition", result)
+        )
+
+    # 14
+    result = detect_multi_candle_direction(
+        candles
+    )
+
+    if result:
+        results.append(
+            ("Multi-Candle Direction", result)
+        )
+
+    # 15 is a FILTER, not a vote
+    choppy = detect_choppy_market(
+        candles
+    )
+
+    buy_count = sum(
+        direction == "BUY"
+        for _, direction in results
+    )
+
+    sell_count = sum(
+        direction == "SELL"
+        for _, direction in results
+    )
+
+    total_directional = (
+        buy_count +
+        sell_count
+    )
+
+    if total_directional == 0:
+
+        return {
+            "direction": None,
+            "confidence": 0,
+            "buy_count": 0,
+            "sell_count": 0,
+            "choppy": choppy,
+            "trend_strength": trend_strength,
+            "reasons": []
+        }
+
+    if buy_count > sell_count:
+
+        direction = "BUY"
+
+        confidence = round(
+            (
+                buy_count /
+                total_directional
+            ) * 100
+        )
+
+    elif sell_count > buy_count:
+
+        direction = "SELL"
+
+        confidence = round(
+            (
+                sell_count /
+                total_directional
+            ) * 100
+        )
+
+    else:
+
+        direction = None
+        confidence = 0
+
+    if choppy:
+
+        direction = None
+        confidence = 0
+
+    selected_reasons = []
+
+    for name, result_direction in results:
+
+        if result_direction == direction:
+
+            selected_reasons.append(
+                name
+            )
+
+    return {
+        "direction": direction,
+        "confidence": confidence,
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "choppy": choppy,
+        "trend_strength": trend_strength,
+        "reasons": selected_reasons[:5]
+    }
+
+
+# ============================================================
+# ============================================================
+# ENGINE C — INDEPENDENT CANDLE-ONLY CONFIRMATIONS
+# ============================================================
+# ============================================================
+
+# These are deliberately separated into different categories.
+# They do NOT use indicators.
+# They use only candles detected from the screenshot.
+
+
+# ------------------------------------------------------------
+# C1. CANDLE REVERSAL
+# ------------------------------------------------------------
+
+def independent_candle_reversal(candles):
+
+    if len(candles) < 3:
+        return None
+
+    newest = candles[0]
+    previous = candles[1]
+    older = candles[2]
 
     if (
-        green >= 4
+        previous["color"] == "RED"
         and
-        latest_price < first_price
+        older["color"] == "RED"
+        and
+        newest["color"] == "GREEN"
+        and
+        body_size(newest) >=
+        body_size(previous) * 0.90
     ):
 
         return "BUY"
 
     if (
-        red >= 4
+        previous["color"] == "GREEN"
         and
-        latest_price > first_price
+        older["color"] == "GREEN"
+        and
+        newest["color"] == "RED"
+        and
+        body_size(newest) >=
+        body_size(previous) * 0.90
     ):
 
         return "SELL"
@@ -2574,560 +2686,557 @@ def multi_candle_directional_agreement(candles):
     return None
 
 
-# ============================================================
-# NEW LAYER 15
-# SIDEWAYS / CHOPPY MARKET FILTER
-# ============================================================
+# ------------------------------------------------------------
+# C2. THREE-CANDLE MOMENTUM
+# ------------------------------------------------------------
 
+def independent_three_candle_momentum(candles):
 
-def sideways_choppy_filter(candles):
+    if len(candles) < 4:
+        return None
 
-    if len(candles) < CHOP_LOOKBACK:
-        return False
+    recent = candles[:3]
 
-    sample = candles[
-        :CHOP_LOOKBACK
-    ]
+    if all(
+        c["color"] == "GREEN"
+        for c in recent
+    ):
 
-    changes = 0
-
-    previous_color = None
-
-    for candle in reversed(sample):
-
-        color = candle["color"]
+        bodies = [
+            body_size(c)
+            for c in recent
+        ]
 
         if (
-            previous_color is not None
-            and
-            color != previous_color
+            bodies[0] >=
+            np.mean(bodies[1:]) * 0.90
         ):
 
-            changes += 1
+            return "BUY"
 
-        previous_color = color
-
-    possible_changes = (
-        len(sample) - 1
-    )
-
-    if possible_changes <= 0:
-        return False
-
-    alternation_ratio = (
-        changes /
-        possible_changes
-    )
-
-    # Frequent alternation without
-    # structural progress = choppy.
-
-    if (
-        alternation_ratio
-        >=
-        CHOP_ALTERNATION_THRESHOLD
+    if all(
+        c["color"] == "RED"
+        for c in recent
     ):
 
-        first_price = candle_midpoint(
-            sample[-1]
+        bodies = [
+            body_size(c)
+            for c in recent
+        ]
+
+        if (
+            bodies[0] >=
+            np.mean(bodies[1:]) * 0.90
+        ):
+
+            return "SELL"
+
+    return None
+
+
+# ------------------------------------------------------------
+# C3. DOUBLE TOUCH
+# ------------------------------------------------------------
+
+def independent_double_touch(candles):
+
+    if len(candles) < 6:
+        return None
+
+    newest = candles[0]
+
+    recent_low = get_body_low(
+        candles[0]
+    )
+
+    older_low = get_body_low(
+        candles[2]
+    )
+
+    recent_high = get_body_high(
+        candles[0]
+    )
+
+    older_high = get_body_high(
+        candles[2]
+    )
+
+    average_body = np.mean(
+        [
+            body_size(c)
+            for c in candles[:6]
+        ]
+    )
+
+    tolerance = max(
+        3,
+        average_body * 0.80
+    )
+
+    if (
+        abs(
+            recent_low -
+            older_low
         )
+        <= tolerance
+        and
+        newest["color"] == "GREEN"
+    ):
 
-        latest_price = candle_midpoint(
-            sample[0]
+        return "BUY"
+
+    if (
+        abs(
+            recent_high -
+            older_high
         )
+        <= tolerance
+        and
+        newest["color"] == "RED"
+    ):
 
-        total_range = max(
-            1,
-            max(
-                candle_midpoint(c)
-                for c in sample
-            )
-            -
-            min(
-                candle_midpoint(c)
-                for c in sample
-            )
-        )
+        return "SELL"
 
-        net_move = abs(
-            latest_price -
-            first_price
-        )
-
-        progress_ratio = (
-            net_move /
-            total_range
-        )
-
-        if progress_ratio < 0.35:
-            return True
-
-    return False
+    return None
 
 
-# ============================================================
-# NEW LAYER SCORING
-# ============================================================
+# ------------------------------------------------------------
+# C4. SPIKE/BODY REJECTION
+# ------------------------------------------------------------
+
+def independent_spike_rejection(candles):
+
+    if len(candles) < 4:
+        return None
+
+    newest = candles[0]
+
+    previous_bodies = [
+        body_size(c)
+        for c in candles[1:4]
+    ]
+
+    average_previous = np.mean(
+        previous_bodies
+    )
+
+    if (
+        body_size(newest) >=
+        average_previous * 1.50
+    ):
+
+        if newest["color"] == "GREEN":
+            return "BUY"
+
+        if newest["color"] == "RED":
+            return "SELL"
+
+    return None
 
 
-def apply_new_price_action_layers(
+# ------------------------------------------------------------
+# C5. CONSOLIDATION BREAK
+# ------------------------------------------------------------
+
+def independent_consolidation_break(candles):
+
+    if len(candles) < 8:
+        return None
+
+    consolidation = candles[3:8]
+
+    highs = [
+        get_body_high(c)
+        for c in consolidation
+    ]
+
+    lows = [
+        get_body_low(c)
+        for c in consolidation
+    ]
+
+    range_size = (
+        max(highs) -
+        min(lows)
+    )
+
+    average_body = np.mean(
+        [
+            body_size(c)
+            for c in consolidation
+        ]
+    )
+
+    if range_size <= max(
+        5,
+        average_body * 4
+    ):
+
+        newest = candles[0]
+
+        if (
+            newest["color"] == "GREEN"
+            and
+            get_body_low(newest) <
+            min(lows)
+        ):
+
+            return "BUY"
+
+        if (
+            newest["color"] == "RED"
+            and
+            get_body_high(newest) >
+            max(highs)
+        ):
+
+            return "SELL"
+
+    return None
+
+
+# ------------------------------------------------------------
+# C6. BULL/BEAR CANDLE CONFIRMATION
+# ------------------------------------------------------------
+
+def independent_bull_bear_confirmation(candles):
+
+    if len(candles) < 5:
+        return None
+
+    recent = candles[:5]
+
+    green = sum(
+        c["color"] == "GREEN"
+        for c in recent
+    )
+
+    red = sum(
+        c["color"] == "RED"
+        for c in recent
+    )
+
+    if green >= 4:
+        return "BUY"
+
+    if red >= 4:
+        return "SELL"
+
+    return None
+
+
+# ------------------------------------------------------------
+# C7. CANDLE-STRENGTH COMPARISON
+# ------------------------------------------------------------
+
+def independent_candle_strength(candles):
+
+    if len(candles) < 4:
+        return None
+
+    newest = candles[0]
+    previous = candles[1]
+    older = candles[2]
+
+    average_old = (
+        body_size(previous) +
+        body_size(older)
+    ) / 2
+
+    if (
+        body_size(newest) >=
+        average_old * 1.30
+    ):
+
+        if newest["color"] == "GREEN":
+            return "BUY"
+
+        return "SELL"
+
+    return None
+
+
+# ------------------------------------------------------------
+# C8. FRESH LEVEL BREAK
+# ------------------------------------------------------------
+
+def independent_fresh_level_break(
     candles,
     resistance,
-    support,
-    buy_score,
-    sell_score,
-    buy_reasons,
-    sell_reasons
+    support
 ):
 
-    layer_results = {}
+    if len(candles) < 4:
+        return None
 
-    # --------------------------------------------------------
-    # 1. HIGHER HIGH / HIGHER LOW
-    # --------------------------------------------------------
+    newest = candles[0]
 
-    result = higher_high_higher_low(
-        candles
-    )
+    # Fresh bullish break
+    if resistance:
 
-    layer_results[
-        "higher_high_lower"
-    ] = result
+        level = resistance["level"]
 
-    if result == "BUY":
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Higher-high / higher-low bullish structure"
+        previous_high = max(
+            [
+                get_body_high(c)
+                for c in candles[1:4]
+            ]
         )
 
-    # --------------------------------------------------------
-    # 2. LOWER HIGH / LOWER LOW
-    # --------------------------------------------------------
+        if (
+            get_body_low(newest) <
+            level
+            and
+            get_body_high(newest) <
+            level
+            and
+            previous_high >= level
+            and
+            newest["color"] == "GREEN"
+        ):
 
-    result = lower_high_lower_low(
-        candles
-    )
+            return "BUY"
 
-    layer_results[
-        "lower_high_lower"
-    ] = result
+    # Fresh bearish break
+    if support:
 
-    if result == "SELL":
+        level = support["level"]
 
-        sell_score += 2
-
-        sell_reasons.append(
-            "Lower-high / lower-low bearish structure"
+        previous_low = min(
+            [
+                get_body_low(c)
+                for c in candles[1:4]
+            ]
         )
 
-    # --------------------------------------------------------
-    # 3. OVERALL TREND
-    # --------------------------------------------------------
-
-    trend = overall_trend_direction(
-        candles
-    )
-
-    layer_results[
-        "overall_trend"
-    ] = trend
-
-    if trend == "BULLISH":
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Overall candle structure is bullish"
-        )
-
-    elif trend == "BEARISH":
-
-        sell_score += 2
-
-        sell_reasons.append(
-            "Overall candle structure is bearish"
-        )
-
-    # --------------------------------------------------------
-    # 4. TREND STRENGTH
-    # --------------------------------------------------------
-
-    strength = trend_strength(
-        candles
-    )
-
-    layer_results[
-        "trend_strength"
-    ] = strength
-
-    if (
-        strength >= 70
-        and
-        trend == "BULLISH"
-    ):
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Strong bullish structural consistency"
-        )
-
-    elif (
-        strength >= 70
-        and
-        trend == "BEARISH"
-    ):
-
-        sell_score += 2
-
-        sell_reasons.append(
-            "Strong bearish structural consistency"
-        )
-
-    # --------------------------------------------------------
-    # 5. PULLBACK QUALITY
-    # --------------------------------------------------------
-
-    result = pullback_quality(
-        candles
-    )
-
-    layer_results[
-        "pullback_quality"
-    ] = result
-
-    if result == "BUY":
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Quality bullish pullback"
-        )
-
-    elif result == "SELL":
-
-        sell_score += 2
-
-        sell_reasons.append(
-            "Quality bearish pullback"
-        )
-
-    # --------------------------------------------------------
-    # 6. BREAKOUT + RETEST
-    # --------------------------------------------------------
-
-    result = breakout_retest(
-        candles,
-        resistance,
-        support
-    )
-
-    layer_results[
-        "breakout_retest"
-    ] = result
-
-    if result == "BUY":
-
-        buy_score += 3
-
-        buy_reasons.append(
-            "Bullish breakout and retest"
-        )
-
-    elif result == "SELL":
-
-        sell_score += 3
-
-        sell_reasons.append(
-            "Bearish breakout and retest"
-        )
-
-    # --------------------------------------------------------
-    # 7. SWING REJECTION
-    # --------------------------------------------------------
-
-    result = swing_rejection(
-        candles,
-        resistance,
-        support
-    )
-
-    layer_results[
-        "swing_rejection"
-    ] = result
-
-    if result == "BUY":
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Bullish swing rejection"
-        )
-
-    elif result == "SELL":
-
-        sell_score += 2
-
-        sell_reasons.append(
-            "Bearish swing rejection"
-        )
-
-    # --------------------------------------------------------
-    # 8. TREND EXHAUSTION
-    # --------------------------------------------------------
-
-    result = trend_exhaustion(
-        candles
-    )
-
-    layer_results[
-        "trend_exhaustion"
-    ] = result
-
-    if result == "BUY":
-
-        buy_score += 1
-
-        buy_reasons.append(
-            "Bearish trend exhaustion"
-        )
-
-    elif result == "SELL":
-
-        sell_score += 1
-
-        sell_reasons.append(
-            "Bullish trend exhaustion"
-        )
-
-    # --------------------------------------------------------
-    # 9. CANDLE SEQUENCE QUALITY
-    # --------------------------------------------------------
-
-    result = candle_sequence_quality(
-        candles
-    )
-
-    layer_results[
-        "candle_sequence"
-    ] = result
-
-    if result == "BUY":
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Strong bullish candle sequence"
-        )
-
-    elif result == "SELL":
-
-        sell_score += 2
-
-        sell_reasons.append(
-            "Strong bearish candle sequence"
-        )
-
-    # --------------------------------------------------------
-    # 10. IMPULSE VS CORRECTION
-    # --------------------------------------------------------
-
-    result = impulse_vs_correction(
-        candles
-    )
-
-    layer_results[
-        "impulse_correction"
-    ] = result
-
-    if result == "BUY":
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Bullish impulse outweighs correction"
-        )
-
-    elif result == "SELL":
-
-        sell_score += 2
-
-        sell_reasons.append(
-            "Bearish impulse outweighs correction"
-        )
-
-    # --------------------------------------------------------
-    # 11. STRUCTURE BREAK
-    # --------------------------------------------------------
-
-    result = structure_break_confirmation(
-        candles
-    )
-
-    layer_results[
-        "structure_break"
-    ] = result
-
-    if result == "BUY":
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Bullish structure break"
-        )
-
-    elif result == "SELL":
-
-        sell_score += 2
-
-        sell_reasons.append(
-            "Bearish structure break"
-        )
-
-    # --------------------------------------------------------
-    # 12. FAKE BREAKOUT
-    # --------------------------------------------------------
-
-    result = fake_breakout_detection(
-        candles,
-        resistance,
-        support
-    )
-
-    layer_results[
-        "fake_breakout"
-    ] = result
-
-    if result == "BUY":
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Bullish fake-breakout rejection"
-        )
-
-    elif result == "SELL":
-
-        sell_score += 2
-
-        sell_reasons.append(
-            "Bearish fake-breakout rejection"
-        )
-
-    # --------------------------------------------------------
-    # 13. TREND TRANSITION
-    # --------------------------------------------------------
-
-    result = trend_transition_detection(
-        candles
-    )
-
-    layer_results[
-        "trend_transition"
-    ] = result
-
-    if result == "BUY":
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Bullish trend transition"
-        )
-
-    elif result == "SELL":
-
-        sell_score += 2
-
-        sell_reasons.append(
-            "Bearish trend transition"
-        )
-
-    # --------------------------------------------------------
-    # 14. MULTI-CANDLE AGREEMENT
-    # --------------------------------------------------------
-
-    result = multi_candle_directional_agreement(
-        candles
-    )
-
-    layer_results[
-        "multi_candle_agreement"
-    ] = result
-
-    if result == "BUY":
-
-        buy_score += 2
-
-        buy_reasons.append(
-            "Multi-candle bullish agreement"
-        )
-
-    elif result == "SELL":
-
-        sell_score += 2
-
-        sell_reasons.append(
-            "Multi-candle bearish agreement"
-        )
-
-    # --------------------------------------------------------
-    # 15. CHOPPY MARKET FILTER
-    # --------------------------------------------------------
-
-    choppy = sideways_choppy_filter(
-        candles
-    )
-
-    layer_results[
-        "choppy"
-    ] = choppy
-
-    if choppy:
-
-        # The filter does not create a direction.
-        # It penalizes both sides so the engine
-        # is less likely to force a signal.
-
-        buy_score = max(
-            0,
-            buy_score - 3
-        )
-
-        sell_score = max(
-            0,
-            sell_score - 3
-        )
-
-        buy_reasons.append(
-            "Choppy-market penalty"
-        )
-
-        sell_reasons.append(
-            "Choppy-market penalty"
-        )
-
-    return (
-        buy_score,
-        sell_score,
-        buy_reasons,
-        sell_reasons,
-        layer_results
-    )
+        if (
+            get_body_high(newest) >
+            level
+            and
+            get_body_low(newest) >
+            level
+            and
+            previous_low <= level
+            and
+            newest["color"] == "RED"
+        ):
+
+            return "SELL"
+
+    return None
 
 
 # ============================================================
-# MAIN STRATEGY
+# ENGINE C ANALYZER
 # ============================================================
 
+def analyze_independent_engine(candles):
 
-def analyze_strategy(candles):
+    if len(candles) < 6:
+
+        return {
+            "direction": None,
+            "confidence": 0,
+            "buy_count": 0,
+            "sell_count": 0,
+            "required_confirmations": 5,
+            "reasons": []
+        }
+
+    resistance = find_resistance_zone(
+        candles
+    )
+
+    support = find_support_zone(
+        candles
+    )
+
+    confirmations = []
+
+    # C1
+    result = independent_candle_reversal(
+        candles
+    )
+
+    if result:
+        confirmations.append(
+            ("Candle Reversal", result)
+        )
+
+    # C2
+    result = independent_three_candle_momentum(
+        candles
+    )
+
+    if result:
+        confirmations.append(
+            ("Three-Candle Momentum", result)
+        )
+
+    # C3
+    result = independent_double_touch(
+        candles
+    )
+
+    if result:
+        confirmations.append(
+            ("Double Touch", result)
+        )
+
+    # C4
+    result = independent_spike_rejection(
+        candles
+    )
+
+    if result:
+        confirmations.append(
+            ("Spike/Body Rejection", result)
+        )
+
+    # C5
+    result = independent_consolidation_break(
+        candles
+    )
+
+    if result:
+        confirmations.append(
+            ("Consolidation Break", result)
+        )
+
+    # C6
+    result = independent_bull_bear_confirmation(
+        candles
+    )
+
+    if result:
+        confirmations.append(
+            ("Bull/Bear Confirmation", result)
+        )
+
+    # C7
+    result = independent_candle_strength(
+        candles
+    )
+
+    if result:
+        confirmations.append(
+            ("Candle Strength", result)
+        )
+
+    # C8
+    result = independent_fresh_level_break(
+        candles,
+        resistance,
+        support
+    )
+
+    if result:
+        confirmations.append(
+            ("Fresh Level Break", result)
+        )
+
+    buy_count = sum(
+        direction == "BUY"
+        for _, direction in confirmations
+    )
+
+    sell_count = sum(
+        direction == "SELL"
+        for _, direction in confirmations
+    )
+
+    total = (
+        buy_count +
+        sell_count
+    )
+
+    if total == 0:
+
+        return {
+            "direction": None,
+            "confidence": 0,
+            "buy_count": 0,
+            "sell_count": 0,
+            "required_confirmations": 5,
+            "reasons": []
+        }
+
+    if buy_count > sell_count:
+
+        direction = "BUY"
+
+        confidence = round(
+            buy_count /
+            total *
+            100
+        )
+
+    elif sell_count > buy_count:
+
+        direction = "SELL"
+
+        confidence = round(
+            sell_count /
+            total *
+            100
+        )
+
+    else:
+
+        direction = None
+        confidence = 0
+
+    # At least five independent confirmations
+    # must agree before Engine C can confirm.
+    agreeing_count = max(
+        buy_count,
+        sell_count
+    )
+
+    if agreeing_count < 5:
+
+        direction = None
+        confidence = 0
+
+    # 65% minimum agreement remains compulsory.
+    if confidence < MIN_SIGNAL_AGREEMENT:
+
+        direction = None
+        confidence = 0
+
+    reasons = []
+
+    for name, result_direction in confirmations:
+
+        if result_direction == direction:
+
+            reasons.append(
+                name
+            )
+
+    return {
+        "direction": direction,
+        "confidence": confidence,
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "required_confirmations": 5,
+        "reasons": reasons[:5]
+    }
+
+
+# ============================================================
+# ============================================================
+# ENGINE A — ORIGINAL WORKING STRATEGY
+# ============================================================
+# ============================================================
+
+def analyze_original_engine(candles):
 
     if not candles:
 
         return {
             "decision": "NO SIGNAL",
+            "direction": None,
             "confidence": 0,
             "buy_score": 0,
             "sell_score": 0,
@@ -3225,12 +3334,7 @@ def analyze_strategy(candles):
     buy_reasons = []
     sell_reasons = []
 
-    # ========================================================
-    # EXISTING STRATEGIES
-    # ========================================================
-
     # SUPPORT
-
     if support:
         buy_score += 1
 
@@ -3251,7 +3355,6 @@ def analyze_strategy(candles):
         )
 
     # RESISTANCE
-
     if resistance:
         sell_score += 1
 
@@ -3272,7 +3375,6 @@ def analyze_strategy(candles):
         )
 
     # BREAKOUT HOLD
-
     if resistance_hold:
 
         buy_score += 3
@@ -3290,7 +3392,6 @@ def analyze_strategy(candles):
         )
 
     # MOMENTUM
-
     if consecutive == "BUY":
 
         buy_score += 1
@@ -3308,7 +3409,6 @@ def analyze_strategy(candles):
         )
 
     # CONTINUATION
-
     if continuation == "BUY":
 
         buy_score += 1
@@ -3326,7 +3426,6 @@ def analyze_strategy(candles):
         )
 
     # REVERSALS
-
     if reversal == "BUY":
 
         buy_score += 2
@@ -3376,7 +3475,6 @@ def analyze_strategy(candles):
         )
 
     # PULLBACK
-
     if pullback == "BUY":
 
         buy_score += 1
@@ -3394,7 +3492,6 @@ def analyze_strategy(candles):
         )
 
     # COLOR CONFIRMATION
-
     if red_green:
 
         buy_score += 2
@@ -3411,55 +3508,7 @@ def analyze_strategy(candles):
             "GREEN → RED confirmation"
         )
 
-    # ========================================================
-    # ADD ALL 15 NEW PRICE-ACTION LAYERS
-    # ========================================================
-
-    (
-        buy_score,
-        sell_score,
-        buy_reasons,
-        sell_reasons,
-        layer_results
-    ) = apply_new_price_action_layers(
-        candles,
-        resistance,
-        support,
-        buy_score,
-        sell_score,
-        buy_reasons,
-        sell_reasons
-    )
-
-    # ========================================================
-    # CHOPPY MARKET HARD PROTECTION
-    # ========================================================
-
-    choppy = layer_results.get(
-        "choppy",
-        False
-    )
-
-    if choppy:
-
-        # If the chart is clearly alternating
-        # without meaningful structural progress,
-        # do not allow the engine to force a signal.
-
-        if (
-            abs(
-                buy_score -
-                sell_score
-            ) <= 3
-        ):
-
-            buy_score = 0
-            sell_score = 0
-
-    # ========================================================
     # AGREEMENT
-    # ========================================================
-
     total_score = (
         buy_score +
         sell_score
@@ -3482,10 +3531,7 @@ def analyze_strategy(candles):
             ) * 100
         )
 
-    # ========================================================
     # CONFLICT PROTECTION
-    # ========================================================
-
     difference = abs(
         buy_score -
         sell_score
@@ -3497,10 +3543,6 @@ def analyze_strategy(candles):
         total_score >= 4
     )
 
-    # ========================================================
-    # FINAL DECISION
-    # ========================================================
-
     decision = "NO SIGNAL"
 
     confidence = agreement
@@ -3508,8 +3550,6 @@ def analyze_strategy(candles):
     if not conflict:
 
         if (
-            not choppy
-            and
             buy_score > sell_score
             and
             buy_score >= 3
@@ -3520,8 +3560,6 @@ def analyze_strategy(candles):
             decision = "BUY SIGNAL"
 
         elif (
-            not choppy
-            and
             sell_score > buy_score
             and
             sell_score >= 3
@@ -3531,10 +3569,7 @@ def analyze_strategy(candles):
 
             decision = "SELL SIGNAL"
 
-    # ========================================================
     # REASONS
-    # ========================================================
-
     if decision == "BUY SIGNAL":
 
         unique = []
@@ -3567,46 +3602,16 @@ def analyze_strategy(candles):
 
         reasons = []
 
-    # ========================================================
-    # SAFETY
-    # ========================================================
-
-    if decision == "NO SIGNAL":
-
-        if choppy:
-
-            reasons = [
-                "Market structure is choppy",
-                "No clean directional structure",
-                "Wait for clearer price action"
-            ]
-
-        elif conflict:
-
-            reasons = [
-                "BUY and SELL evidence are too close",
-                "No clear directional advantage",
-                "Wait for a stronger candle structure"
-            ]
-
-        elif total_score == 0:
-
-            reasons = [
-                "No qualifying setup detected",
-                "Candle evidence is insufficient",
-                "Do not trade"
-            ]
-
-        else:
-
-            reasons = [
-                "Directional evidence is below the required threshold",
-                "No strong independent confirmation",
-                "Do not trade"
-            ]
-
     return {
         "decision": decision,
+        "direction": (
+            "BUY"
+            if decision == "BUY SIGNAL"
+            else
+            "SELL"
+            if decision == "SELL SIGNAL"
+            else None
+        ),
         "confidence": confidence,
         "buy_score": buy_score,
         "sell_score": sell_score,
@@ -3618,15 +3623,175 @@ def analyze_strategy(candles):
         "support_strength": support_strength,
         "momentum": momentum,
         "resistance_hold": resistance_hold,
-        "support_hold": support_hold,
-        "layer_results": layer_results
+        "support_hold": support_hold
+    }
+
+
+# ============================================================
+# FINAL MULTI-ENGINE DECISION
+# ============================================================
+
+def final_engine_decision(candles):
+
+    engine_a = analyze_original_engine(
+        candles
+    )
+
+    engine_b = analyze_structural_engine(
+        candles
+    )
+
+    engine_c = analyze_independent_engine(
+        candles
+    )
+
+    direction_a = engine_a["direction"]
+    direction_b = engine_b["direction"]
+    direction_c = engine_c["direction"]
+
+    # --------------------------------------------------------
+    # ALL THREE ENGINES MUST AGREE
+    # --------------------------------------------------------
+
+    engines_agree = (
+        direction_a is not None
+        and
+        direction_b is not None
+        and
+        direction_c is not None
+        and
+        direction_a == direction_b
+        and
+        direction_b == direction_c
+    )
+
+    if not engines_agree:
+
+        return {
+            "decision": "NO SIGNAL",
+            "direction": None,
+            "confidence": 0,
+            "engine_a": engine_a,
+            "engine_b": engine_b,
+            "engine_c": engine_c,
+            "reasons": [
+                "The three prediction engines do not agree",
+                "Independent candle confirmation is insufficient",
+                "Wait for stronger structure"
+            ]
+        }
+
+    direction = direction_a
+
+    # --------------------------------------------------------
+    # COMBINED CONFIDENCE
+    # --------------------------------------------------------
+
+    confidence_values = [
+        engine_a["confidence"],
+        engine_b["confidence"],
+        engine_c["confidence"]
+    ]
+
+    combined_confidence = int(
+        round(
+            np.mean(
+                confidence_values
+            )
+        )
+    )
+
+    # The 65% threshold remains compulsory.
+    if combined_confidence < MIN_SIGNAL_AGREEMENT:
+
+        return {
+            "decision": "NO SIGNAL",
+            "direction": None,
+            "confidence": combined_confidence,
+            "engine_a": engine_a,
+            "engine_b": engine_b,
+            "engine_c": engine_c,
+            "reasons": [
+                "Combined agreement is below 65%",
+                "Independent confirmation is not strong enough",
+                "Do not trade"
+            ]
+        }
+
+    # Engine C must have at least 5 independent confirmations.
+    independent_count = max(
+        engine_c["buy_count"],
+        engine_c["sell_count"]
+    )
+
+    if independent_count < 5:
+
+        return {
+            "decision": "NO SIGNAL",
+            "direction": None,
+            "confidence": combined_confidence,
+            "engine_a": engine_a,
+            "engine_b": engine_b,
+            "engine_c": engine_c,
+            "reasons": [
+                "Fewer than 5 independent confirmations agree",
+                "The independent candle engine is not strong enough",
+                "Do not trade"
+            ]
+        }
+
+    # --------------------------------------------------------
+    # FINAL SIGNAL
+    # --------------------------------------------------------
+
+    if direction == "BUY":
+
+        decision = "BUY SIGNAL"
+
+    else:
+
+        decision = "SELL SIGNAL"
+
+    final_reasons = []
+
+    for reason in engine_a["reasons"]:
+
+        if reason not in final_reasons:
+
+            final_reasons.append(
+                reason
+            )
+
+    for reason in engine_b["reasons"]:
+
+        if reason not in final_reasons:
+
+            final_reasons.append(
+                reason
+            )
+
+    for reason in engine_c["reasons"]:
+
+        if reason not in final_reasons:
+
+            final_reasons.append(
+                reason
+            )
+
+    return {
+        "decision": decision,
+        "direction": direction,
+        "confidence": combined_confidence,
+        "engine_a": engine_a,
+        "engine_b": engine_b,
+        "engine_c": engine_c,
+        "reasons": final_reasons[:3]
     }
 
 
 # ============================================================
 # DETECTION MAP
 # ============================================================
-
 
 def create_detection_map(
     img,
@@ -3642,8 +3807,14 @@ def create_detection_map(
 
         x = int(candle["x"])
         y = int(candle["y"])
-        width = int(candle["w"])
-        height = int(candle["h"])
+
+        width = int(
+            candle["w"]
+        )
+
+        height = int(
+            candle["h"]
+        )
 
         cv2.rectangle(
             output,
@@ -3699,7 +3870,6 @@ def create_detection_map(
 # TELEGRAM CHANNEL SENDER
 # ============================================================
 
-
 async def send_telegram(response):
 
     try:
@@ -3730,7 +3900,6 @@ async def send_telegram(response):
 # START COMMAND
 # ============================================================
 
-
 async def start_command(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
@@ -3746,7 +3915,6 @@ async def start_command(
 # PHOTO HANDLER
 # ============================================================
 
-
 async def handle_photo(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
@@ -3755,11 +3923,13 @@ async def handle_photo(
     start_time = time.time()
 
     original_path = (
-        f"strategy_chart_{update.message.message_id}.png"
+        f"strategy_chart_"
+        f"{update.message.message_id}.png"
     )
 
     detection_path = (
-        f"strategy_detection_{update.message.message_id}.png"
+        f"strategy_detection_"
+        f"{update.message.message_id}.png"
     )
 
     try:
@@ -3778,8 +3948,10 @@ async def handle_photo(
 
         photo = update.message.photo[-1]
 
-        telegram_file = await context.bot.get_file(
-            photo.file_id
+        telegram_file = (
+            await context.bot.get_file(
+                photo.file_id
+            )
         )
 
         await telegram_file.download_to_drive(
@@ -3795,7 +3967,7 @@ async def handle_photo(
         )
 
         # ====================================================
-        # DETECT CANDLES
+        # DETECT REAL CANDLES FROM SCREENSHOT
         # ====================================================
 
         candles = detect_candles(
@@ -3822,38 +3994,34 @@ async def handle_photo(
             )
 
             elapsed = (
-                time.time()
-                -
+                time.time() -
                 start_time
             )
 
             print(
-                f"⚪ No signal in {elapsed:.2f} seconds"
+                f"⚪ No signal in "
+                f"{elapsed:.2f} seconds"
             )
 
             return
 
         # ====================================================
-        # STRATEGY
+        # FINAL MULTI-ENGINE ANALYSIS
         # ====================================================
 
-        strategy = analyze_strategy(
+        final_result = final_engine_decision(
             candles
         )
 
-        signal_time, entry_time = (
-            signal_and_entry_times()
-        )
-
-        decision = strategy[
+        decision = final_result[
             "decision"
         ]
 
-        confidence = strategy[
+        confidence = final_result[
             "confidence"
         ]
 
-        reasons = strategy[
+        reasons = final_result[
             "reasons"
         ]
 
@@ -3907,6 +4075,8 @@ async def handle_photo(
 
         # ====================================================
         # USER RESPONSE
+        #
+        # Existing working Telegram behavior remains.
         # ====================================================
 
         await update.message.reply_text(
@@ -3916,6 +4086,8 @@ async def handle_photo(
 
         # ====================================================
         # CHANNEL DELIVERY
+        #
+        # Existing working channel delivery remains.
         # ====================================================
 
         if decision in (
@@ -3934,25 +4106,25 @@ async def handle_photo(
             )
 
             elapsed = (
-                time.time()
-                -
+                time.time() -
                 start_time
             )
 
             print(
-                f"✅ Signal sent in {elapsed:.2f} seconds"
+                f"✅ Signal sent in "
+                f"{elapsed:.2f} seconds"
             )
 
         else:
 
             elapsed = (
-                time.time()
-                -
+                time.time() -
                 start_time
             )
 
             print(
-                f"⚪ No signal. Analysis completed in "
+                f"⚪ No signal. "
+                f"Analysis completed in "
                 f"{elapsed:.2f} seconds"
             )
 
@@ -3995,14 +4167,12 @@ async def handle_photo(
                     os.remove(path)
 
                 except Exception:
-
                     pass
 
 
 # ============================================================
 # ERROR HANDLER
 # ============================================================
-
 
 async def error_handler(
     update: object,
@@ -4018,7 +4188,6 @@ async def error_handler(
 # ============================================================
 # MAIN
 # ============================================================
-
 
 def main():
 
@@ -4047,6 +4216,30 @@ def main():
     )
 
     print(
+        "Original working strategy engine"
+    )
+
+    print(
+        "15 structural confirmation layers"
+    )
+
+    print(
+        "Independent candle confirmation engine"
+    )
+
+    print(
+        "5 independent confirmations required"
+    )
+
+    print(
+        "All three engines must agree"
+    )
+
+    print(
+        "Minimum final agreement: 65%"
+    )
+
+    print(
         "Breakout + breakout-hold detection"
     )
 
@@ -4071,70 +4264,6 @@ def main():
     )
 
     print(
-        "15 NEW PRICE-ACTION LAYERS ENABLED"
-    )
-
-    print(
-        "Higher High / Higher Low"
-    )
-
-    print(
-        "Lower High / Lower Low"
-    )
-
-    print(
-        "Overall Trend Direction"
-    )
-
-    print(
-        "Trend Strength"
-    )
-
-    print(
-        "Pullback Quality"
-    )
-
-    print(
-        "Breakout + Retest"
-    )
-
-    print(
-        "Swing Rejection"
-    )
-
-    print(
-        "Trend Exhaustion"
-    )
-
-    print(
-        "Candle Sequence Quality"
-    )
-
-    print(
-        "Impulse vs Correction"
-    )
-
-    print(
-        "Structure-Break Confirmation"
-    )
-
-    print(
-        "Fake Breakout Detection"
-    )
-
-    print(
-        "Trend Transition Detection"
-    )
-
-    print(
-        "Multi-Candle Directional Agreement"
-    )
-
-    print(
-        "Sideways/Choppy-Market Filter"
-    )
-
-    print(
         "Nigeria Time: Africa/Lagos"
     )
 
@@ -4143,19 +4272,23 @@ def main():
     )
 
     print(
-        "No new indicators"
+        "No indicators"
     )
 
     print(
-        "No price mapping"
+        "No random data"
     )
 
     print(
-        "No pair detection"
+        "No fake prices"
     )
 
     print(
         "No random candles"
+    )
+
+    print(
+        "No placeholder market data"
     )
 
     print(
@@ -4218,7 +4351,5 @@ def main():
 # RUN
 # ============================================================
 
-
 if __name__ == "__main__":
-
     main()
