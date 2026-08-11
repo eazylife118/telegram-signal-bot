@@ -3193,7 +3193,7 @@ def analyze_independent_engine(candles):
         sell_count
     )
 
-    if agreeing_count < 5:
+    if agreeing_count < 3:
 
         direction = None
         confidence = 0
