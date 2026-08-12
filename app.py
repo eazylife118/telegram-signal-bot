@@ -4691,6 +4691,413 @@ def analyze_strategy(candles):
     }
 
 # ============================================================
+# FULL STRATEGY DIAGNOSTIC
+#
+# PURPOSE:
+# Show exactly what the bot sees and why a signal
+# becomes NO SIGNAL.
+#
+# IMPORTANT:
+# This does NOT change the strategy.
+# It only reads the existing strategy results.
+# ============================================================
+
+def build_strategy_diagnostic(
+    candles,
+    strategy
+):
+
+    lines = []
+
+    technical = strategy.get(
+        "technical",
+        {}
+    )
+
+    filters = strategy.get(
+        "filters",
+        {}
+    )
+
+    layers = strategy.get(
+        "layer_results",
+        {}
+    )
+
+    evidence = strategy.get(
+        "candle_evidence",
+        {}
+    )
+
+    # ========================================================
+    # HEADER
+    # ========================================================
+
+    lines.append(
+        "🧠 *BOT VISION / DIAGNOSTIC*"
+    )
+
+    lines.append("")
+
+    # ========================================================
+    # CANDLE DETECTION
+    # ========================================================
+
+    lines.append(
+        f"🕯️ Candles detected: *{len(candles)}*"
+    )
+
+    if candles:
+
+        newest = candles[0]
+
+        lines.append(
+            f"Newest candle: *{newest.get('color', 'UNKNOWN')}*"
+        )
+
+        lines.append(
+            f"Newest body: *{newest.get('h', 0)} px*"
+        )
+
+        lines.append(
+            f"Newest width: *{newest.get('w', 0)} px*"
+        )
+
+    else:
+
+        lines.append(
+            "❌ No candles detected"
+        )
+
+    # ========================================================
+    # CANDLE COLOR MAP
+    # ========================================================
+
+    if candles:
+
+        color_list = []
+
+        for index, candle in enumerate(
+            candles[:20],
+            start=1
+        ):
+
+            color = candle.get(
+                "color",
+                "?"
+            )
+
+            if color == "GREEN":
+
+                symbol = "🟢"
+
+            elif color == "RED":
+
+                symbol = "🔴"
+
+            else:
+
+                symbol = "⚪"
+
+            color_list.append(
+                f"{index}:{symbol}"
+            )
+
+        lines.append("")
+
+        lines.append(
+            "Candle map *(1 = newest)*:"
+        )
+
+        lines.append(
+            " ".join(color_list)
+        )
+
+    # ========================================================
+    # SCORES
+    # ========================================================
+
+    lines.append("")
+
+    lines.append(
+        "📊 *SCORES*"
+    )
+
+    lines.append(
+        f"BUY score: *{strategy.get('buy_score', 0)}*"
+    )
+
+    lines.append(
+        f"SELL score: *{strategy.get('sell_score', 0)}*"
+    )
+
+    lines.append(
+        f"Agreement: *{strategy.get('agreement', 0)}%*"
+    )
+
+    # ========================================================
+    # PRICE ACTION LAYERS
+    # ========================================================
+
+    lines.append("")
+
+    lines.append(
+        "🔎 *15 PRICE-ACTION LAYERS*"
+    )
+
+    layer_names = [
+        ("higher_high_lower", "Higher HH/HL"),
+        ("lower_high_lower", "Lower LH/LL"),
+        ("overall_trend", "Overall Trend"),
+        ("trend_strength", "Trend Strength"),
+        ("pullback_quality", "Pullback Quality"),
+        ("breakout_retest", "Breakout + Retest"),
+        ("swing_rejection", "Swing Rejection"),
+        ("trend_exhaustion", "Trend Exhaustion"),
+        ("candle_sequence", "Candle Sequence"),
+        ("impulse_correction", "Impulse vs Correction"),
+        ("structure_break", "Structure Break"),
+        ("fake_breakout", "Fake Breakout"),
+        ("trend_transition", "Trend Transition"),
+        ("multi_candle_agreement", "Multi-Candle Agreement"),
+        ("choppy", "Choppy Market")
+    ]
+
+    for key, label in layer_names:
+
+        value = layers.get(
+            key,
+            "NOT AVAILABLE"
+        )
+
+        if value == "BUY":
+
+            marker = "🟢"
+
+        elif value == "SELL":
+
+            marker = "🔴"
+
+        elif value is True:
+
+            marker = "🔴"
+
+        elif value is False:
+
+            marker = "🟢"
+
+        else:
+
+            marker = "⚪"
+
+        lines.append(
+            f"{marker} {label}: `{value}`"
+        )
+
+    # ========================================================
+    # TECHNICAL INDICATORS
+    # ========================================================
+
+    lines.append("")
+
+    lines.append(
+        "📈 *TECHNICAL CONFIRMATION*"
+    )
+
+    lines.append(
+        f"Technical bias: *{technical.get('bias', 'NEUTRAL')}*"
+    )
+
+    lines.append(
+        f"BUY confirmations: *{technical.get('buy_confirmations', 0)}*"
+    )
+
+    lines.append(
+        f"SELL confirmations: *{technical.get('sell_confirmations', 0)}*"
+    )
+
+    lines.append(
+        f"SMA20: `{technical.get('sma20')}`"
+    )
+
+    lines.append(
+        f"SMA50: `{technical.get('sma50')}`"
+    )
+
+    lines.append(
+        f"EMA200: `{technical.get('ema200')}`"
+    )
+
+    lines.append(
+        f"RSI: `{technical.get('rsi')}`"
+    )
+
+    lines.append(
+        f"MACD: `{technical.get('macd')}`"
+    )
+
+    lines.append(
+        f"MACD signal: `{technical.get('macd_signal')}`"
+    )
+
+    lines.append(
+        f"MACD histogram: `{technical.get('macd_histogram')}`"
+    )
+
+    lines.append(
+        f"BB middle: `{technical.get('bb_middle')}`"
+    )
+
+    lines.append(
+        f"BB upper: `{technical.get('bb_upper')}`"
+    )
+
+    lines.append(
+        f"BB lower: `{technical.get('bb_lower')}`"
+    )
+
+    lines.append(
+        f"Activity ratio: `{technical.get('activity_ratio', 0)}`"
+    )
+
+    lines.append(
+        f"Activity strong: `{technical.get('activity_strong', False)}`"
+    )
+
+    # ========================================================
+    # CANDLE EVIDENCE
+    # ========================================================
+
+    lines.append("")
+
+    lines.append(
+        "🕯️ *CANDLE EVIDENCE*"
+    )
+
+    lines.append(
+        f"BUY evidence: *{evidence.get('buy', 0)}%*"
+    )
+
+    lines.append(
+        f"SELL evidence: *{evidence.get('sell', 0)}%*"
+    )
+
+    lines.append(
+        f"Dominant: *{evidence.get('dominant', 'NEUTRAL')}*"
+    )
+
+    lines.append(
+        f"Weak: *{evidence.get('weak', True)}*"
+    )
+
+    # ========================================================
+    # FILTER STATUS
+    # ========================================================
+
+    lines.append("")
+
+    lines.append(
+        "🛡️ *SAFETY FILTERS*"
+    )
+
+    filter_items = [
+        ("balanced", "Balanced evidence"),
+        ("choppy", "Choppy market"),
+        ("against_structure", "Against structure"),
+        ("weak_candle_evidence", "Weak candle evidence"),
+        ("technical_conflict", "Technical conflict"),
+        ("activity_too_weak", "Activity too weak"),
+        ("allowed", "Final filter allowed")
+    ]
+
+    for key, label in filter_items:
+
+        value = filters.get(
+            key,
+            False
+        )
+
+        if value:
+
+            marker = "🔴" if key != "allowed" else "🟢"
+
+        else:
+
+            marker = "⚪"
+
+        lines.append(
+            f"{marker} {label}: `{value}`"
+        )
+
+    # ========================================================
+    # FILTER REASONS
+    # ========================================================
+
+    filter_reasons = filters.get(
+        "reasons",
+        []
+    )
+
+    if filter_reasons:
+
+        lines.append("")
+
+        lines.append(
+            "🚫 *REJECTION REASONS*"
+        )
+
+        for reason in filter_reasons:
+
+            lines.append(
+                f"• {reason}"
+            )
+
+    # ========================================================
+    # FINAL DECISION
+    # ========================================================
+
+    lines.append("")
+
+    lines.append(
+        "🎯 *DECISION PIPELINE*"
+    )
+
+    lines.append(
+        f"Final decision: *{strategy.get('decision', 'NO SIGNAL')}*"
+    )
+
+    lines.append(
+        f"Final confidence: *{strategy.get('confidence', 0)}%*"
+    )
+
+    # ========================================================
+    # SIGNAL REASONS
+    # ========================================================
+
+    reasons = strategy.get(
+        "reasons",
+        []
+    )
+
+    if reasons:
+
+        lines.append("")
+
+        lines.append(
+            "📌 *CURRENT REASONS*"
+        )
+
+        for reason in reasons:
+
+            lines.append(
+                f"• {reason}"
+            )
+
+    return "\n".join(
+        lines
+    )
+
+# ============================================================
 # DETECTION MAP
 # ============================================================
 
@@ -4918,6 +5325,15 @@ async def handle_photo(
         ]
 
         # ====================================================
+        # BUILD DIAGNOSTIC
+        # ====================================================
+
+        diagnostic = build_strategy_diagnostic(
+            candles,
+            strategy
+        )
+
+        # ====================================================
         # BUILD RESPONSE
         # ====================================================
 
@@ -4940,6 +5356,15 @@ async def handle_photo(
                     f"• {reason}\n"
                 )
 
+            response += (
+                "\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🔍 **BOT DIAGNOSTIC**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                +
+                diagnostic
+            )
+
         elif decision == "SELL SIGNAL":
 
             response = (
@@ -4959,10 +5384,28 @@ async def handle_photo(
                     f"• {reason}\n"
                 )
 
+            response += (
+                "\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🔍 **BOT DIAGNOSTIC**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                +
+                diagnostic
+            )
+
         else:
 
             response = (
                 "⚪ **NO SIGNAL — DON'T TRADE**"
+            )
+
+            response += (
+                "\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🔍 **WHY NO SIGNAL?**\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                +
+                diagnostic
             )
 
         # ====================================================
@@ -5296,6 +5739,18 @@ def main():
 
     print(
         "No automatic trading"
+    )
+
+    print(
+        "========================================"
+    )
+
+    print(
+        "🔍 DIAGNOSTIC LAYER ENABLED"
+    )
+
+    print(
+        "Shows WHY a signal becomes NO SIGNAL"
     )
 
     print(
