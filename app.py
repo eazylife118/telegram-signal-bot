@@ -5,12 +5,26 @@ import telebot
 import time
 
 # ============================================================
+# EASY OCR
+# ============================================================
+#
+# EasyOCR is used ONLY for the price scale.
+#
+# It is NOT used to detect candles.
+#
+# Candle detection remains OpenCV-based because that is much
+# faster for the purple/yellow candle bodies.
+# ============================================================
+
+try:
+    import easyocr
+except ImportError:
+    easyocr = None
+
+
+# ============================================================
 # TELEGRAM
 # ============================================================
-# Keep your real token in Render as:
-# BOT_TOKEN = your Telegram bot token
-#
-# Do NOT put the real token directly into this file.
 
 TELEGRAM_TOKEN = os.getenv(
     "BOT_TOKEN",
@@ -21,42 +35,45 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 
 # ============================================================
+# EASY OCR SETTINGS
+# ============================================================
+
+OCR_READER = None
+
+# Width of the right-side price-scale region.
+#
+# This is deliberately narrow so OCR does not scan the entire
+# chart.
+PRICE_SCALE_WIDTH_RATIO = 0.20
+
+# Minimum confidence for accepting an OCR result.
+MIN_PRICE_OCR_CONFIDENCE = 0.35
+
+# Maximum number of OCR results used.
+MAX_PRICE_LABELS = 40
+
+
+# ============================================================
 # DETECTION SETTINGS
 # ============================================================
 
-# Minimum candle-body evidence
 MIN_BODY_AREA = 10
 MIN_BODY_HEIGHT = 2
 MIN_CANDLE_WIDTH = 2
 
-# Newest/right-side candles
 RIGHT_MIN_BODY_AREA = 6
 RIGHT_MIN_BODY_HEIGHT = 2
 
-# Maximum candle width relative to screenshot
 MAX_CANDLE_WIDTH_RATIO = 0.045
 
-# Very close pieces of the same candle can be merged
 MERGE_DISTANCE_RATIO = 0.55
 
 
 # ============================================================
-# STRICT PURPLE / YELLOW COLOR SETTINGS
+# PURPLE / YELLOW COLOR SETTINGS
 # ============================================================
-#
-# YOUR SCREENSHOT:
-#
+
 # 🟣 PURPLE = BUY / BULLISH
-# 🟡 YELLOW = SELL / BEARISH
-#
-# These ranges are designed specifically around the
-# purple/yellow candle colors visible in your screenshot.
-# ============================================================
-
-
-# ------------------------------------------------------------
-# 🟣 PURPLE
-# ------------------------------------------------------------
 
 PURPLE_HUE_LOW = 125
 PURPLE_HUE_HIGH = 165
@@ -65,9 +82,7 @@ MIN_PURPLE_SATURATION = 100
 MIN_PURPLE_VALUE = 70
 
 
-# ------------------------------------------------------------
-# 🟡 YELLOW
-# ------------------------------------------------------------
+# 🟡 YELLOW = SELL / BEARISH
 
 YELLOW_HUE_LOW = 18
 YELLOW_HUE_HIGH = 40
@@ -76,19 +91,15 @@ MIN_YELLOW_SATURATION = 100
 MIN_YELLOW_VALUE = 70
 
 
-# ------------------------------------------------------------
+# ============================================================
 # COLOR DENSITY
-# ------------------------------------------------------------
+# ============================================================
 
 MIN_COLOR_DENSITY = 0.25
 
 
-# ------------------------------------------------------------
+# ============================================================
 # COLOR DOMINANCE
-# ------------------------------------------------------------
-#
-# These prevent random chart/UI colors from being treated
-# as candles.
 # ============================================================
 
 PURPLE_DOMINANCE_RATIO = 1.20
@@ -110,7 +121,6 @@ def load_image(path):
 
     h, w = img.shape[:2]
 
-    # Upscale smaller screenshots slightly.
     if w < 1400:
 
         scale = 1400 / w
@@ -128,6 +138,609 @@ def load_image(path):
 
 
 # ============================================================
+# INITIALIZE EASY OCR
+# ============================================================
+
+def initialize_ocr():
+
+    global OCR_READER
+
+    if easyocr is None:
+
+        print(
+            "⚠️ EasyOCR is not installed."
+        )
+
+        return False
+
+    if OCR_READER is not None:
+
+        return True
+
+    try:
+
+        print(
+            "🔎 Loading EasyOCR price reader..."
+        )
+
+        OCR_READER = easyocr.Reader(
+            ["en"],
+            gpu=False,
+            verbose=False
+        )
+
+        print(
+            "✅ EasyOCR price reader ready."
+        )
+
+        return True
+
+    except Exception as e:
+
+        print(
+            "❌ EasyOCR initialization error:",
+            repr(e)
+        )
+
+        OCR_READER = None
+
+        return False
+
+
+# ============================================================
+# CLEAN OCR PRICE TEXT
+# ============================================================
+
+def clean_price_text(text):
+
+    if text is None:
+        return None
+
+    text = str(text).strip()
+
+    if not text:
+        return None
+
+    # Replace common OCR mistakes.
+    replacements = {
+        ",": "",
+        "O": "0",
+        "o": "0",
+        "I": "1",
+        "l": "1",
+        "|": "1",
+        "S": "5",
+        "s": "5"
+    }
+
+    for old, new in replacements.items():
+
+        text = text.replace(
+            old,
+            new
+        )
+
+    # Keep only digits and decimal point.
+    cleaned = ""
+
+    decimal_found = False
+
+    for char in text:
+
+        if char.isdigit():
+
+            cleaned += char
+
+        elif char == "." and not decimal_found:
+
+            cleaned += char
+
+            decimal_found = True
+
+    if not cleaned:
+        return None
+
+    # Must contain at least one digit.
+    if not any(
+        char.isdigit()
+        for char in cleaned
+    ):
+        return None
+
+    try:
+
+        value = float(cleaned)
+
+    except Exception:
+
+        return None
+
+    # Reject obviously invalid OCR numbers.
+    if value <= 0:
+        return None
+
+    if value > 100000000:
+        return None
+
+    return value
+
+
+# ============================================================
+# READ PRICE SCALE
+# ============================================================
+
+def read_price_scale(img):
+
+    """
+    Reads only the right-side price scale.
+
+    Returns:
+
+        labels:
+            [
+                {
+                    "price": numeric price,
+                    "y": vertical position,
+                    "confidence": OCR confidence
+                }
+            ]
+
+        current_price:
+            nearest price-scale label to the current-price
+            marker when one can be identified.
+
+        highest_price:
+            highest visible price label.
+
+        lowest_price:
+            lowest visible price label.
+    """
+
+    result = {
+        "labels": [],
+        "current_price": None,
+        "highest_price": None,
+        "lowest_price": None,
+        "ocr_available": False,
+        "processing_time": 0.0
+    }
+
+    start = time.time()
+
+    if not initialize_ocr():
+
+        result["processing_time"] = (
+            time.time() - start
+        )
+
+        return result
+
+    h, w = img.shape[:2]
+
+    # ========================================================
+    # PRICE SCALE REGION
+    # ========================================================
+
+    scale_width = max(
+        180,
+        int(
+            w *
+            PRICE_SCALE_WIDTH_RATIO
+        )
+    )
+
+    x_start = max(
+        0,
+        w - scale_width
+    )
+
+    price_region = img[
+        :,
+        x_start:
+    ]
+
+    # ========================================================
+    # UPSCALE ONLY PRICE REGION
+    # ========================================================
+
+    region_h, region_w = (
+        price_region.shape[:2]
+    )
+
+    if region_w < 500:
+
+        scale = 500 / region_w
+
+        price_region = cv2.resize(
+            price_region,
+            (
+                int(region_w * scale),
+                int(region_h * scale)
+            ),
+            interpolation=cv2.INTER_CUBIC
+        )
+
+    # ========================================================
+    # EASY OCR
+    # ========================================================
+
+    try:
+
+        ocr_results = OCR_READER.readtext(
+            price_region,
+            detail=1,
+            paragraph=False,
+            allowlist="0123456789."
+        )
+
+    except Exception as e:
+
+        print(
+            "❌ Price OCR error:",
+            repr(e)
+        )
+
+        result["processing_time"] = (
+            time.time() - start
+        )
+
+        return result
+
+    labels = []
+
+    for item in ocr_results:
+
+        try:
+
+            box = item[0]
+            text = item[1]
+            confidence = float(item[2])
+
+        except Exception:
+
+            continue
+
+        if confidence < MIN_PRICE_OCR_CONFIDENCE:
+            continue
+
+        price = clean_price_text(
+            text
+        )
+
+        if price is None:
+            continue
+
+        # ====================================================
+        # FIND OCR BOX CENTER
+        # ====================================================
+
+        points = np.array(
+            box,
+            dtype=np.float32
+        )
+
+        center_x = float(
+            np.mean(points[:, 0])
+        )
+
+        center_y = float(
+            np.mean(points[:, 1])
+        )
+
+        # ====================================================
+        # CONVERT OCR Y BACK TO ORIGINAL IMAGE
+        # ====================================================
+
+        if region_w < 500:
+
+            scale = 500 / region_w
+
+            original_y = (
+                center_y /
+                scale
+            )
+
+        else:
+
+            original_y = center_y
+
+        # Only keep labels that are actually toward the
+        # right-side price scale.
+        #
+        # Since we already cropped the right side, this
+        # prevents unrelated chart text from entering.
+        if original_y < 0:
+            continue
+
+        if original_y >= h:
+            continue
+
+        labels.append({
+
+            "price": price,
+
+            "y": float(
+                original_y
+            ),
+
+            "confidence": confidence
+
+        })
+
+    # ========================================================
+    # SORT BY VERTICAL POSITION
+    # ========================================================
+
+    labels.sort(
+        key=lambda x: x["y"]
+    )
+
+    # ========================================================
+    # REMOVE DUPLICATE / NEAR-DUPLICATE LABELS
+    # ========================================================
+
+    filtered = []
+
+    for label in labels:
+
+        duplicate = False
+
+        for existing in filtered:
+
+            if (
+                abs(
+                    label["y"] -
+                    existing["y"]
+                ) < 8
+                and
+                abs(
+                    label["price"] -
+                    existing["price"]
+                ) < 0.000001
+            ):
+
+                duplicate = True
+
+                if (
+                    label["confidence"]
+                    >
+                    existing["confidence"]
+                ):
+
+                    existing.update(
+                        label
+                    )
+
+                break
+
+        if not duplicate:
+
+            filtered.append(
+                label
+            )
+
+    labels = filtered[
+        :MAX_PRICE_LABELS
+    ]
+
+    result["labels"] = labels
+
+    # ========================================================
+    # HIGHEST / LOWEST VISIBLE PRICE
+    # ========================================================
+
+    if labels:
+
+        result["highest_price"] = max(
+            label["price"]
+            for label in labels
+        )
+
+        result["lowest_price"] = min(
+            label["price"]
+            for label in labels
+        )
+
+    # ========================================================
+    # CURRENT PRICE
+    # ========================================================
+    #
+    # We first look for a highlighted price marker/color.
+    # If none is found, we do NOT invent a current price.
+    #
+    # Instead, the caller can estimate it from the latest
+    # candle position against the price-scale labels.
+    # ========================================================
+
+    result["processing_time"] = (
+        time.time() - start
+    )
+
+    return result
+
+
+# ============================================================
+# ESTIMATE PRICE AT Y POSITION
+# ============================================================
+
+def price_from_y(
+    y,
+    price_labels
+):
+
+    if not price_labels:
+        return None
+
+    # Sort labels top -> bottom.
+    labels = sorted(
+        price_labels,
+        key=lambda x: x["y"]
+    )
+
+    # ========================================================
+    # EXACT / NEAR LABEL
+    # ========================================================
+
+    nearest = min(
+        labels,
+        key=lambda x:
+        abs(
+            x["y"] -
+            y
+        )
+    )
+
+    # If the candle is very close to a visible price label,
+    # use that label directly.
+    if abs(
+        nearest["y"] - y
+    ) <= 12:
+
+        return nearest["price"]
+
+    # ========================================================
+    # INTERPOLATION BETWEEN TWO PRICE LABELS
+    # ========================================================
+
+    for i in range(
+        len(labels) - 1
+    ):
+
+        upper = labels[i]
+        lower = labels[i + 1]
+
+        y1 = upper["y"]
+        y2 = lower["y"]
+
+        if (
+            y1 <= y <= y2
+            and
+            y2 != y1
+        ):
+
+            p1 = upper["price"]
+            p2 = lower["price"]
+
+            ratio = (
+                (y - y1) /
+                (y2 - y1)
+            )
+
+            # Screen Y increases downward.
+            price = (
+                p1 +
+                (
+                    p2 - p1
+                ) *
+                ratio
+            )
+
+            return price
+
+    return None
+
+
+# ============================================================
+# ADD PRICE INFORMATION TO CANDLES
+# ============================================================
+
+def attach_price_information(
+    candles,
+    price_data
+):
+
+    labels = price_data.get(
+        "labels",
+        []
+    )
+
+    if not labels:
+
+        for candle in candles:
+
+            candle["price_top"] = None
+            candle["price_bottom"] = None
+            candle["price_center"] = None
+
+        return candles
+
+    for candle in candles:
+
+        x = candle["x"]
+        y = candle["y"]
+        h = candle["h"]
+
+        top_y = float(y)
+
+        bottom_y = float(
+            y + h
+        )
+
+        center_y = float(
+            y +
+            h / 2
+        )
+
+        candle["price_top"] = (
+            price_from_y(
+                top_y,
+                labels
+            )
+        )
+
+        candle["price_bottom"] = (
+            price_from_y(
+                bottom_y,
+                labels
+            )
+        )
+
+        candle["price_center"] = (
+            price_from_y(
+                center_y,
+                labels
+            )
+        )
+
+    return candles
+
+
+# ============================================================
+# FIND CURRENT PRICE FROM RIGHTMOST CANDLE
+# ============================================================
+
+def estimate_current_price(
+    candles,
+    price_data
+):
+
+    labels = price_data.get(
+        "labels",
+        []
+    )
+
+    if not candles or not labels:
+
+        return None
+
+    # Number 1 is the newest/rightmost detected candle.
+    newest = candles[0]
+
+    # Use the center of the newest candle body.
+    center_y = (
+        newest["y"] +
+        newest["h"] / 2
+    )
+
+    price = price_from_y(
+        center_y,
+        labels
+    )
+
+    return price
+
+
+# ============================================================
 # COLOR MASKS
 # ============================================================
 
@@ -139,7 +752,7 @@ def get_color_masks(img):
     )
 
     # ========================================================
-    # 🟣 PURPLE
+    # PURPLE
     # ========================================================
 
     purple_lower = np.array([
@@ -160,9 +773,8 @@ def get_color_masks(img):
         purple_upper
     )
 
-
     # ========================================================
-    # 🟡 YELLOW
+    # YELLOW
     # ========================================================
 
     yellow_lower = np.array([
@@ -183,27 +795,14 @@ def get_color_masks(img):
         yellow_upper
     )
 
-
     # ========================================================
-    # BGR COLOR-DOMINANCE FILTER
-    # ========================================================
-    #
-    # This makes the detector require the actual candle color
-    # to dominate the other channels.
+    # BGR COLOR DOMINANCE
     # ========================================================
 
     b, g, r = cv2.split(img)
 
-
     # ========================================================
-    # 🟣 PURPLE DOMINANCE
-    # ========================================================
-    #
-    # Purple has:
-    #
-    # Red = relatively high
-    # Blue = relatively high
-    # Green = relatively low
+    # PURPLE
     # ========================================================
 
     purple_dominance = (
@@ -228,29 +827,19 @@ def get_color_masks(img):
 
     )
 
-
     purple_dominance_mask = (
         purple_dominance.astype(
             np.uint8
         ) * 255
     )
 
-
     purple = cv2.bitwise_and(
         purple,
         purple_dominance_mask
     )
 
-
     # ========================================================
-    # 🟡 YELLOW DOMINANCE
-    # ========================================================
-    #
-    # Yellow has:
-    #
-    # Red = high
-    # Green = high
-    # Blue = relatively low
+    # YELLOW
     # ========================================================
 
     yellow_dominance = (
@@ -275,19 +864,16 @@ def get_color_masks(img):
 
     )
 
-
     yellow_dominance_mask = (
         yellow_dominance.astype(
             np.uint8
         ) * 255
     )
 
-
     yellow = cv2.bitwise_and(
         yellow,
         yellow_dominance_mask
     )
-
 
     return purple, yellow
 
@@ -303,7 +889,6 @@ def find_candidates(
     right_side=False
 ):
 
-    # Very small morphology.
     kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (2, 2)
@@ -314,7 +899,6 @@ def find_candidates(
         cv2.MORPH_OPEN,
         kernel
     )
-
 
     close_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
@@ -327,16 +911,13 @@ def find_candidates(
         close_kernel
     )
 
-
     contours, _ = cv2.findContours(
         cleaned,
         cv2.RETR_EXTERNAL,
         cv2.CHAIN_APPROX_SIMPLE
     )
 
-
     candidates = []
-
 
     max_width = max(
         10,
@@ -345,7 +926,6 @@ def find_candidates(
             MAX_CANDLE_WIDTH_RATIO
         )
     )
-
 
     if right_side:
 
@@ -357,49 +937,35 @@ def find_candidates(
         min_area = MIN_BODY_AREA
         min_height = MIN_BODY_HEIGHT
 
-
     for contour in contours:
 
         area = cv2.contourArea(
             contour
         )
 
-
         if area < min_area:
             continue
-
 
         x, y, w, h = cv2.boundingRect(
             contour
         )
 
-
         if w < MIN_CANDLE_WIDTH:
             continue
-
 
         if h < min_height:
             continue
 
-
         if w > max_width:
             continue
 
-
-        # Reject long horizontal objects.
         if w > h * 6:
             continue
-
-
-        # ====================================================
-        # BODY PIXEL DENSITY
-        # ====================================================
 
         region = cleaned[
             y:y+h,
             x:x+w
         ]
-
 
         colored_pixels = int(
             np.sum(
@@ -407,10 +973,8 @@ def find_candidates(
             )
         )
 
-
         if colored_pixels < 5:
             continue
-
 
         density = (
             colored_pixels /
@@ -422,20 +986,13 @@ def find_candidates(
             )
         )
 
-
         if density < MIN_COLOR_DENSITY:
             continue
-
-
-        # ====================================================
-        # CENTER
-        # ====================================================
 
         center_x = (
             x +
             w / 2
         )
-
 
         candidates.append({
 
@@ -459,7 +1016,6 @@ def find_candidates(
 
         })
 
-
     return candidates
 
 
@@ -474,21 +1030,17 @@ def merge_candidates(
     if not candidates:
         return []
 
-
     candidates = sorted(
         candidates,
         key=lambda c:
         c["center_x"]
     )
 
-
     merged = []
-
 
     for candidate in candidates:
 
         merged_into_existing = False
-
 
         for existing in merged:
 
@@ -498,35 +1050,29 @@ def merge_candidates(
                 existing["center_x"]
             )
 
-
             allowed = max(
                 candidate["w"],
                 existing["w"],
                 2
             ) * MERGE_DISTANCE_RATIO
 
-
             candidate_top = (
                 candidate["y"]
             )
-
 
             candidate_bottom = (
                 candidate["y"] +
                 candidate["h"]
             )
 
-
             existing_top = (
                 existing["y"]
             )
-
 
             existing_bottom = (
                 existing["y"] +
                 existing["h"]
             )
-
 
             vertical_overlap = not (
 
@@ -540,7 +1086,6 @@ def merge_candidates(
 
             )
 
-
             if (
                 distance <= allowed
                 and
@@ -552,7 +1097,6 @@ def merge_candidates(
                     candidate["x"]
                 )
 
-
                 right = max(
 
                     existing["x"] +
@@ -563,12 +1107,10 @@ def merge_candidates(
 
                 )
 
-
                 top = min(
                     existing["y"],
                     candidate["y"]
                 )
-
 
                 bottom = max(
 
@@ -580,50 +1122,39 @@ def merge_candidates(
 
                 )
 
-
                 existing["x"] = left
-
                 existing["y"] = top
-
                 existing["w"] = (
                     right -
                     left
                 )
-
                 existing["h"] = (
                     bottom -
                     top
                 )
 
                 existing["center_x"] = (
-
                     left +
                     existing["w"] / 2
-
                 )
-
 
                 existing["area"] += (
                     candidate["area"]
                 )
 
-
                 existing["pixels"] += (
                     candidate["pixels"]
                 )
 
-
                 merged_into_existing = True
 
                 break
-
 
         if not merged_into_existing:
 
             merged.append(
                 candidate.copy()
             )
-
 
     return merged
 
@@ -642,14 +1173,11 @@ def remove_cross_color_duplicates(
         c["center_x"]
     )
 
-
     result = []
-
 
     for candle in candles:
 
         duplicate_index = None
-
 
         for i, existing in enumerate(
             result
@@ -663,7 +1191,6 @@ def remove_cross_color_duplicates(
 
             )
 
-
             threshold = max(
 
                 candle["w"],
@@ -672,13 +1199,11 @@ def remove_cross_color_duplicates(
 
             ) * 0.65
 
-
             if distance <= threshold:
 
                 duplicate_index = i
 
                 break
-
 
         if duplicate_index is None:
 
@@ -692,10 +1217,6 @@ def remove_cross_color_duplicates(
                 duplicate_index
             ]
 
-
-            # Keep the candidate with stronger
-            # actual color evidence.
-
             if (
                 candle["pixels"]
                 >
@@ -706,12 +1227,11 @@ def remove_cross_color_duplicates(
                     duplicate_index
                 ] = candle
 
-
     return result
 
 
 # ============================================================
-# MILD RIGHT-SIDE IMPROVEMENT
+# RIGHT-SIDE IMPROVEMENT
 # ============================================================
 
 def detect_right_side(
@@ -720,32 +1240,21 @@ def detect_right_side(
     yellow_mask
 ):
 
-    """
-    Controlled second pass.
-
-    Only the newest/right-side section gets the
-    slightly smaller-body allowance.
-    """
-
     h, w = chart.shape[:2]
-
 
     right_start = int(
         w * 0.72
     )
-
 
     purple_right = purple_mask[
         :,
         right_start:
     ]
 
-
     yellow_right = yellow_mask[
         :,
         right_start:
     ]
-
 
     purple = find_candidates(
         purple_right,
@@ -754,14 +1263,12 @@ def detect_right_side(
         right_side=True
     )
 
-
     yellow = find_candidates(
         yellow_right,
         "YELLOW",
         w,
         right_side=True
     )
-
 
     for candle in (
         purple +
@@ -772,11 +1279,9 @@ def detect_right_side(
             right_start
         )
 
-
         candle["center_x"] += (
             right_start
         )
-
 
     return (
         purple +
@@ -794,15 +1299,9 @@ def detect_candles(
 
     h, w = img.shape[:2]
 
-
     purple_mask, yellow_mask = (
         get_color_masks(img)
     )
-
-
-    # ========================================================
-    # MAIN DETECTION
-    # ========================================================
 
     purple = find_candidates(
         purple_mask,
@@ -811,7 +1310,6 @@ def detect_candles(
         right_side=False
     )
 
-
     yellow = find_candidates(
         yellow_mask,
         "YELLOW",
@@ -819,26 +1317,18 @@ def detect_candles(
         right_side=False
     )
 
-
     purple = merge_candidates(
         purple
     )
-
 
     yellow = merge_candidates(
         yellow
     )
 
-
     candles = (
         purple +
         yellow
     )
-
-
-    # ========================================================
-    # RIGHT-SIDE PASS
-    # ========================================================
 
     right_candidates = (
         detect_right_side(
@@ -848,15 +1338,9 @@ def detect_candles(
         )
     )
 
-
     candles.extend(
         right_candidates
     )
-
-
-    # ========================================================
-    # REMOVE DUPLICATES
-    # ========================================================
 
     candles = (
         remove_cross_color_duplicates(
@@ -864,28 +1348,11 @@ def detect_candles(
         )
     )
 
-
-    # ========================================================
-    # RIGHT → LEFT
-    # ========================================================
-    #
-    # IMPORTANT:
-    #
-    # The newest/rightmost candle becomes #1.
-    #
-    # Then the detector moves:
-    #
-    # #1 → #2 → #3 → #4 ...
-    #
-    # from RIGHT to LEFT.
-    # ========================================================
-
     candles.sort(
         key=lambda c:
         c["center_x"],
         reverse=True
     )
-
 
     return candles
 
@@ -906,7 +1373,6 @@ def create_report(
 
     )
 
-
     yellow = sum(
 
         1
@@ -915,8 +1381,24 @@ def create_report(
 
     )
 
-
     return purple, yellow
+
+
+# ============================================================
+# PRICE FORMAT
+# ============================================================
+
+def format_price(
+    value
+):
+
+    if value is None:
+        return "NOT READ"
+
+    # Keep enough decimal places for forex pairs.
+    return f"{value:.6f}".rstrip(
+        "0"
+    ).rstrip(".")
 
 
 # ============================================================
@@ -925,14 +1407,146 @@ def create_report(
 
 def create_detection_map(
     img,
-    candles
+    candles,
+    price_data,
+    current_price
 ):
 
     output = img.copy()
 
+    labels = price_data.get(
+        "labels",
+        []
+    )
 
     # ========================================================
-    # RIGHT → LEFT NUMBERING
+    # DRAW PRICE SCALE READINGS
+    # ========================================================
+
+    for label in labels:
+
+        y = int(
+            label["y"]
+        )
+
+        price_text = format_price(
+            label["price"]
+        )
+
+        # Small marker at the OCR-read price level.
+        cv2.line(
+            output,
+            (
+                max(
+                    0,
+                    output.shape[1] - 80
+                ),
+                y
+            ),
+            (
+                output.shape[1] - 5,
+                y
+            ),
+            (
+                255,
+                255,
+                255
+            ),
+            1
+        )
+
+        cv2.putText(
+            output,
+            price_text,
+            (
+                max(
+                    5,
+                    output.shape[1] - 150
+                ),
+                max(
+                    20,
+                    y - 4
+                )
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.40,
+            (
+                255,
+                255,
+                255
+            ),
+            1,
+            cv2.LINE_AA
+        )
+
+    # ========================================================
+    # CURRENT PRICE LINE
+    # ========================================================
+
+    if current_price is not None:
+
+        # Find the Y position corresponding to current price.
+        current_y = None
+
+        for label in labels:
+
+            if abs(
+                label["price"] -
+                current_price
+            ) < 0.0000001:
+
+                current_y = int(
+                    label["y"]
+                )
+
+                break
+
+        if current_y is not None:
+
+            cv2.line(
+                output,
+                (
+                    0,
+                    current_y
+                ),
+                (
+                    output.shape[1],
+                    current_y
+                ),
+                (
+                    255,
+                    255,
+                    0
+                ),
+                2
+            )
+
+            cv2.putText(
+                output,
+                (
+                    "CURRENT: "
+                    +
+                    format_price(
+                        current_price
+                    )
+                ),
+                (
+                    20,
+                    35
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (
+                    255,
+                    255,
+                    0
+                ),
+                2,
+                cv2.LINE_AA
+            )
+
+    # ========================================================
+    # CANDLE MAP
     # ========================================================
 
     for number, candle in enumerate(
@@ -944,23 +1558,19 @@ def create_detection_map(
             candle["x"]
         )
 
-
         y = int(
             candle["y"]
         )
-
 
         w = int(
             candle["w"]
         )
 
-
         h = int(
             candle["h"]
         )
 
-
-        # Yellow detection box.
+        # Yellow box around detected body.
         cv2.rectangle(
 
             output,
@@ -978,29 +1588,33 @@ def create_detection_map(
 
         )
 
-
         # ====================================================
-        # COLOR-SPECIFIC NUMBER
+        # NUMBER COLOR
         # ====================================================
 
         if candle["color"] == "PURPLE":
 
-            # 🟣 Purple / BUY
             label_color = (
                 255,
                 0,
                 255
             )
+
+            direction_text = "BUY"
 
         else:
 
-            # 🟡 Yellow / SELL
             label_color = (
                 0,
                 255,
                 255
             )
 
+            direction_text = "SELL"
+
+        # ====================================================
+        # NUMBER
+        # ====================================================
 
         cv2.putText(
 
@@ -1028,6 +1642,111 @@ def create_detection_map(
 
         )
 
+        # ====================================================
+        # CANDLE APPROXIMATE PRICE
+        # ====================================================
+
+        candle_price = candle.get(
+            "price_center"
+        )
+
+        if candle_price is not None:
+
+            price_text = format_price(
+                candle_price
+            )
+
+            text_x = min(
+                output.shape[1] - 150,
+                max(
+                    5,
+                    x
+                )
+            )
+
+            text_y = min(
+                output.shape[0] - 5,
+                max(
+                    20,
+                    y + h + 18
+                )
+            )
+
+            cv2.putText(
+                output,
+                price_text,
+                (
+                    text_x,
+                    text_y
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.38,
+                label_color,
+                1,
+                cv2.LINE_AA
+            )
+
+    # ========================================================
+    # HIGH / LOW INFORMATION
+    # ========================================================
+
+    highest = price_data.get(
+        "highest_price"
+    )
+
+    lowest = price_data.get(
+        "lowest_price"
+    )
+
+    info_y = 65
+
+    cv2.putText(
+        output,
+        (
+            "HIGH: "
+            +
+            format_price(
+                highest
+            )
+        ),
+        (
+            20,
+            info_y
+        ),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (
+            255,
+            255,
+            255
+        ),
+        2,
+        cv2.LINE_AA
+    )
+
+    cv2.putText(
+        output,
+        (
+            "LOW: "
+            +
+            format_price(
+                lowest
+            )
+        ),
+        (
+            20,
+            info_y + 25
+        ),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (
+            255,
+            255,
+            255
+        ),
+        2,
+        cv2.LINE_AA
+    )
 
     return output
 
@@ -1046,16 +1765,13 @@ def handle_photo(
 
     start_time = time.time()
 
-
     original_path = (
         "chart_screenshot.png"
     )
 
-
     detection_path = (
         "candle_detection.png"
     )
-
 
     try:
 
@@ -1063,13 +1779,13 @@ def handle_photo(
 
             message,
 
-            "👁️ Reading visible candles...\n"
+            "👁️ Reading screenshot...\n"
             "➡️ Scanning RIGHT → LEFT.\n"
-            "🟣 Checking PURPLE candles = BUY.\n"
-            "🟡 Checking YELLOW candles = SELL."
+            "🟣 PURPLE = BUY.\n"
+            "🟡 YELLOW = SELL.\n"
+            "💰 Reading visible price scale..."
 
         )
-
 
         # ====================================================
         # DOWNLOAD HIGHEST RESOLUTION
@@ -1081,7 +1797,6 @@ def handle_photo(
 
         )
 
-
         downloaded_file = (
 
             bot.download_file(
@@ -1091,7 +1806,6 @@ def handle_photo(
             )
 
         )
-
 
         with open(
 
@@ -1105,7 +1819,6 @@ def handle_photo(
                 downloaded_file
             )
 
-
         # ====================================================
         # LOAD
         # ====================================================
@@ -1114,15 +1827,41 @@ def handle_photo(
             original_path
         )
 
-
         # ====================================================
-        # DETECT
+        # DETECT CANDLES
         # ====================================================
 
         candles = detect_candles(
             img
         )
 
+        # ====================================================
+        # READ PRICE SCALE
+        # ====================================================
+
+        price_data = read_price_scale(
+            img
+        )
+
+        # ====================================================
+        # ATTACH PRICE TO CANDLES
+        # ====================================================
+
+        candles = attach_price_information(
+            candles,
+            price_data
+        )
+
+        # ====================================================
+        # ESTIMATE CURRENT PRICE
+        # ====================================================
+
+        current_price = (
+            estimate_current_price(
+                candles,
+                price_data
+            )
+        )
 
         # ====================================================
         # COUNT
@@ -1134,24 +1873,20 @@ def handle_photo(
             )
         )
 
-
         total = len(
             candles
         )
-
 
         elapsed = (
             time.time() -
             start_time
         )
 
-
         # ====================================================
         # RIGHT → LEFT SEQUENCE
         # ====================================================
 
         sequence = []
-
 
         for number, candle in enumerate(
 
@@ -1163,20 +1898,33 @@ def handle_photo(
 
             if candle["color"] == "PURPLE":
 
-                sequence.append(
+                direction = "🟣 BUY"
 
-                    f"{number}. 🟣 BUY"
+            else:
 
+                direction = "🟡 SELL"
+
+            candle_price = candle.get(
+                "price_center"
+            )
+
+            if candle_price is not None:
+
+                price_text = format_price(
+                    candle_price
                 )
 
             else:
 
-                sequence.append(
+                price_text = "PRICE?"
 
-                    f"{number}. 🟡 SELL"
+            sequence.append(
 
-                )
+                f"{number}. "
+                f"{direction} "
+                f"@ {price_text}"
 
+            )
 
         sequence_text = (
             "\n".join(
@@ -1184,6 +1932,21 @@ def handle_photo(
             )
         )
 
+        # ====================================================
+        # PRICE RESULTS
+        # ====================================================
+
+        highest_price = (
+            price_data.get(
+                "highest_price"
+            )
+        )
+
+        lowest_price = (
+            price_data.get(
+                "lowest_price"
+            )
+        )
 
         # ====================================================
         # RESULT
@@ -1196,27 +1959,25 @@ def handle_photo(
                 message,
 
                 "❌ No reliable candle bodies detected.\n\n"
-
                 "No candle was generated.\n"
-
                 "No random candle was added.\n"
-
-                "No signal was generated."
+                "No signal was generated.\n\n"
+                "💰 PRICE SCALE:\n"
+                f"Highest: {format_price(highest_price)}\n"
+                f"Lowest: {format_price(lowest_price)}\n"
+                f"Current/nearest: {format_price(current_price)}"
 
             )
 
             return
 
-
         report = (
 
-            "🔎 **CANDLE READING TEST**\n\n"
+            "🔎 **CANDLE + PRICE READING TEST**\n\n"
 
-            "➡️ **SCAN DIRECTION:** "
-            "RIGHT → LEFT\n\n"
+            "➡️ **SCAN:** RIGHT → LEFT\n\n"
 
-            "📊 **WHAT THE BOT ACTUALLY DETECTED:**\n"
-
+            "📊 **CANDLE DETECTION**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
 
             f"🟣 PURPLE / BUY: {purple}\n"
@@ -1225,36 +1986,52 @@ def handle_photo(
 
             f"📊 TOTAL: {total}\n\n"
 
-            "🕯️ **RIGHT → LEFT CANDLE READING:**\n"
+            "💰 **VISIBLE PRICE SCALE**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
 
+            f"⬆️ HIGHEST: "
+            f"{format_price(highest_price)}\n"
+
+            f"⬇️ LOWEST: "
+            f"{format_price(lowest_price)}\n"
+
+            f"📍 CURRENT / NEWEST CANDLE: "
+            f"{format_price(current_price)}\n\n"
+
+            "🕯️ **RIGHT → LEFT READING**\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
 
             f"{sequence_text}\n\n"
 
             "━━━━━━━━━━━━━━━━━━━━\n"
 
-            "🎯 **COLOR CHECK:**\n"
+            "🎯 **COLOR KEY**\n"
 
-            "🟣 = Bot believes the candle is PURPLE / BUY\n"
+            "🟣 = PURPLE / BUY\n"
 
-            "🟡 = Bot believes the candle is YELLOW / SELL\n\n"
+            "🟡 = YELLOW / SELL\n\n"
 
-            "🔢 **NUMBER 1 = NEWEST/RIGHTMOST "
-            "DETECTED CANDLE**\n\n"
+            "💰 **PRICE KEY**\n"
 
-            "⚠️ This is ONLY a candle-reading test.\n"
+            "The price beside each candle is an "
+            "approximation calculated from the visible "
+            "price-scale labels and the candle's vertical "
+            "position.\n\n"
 
-            "No OHLC data is generated.\n"
+            "⚠️ This does NOT invent OHLC data.\n"
 
-            "No random candles are added.\n"
+            "⚠️ It does NOT create random prices.\n"
 
-            "No trading signal is generated.\n\n"
+            "⚠️ If the price scale cannot be read reliably, "
+            "the bot reports NOT READ instead.\n\n"
 
-            f"⚡ Processing time: "
-            f"{elapsed:.2f}s"
+            f"⚡ Total processing time: "
+            f"{elapsed:.2f}s\n"
+
+            f"🔎 Price OCR time: "
+            f"{price_data.get('processing_time', 0):.2f}s"
 
         )
-
 
         bot.reply_to(
 
@@ -1266,7 +2043,6 @@ def handle_photo(
 
         )
 
-
         # ====================================================
         # CREATE DETECTION MAP
         # ====================================================
@@ -1277,12 +2053,15 @@ def handle_photo(
 
                 img,
 
-                candles
+                candles,
+
+                price_data,
+
+                current_price
 
             )
 
         )
-
 
         cv2.imwrite(
 
@@ -1291,7 +2070,6 @@ def handle_photo(
             detection_map
 
         )
-
 
         # ====================================================
         # SEND MAP
@@ -1313,22 +2091,33 @@ def handle_photo(
 
                 caption=(
 
-                    "🔢 **RIGHT → LEFT CANDLE MAP**\n\n"
+                    "🔢 **CANDLE + PRICE DETECTION MAP**\n\n"
 
-                    "Number 1 = newest/rightmost "
-                    "detected candle.\n\n"
+                    "1 = newest/rightmost candle.\n"
 
-                    "➡️ Counting continues "
-                    "from RIGHT → LEFT.\n\n"
+                    "➡️ Numbers continue RIGHT → LEFT.\n\n"
 
-                    "🟨 Yellow box = detected candle body.\n"
+                    "🟣 Number = PURPLE / BUY.\n"
 
-                    "🟣 Number = classified PURPLE / BUY.\n"
+                    "🟡 Number = YELLOW / SELL.\n\n"
 
-                    "🟡 Number = classified YELLOW / SELL.\n\n"
+                    "💰 White numbers/text = price-scale "
+                    "values read from the screenshot.\n\n"
 
-                    "Compare every box with the actual "
-                    "candles in your screenshot."
+                    "💰 Price beside a candle = approximate "
+                    "price calculated from its vertical "
+                    "position against the visible price "
+                    "scale.\n\n"
+
+                    "⬆️ HIGH = highest price label detected.\n"
+
+                    "⬇️ LOW = lowest price label detected.\n"
+
+                    "📍 CURRENT = price estimated from the "
+                    "newest/rightmost detected candle.\n\n"
+
+                    "Please compare the printed prices with "
+                    "the actual price scale in the screenshot."
 
                 ),
 
@@ -1336,17 +2125,12 @@ def handle_photo(
 
             )
 
-
     except Exception as e:
 
         print(
-
             "❌ ERROR:",
-
             repr(e)
-
         )
-
 
         bot.reply_to(
 
@@ -1355,7 +2139,6 @@ def handle_photo(
             f"❌ Detection error:\n{str(e)}"
 
         )
-
 
     finally:
 
@@ -1391,7 +2174,7 @@ print(
 )
 
 print(
-    "🕯️ CANDLE READING TEST"
+    "🕯️ CANDLE + PRICE READING TEST"
 )
 
 print(
@@ -1415,15 +2198,23 @@ print(
 )
 
 print(
-    "🔎 Strict purple detection enabled"
+    "💰 Visible price-scale reading enabled"
 )
 
 print(
-    "🔎 Strict yellow detection enabled"
+    "📈 Highest visible price enabled"
 )
 
 print(
-    "🚫 No OHLC generation"
+    "📉 Lowest visible price enabled"
+)
+
+print(
+    "📍 Current/newest-candle price estimation enabled"
+)
+
+print(
+    "🚫 No fake prices"
 )
 
 print(
@@ -1431,13 +2222,17 @@ print(
 )
 
 print(
-    "🚫 No trading signals"
+    "🚫 No random OHLC"
 )
 
 print(
     "========================================"
 )
 
+
+# ============================================================
+# START TELEGRAM BOT
+# ============================================================
 
 bot.infinity_polling(
 
