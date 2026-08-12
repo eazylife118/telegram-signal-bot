@@ -5099,6 +5099,12 @@ def build_strategy_diagnostic(
 
 # ============================================================
 # DETECTION MAP
+#
+# Draws a box around EVERY candle detected by the bot.
+# Candle #1 = newest candle.
+# The map preserves the original screenshot so you can
+# visually verify whether the detector is selecting
+# the correct candles.
 # ============================================================
 
 def create_detection_map(
@@ -5107,6 +5113,36 @@ def create_detection_map(
 ):
 
     output = img.copy()
+
+    # --------------------------------------------------------
+    # HEADER
+    # --------------------------------------------------------
+
+    cv2.putText(
+        output,
+        f"DETECTED CANDLES: {len(candles)}",
+        (20, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA
+    )
+
+    cv2.putText(
+        output,
+        "CANDLE #1 = NEWEST | RIGHT -> LEFT",
+        (20, 60),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA
+    )
+
+    # --------------------------------------------------------
+    # DRAW EVERY DETECTED CANDLE
+    # --------------------------------------------------------
 
     for number, candle in enumerate(
         candles,
@@ -5117,6 +5153,10 @@ def create_detection_map(
         y = int(candle["y"])
         width = int(candle["w"])
         height = int(candle["h"])
+
+        # ----------------------------------------------------
+        # CANDLE BOX
+        # ----------------------------------------------------
 
         cv2.rectangle(
             output,
@@ -5132,6 +5172,24 @@ def create_detection_map(
             2
         )
 
+        # ----------------------------------------------------
+        # CANDLE CENTER
+        # ----------------------------------------------------
+
+        center_x = (
+            x +
+            width // 2
+        )
+
+        center_y = (
+            y +
+            height // 2
+        )
+
+        # ----------------------------------------------------
+        # COLOR LABEL
+        # ----------------------------------------------------
+
         if candle["color"] == "GREEN":
 
             label_color = (
@@ -5139,6 +5197,8 @@ def create_detection_map(
                 255,
                 0
             )
+
+            color_symbol = "GREEN"
 
         else:
 
@@ -5148,21 +5208,78 @@ def create_detection_map(
                 255
             )
 
+            color_symbol = "RED"
+
+        # ----------------------------------------------------
+        # CANDLE NUMBER
+        # ----------------------------------------------------
+
         cv2.putText(
             output,
-            str(number),
+            f"#{number}",
             (
                 x,
                 max(
-                    25,
-                    y - 7
+                    85,
+                    y - 10
                 )
             ),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.60,
+            0.55,
             label_color,
             2,
             cv2.LINE_AA
+        )
+
+        # ----------------------------------------------------
+        # CANDLE COLOR
+        # ----------------------------------------------------
+
+        cv2.putText(
+            output,
+            color_symbol,
+            (
+                x,
+                y + height + 18
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.38,
+            label_color,
+            1,
+            cv2.LINE_AA
+        )
+
+        # ----------------------------------------------------
+        # BODY / WIDTH INFORMATION
+        # ----------------------------------------------------
+
+        cv2.putText(
+            output,
+            f"{width}x{height}",
+            (
+                x,
+                y + height + 34
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA
+        )
+
+        # ----------------------------------------------------
+        # CENTER POINT
+        # ----------------------------------------------------
+
+        cv2.circle(
+            output,
+            (
+                center_x,
+                center_y
+            ),
+            3,
+            label_color,
+            -1
         )
 
     return output
@@ -5473,6 +5590,42 @@ async def handle_photo(
             detection_map
         )
 
+        # ====================================================
+        # SEND DETECTION MAP TO USER
+        #
+        # This is for visual verification.
+        # It shows exactly which candles the bot detected.
+        # ====================================================
+
+        try:
+
+            with open(
+                detection_path,
+                "rb"
+            ) as detection_file:
+
+                await update.message.reply_photo(
+                    photo=detection_file,
+                    caption=(
+                        "🔍 BOT VISION / DETECTION MAP\n\n"
+                        f"🕯️ Candles detected: {len(candles)}\n"
+                        "➡️ Candle #1 = newest candle\n"
+                        "➡️ Scanning direction: RIGHT → LEFT\n\n"
+                        "🟨 Yellow box = detected candle\n"
+                        "🟢 Green label = bullish candle\n"
+                        "🔴 Red label = bearish candle\n\n"
+                        "Check whether every box is actually "
+                        "on a Pocket Option candle."
+                    )
+                )
+
+        except Exception as map_error:
+
+            print(
+                "❌ Detection map send error:",
+                repr(map_error)
+            )
+
     except Exception as e:
 
         print(
@@ -5751,6 +5904,18 @@ def main():
 
     print(
         "Shows WHY a signal becomes NO SIGNAL"
+    )
+
+    print(
+        "========================================"
+    )
+
+    print(
+        "🖼️ DETECTION MAP ENABLED"
+    )
+
+    print(
+        "Shows EVERY candle detected with yellow boxes"
     )
 
     print(
