@@ -3,17 +3,10 @@ import cv2
 import numpy as np
 import telebot
 import time
-
-# ============================================================
-# FAST PRICE OCR
-# ============================================================
-
-try:
-    import pytesseract
-    TESSERACT_AVAILABLE = True
-except Exception:
-    pytesseract = None
-    TESSERACT_AVAILABLE = False
+import requests
+import base64
+import json
+import re
 
 
 # ============================================================
@@ -25,9 +18,24 @@ TELEGRAM_TOKEN = os.getenv(
     "PASTE_YOUR_BOT_TOKEN_HERE"
 )
 
-bot = telebot.TeleBot(
-    TELEGRAM_TOKEN
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
+
+# ============================================================
+# OPENROUTER
+# ============================================================
+
+OPENROUTER_API_KEY = os.getenv(
+    "OPENROUTER_API_KEY"
 )
+
+OPENROUTER_URL = (
+    "https://openrouter.ai/api/v1/chat/completions"
+)
+
+# OpenRouter automatically chooses a currently available
+# FREE model that supports the required capability.
+OPENROUTER_MODEL = "openrouter/free"
 
 
 # ============================================================
@@ -47,10 +55,8 @@ MERGE_DISTANCE_RATIO = 0.55
 
 
 # ============================================================
-# PURPLE / YELLOW SETTINGS
+# STRICT PURPLE / YELLOW COLOR SETTINGS
 # ============================================================
-
-# PURPLE = BUY / BULLISH
 
 PURPLE_HUE_LOW = 125
 PURPLE_HUE_HIGH = 165
@@ -58,8 +64,6 @@ PURPLE_HUE_HIGH = 165
 MIN_PURPLE_SATURATION = 100
 MIN_PURPLE_VALUE = 70
 
-
-# YELLOW = SELL / BEARISH
 
 YELLOW_HUE_LOW = 18
 YELLOW_HUE_HIGH = 40
@@ -70,32 +74,9 @@ MIN_YELLOW_VALUE = 70
 
 MIN_COLOR_DENSITY = 0.25
 
+
 PURPLE_DOMINANCE_RATIO = 1.20
 YELLOW_DOMINANCE_RATIO = 1.10
-
-
-# ============================================================
-# PRICE SCALE SETTINGS
-# ============================================================
-
-# The price scale is normally on the far-right side.
-#
-# We deliberately do NOT OCR the entire screenshot.
-# This is what keeps the price reading much faster.
-#
-# 0.78 = start OCR at 78% of image width.
-# ============================================================
-
-PRICE_SCALE_START_RATIO = 0.78
-
-# Ignore very tiny OCR results.
-MIN_PRICE_TEXT_HEIGHT = 7
-
-# Maximum number of scale labels we keep.
-MAX_SCALE_LABELS = 30
-
-# A price should normally contain a decimal point.
-MIN_PRICE_DIGITS = 3
 
 
 # ============================================================
@@ -140,6 +121,7 @@ def get_color_masks(img):
         cv2.COLOR_BGR2HSV
     )
 
+
     # ========================================================
     # PURPLE
     # ========================================================
@@ -161,6 +143,7 @@ def get_color_masks(img):
         purple_lower,
         purple_upper
     )
+
 
     # ========================================================
     # YELLOW
@@ -184,11 +167,13 @@ def get_color_masks(img):
         yellow_upper
     )
 
+
     # ========================================================
-    # BGR CHANNELS
+    # BGR
     # ========================================================
 
     b, g, r = cv2.split(img)
+
 
     # ========================================================
     # PURPLE DOMINANCE
@@ -216,16 +201,19 @@ def get_color_masks(img):
 
     )
 
+
     purple_dominance_mask = (
         purple_dominance.astype(
             np.uint8
         ) * 255
     )
 
+
     purple = cv2.bitwise_and(
         purple,
         purple_dominance_mask
     )
+
 
     # ========================================================
     # YELLOW DOMINANCE
@@ -253,16 +241,19 @@ def get_color_masks(img):
 
     )
 
+
     yellow_dominance_mask = (
         yellow_dominance.astype(
             np.uint8
         ) * 255
     )
 
+
     yellow = cv2.bitwise_and(
         yellow,
         yellow_dominance_mask
     )
+
 
     return purple, yellow
 
@@ -283,16 +274,19 @@ def find_candidates(
         (2, 2)
     )
 
+
     cleaned = cv2.morphologyEx(
         mask,
         cv2.MORPH_OPEN,
         kernel
     )
 
+
     close_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (3, 3)
     )
+
 
     cleaned = cv2.morphologyEx(
         cleaned,
@@ -300,13 +294,16 @@ def find_candidates(
         close_kernel
     )
 
+
     contours, _ = cv2.findContours(
         cleaned,
         cv2.RETR_EXTERNAL,
         cv2.CHAIN_APPROX_SIMPLE
     )
 
+
     candidates = []
+
 
     max_width = max(
         10,
@@ -315,6 +312,7 @@ def find_candidates(
             MAX_CANDLE_WIDTH_RATIO
         )
     )
+
 
     if right_side:
 
@@ -326,35 +324,44 @@ def find_candidates(
         min_area = MIN_BODY_AREA
         min_height = MIN_BODY_HEIGHT
 
+
     for contour in contours:
 
         area = cv2.contourArea(
             contour
         )
 
+
         if area < min_area:
             continue
+
 
         x, y, w, h = cv2.boundingRect(
             contour
         )
 
+
         if w < MIN_CANDLE_WIDTH:
             continue
+
 
         if h < min_height:
             continue
 
+
         if w > max_width:
             continue
 
+
         if w > h * 6:
             continue
+
 
         region = cleaned[
             y:y+h,
             x:x+w
         ]
+
 
         colored_pixels = int(
             np.sum(
@@ -362,8 +369,10 @@ def find_candidates(
             )
         )
 
+
         if colored_pixels < 5:
             continue
+
 
         density = (
             colored_pixels /
@@ -375,27 +384,39 @@ def find_candidates(
             )
         )
 
+
         if density < MIN_COLOR_DENSITY:
             continue
+
 
         center_x = (
             x +
             w / 2
         )
 
+
         candidates.append({
 
             "x": x,
+
             "y": y,
+
             "w": w,
+
             "h": h,
+
             "area": float(area),
+
             "pixels": colored_pixels,
+
             "density": density,
+
             "center_x": center_x,
+
             "color": color
 
         })
+
 
     return candidates
 
@@ -411,17 +432,21 @@ def merge_candidates(
     if not candidates:
         return []
 
+
     candidates = sorted(
         candidates,
         key=lambda c:
         c["center_x"]
     )
 
+
     merged = []
+
 
     for candidate in candidates:
 
         merged_into_existing = False
+
 
         for existing in merged:
 
@@ -431,29 +456,35 @@ def merge_candidates(
                 existing["center_x"]
             )
 
+
             allowed = max(
                 candidate["w"],
                 existing["w"],
                 2
             ) * MERGE_DISTANCE_RATIO
 
+
             candidate_top = (
                 candidate["y"]
             )
+
 
             candidate_bottom = (
                 candidate["y"] +
                 candidate["h"]
             )
 
+
             existing_top = (
                 existing["y"]
             )
+
 
             existing_bottom = (
                 existing["y"] +
                 existing["h"]
             )
+
 
             vertical_overlap = not (
 
@@ -467,6 +498,7 @@ def merge_candidates(
 
             )
 
+
             if (
                 distance <= allowed
                 and
@@ -478,6 +510,7 @@ def merge_candidates(
                     candidate["x"]
                 )
 
+
                 right = max(
 
                     existing["x"] +
@@ -488,10 +521,12 @@ def merge_candidates(
 
                 )
 
+
                 top = min(
                     existing["y"],
                     candidate["y"]
                 )
+
 
                 bottom = max(
 
@@ -503,7 +538,9 @@ def merge_candidates(
 
                 )
 
+
                 existing["x"] = left
+
                 existing["y"] = top
 
                 existing["w"] = (
@@ -516,6 +553,7 @@ def merge_candidates(
                     top
                 )
 
+
                 existing["center_x"] = (
 
                     left +
@@ -523,23 +561,28 @@ def merge_candidates(
 
                 )
 
+
                 existing["area"] += (
                     candidate["area"]
                 )
+
 
                 existing["pixels"] += (
                     candidate["pixels"]
                 )
 
+
                 merged_into_existing = True
 
                 break
+
 
         if not merged_into_existing:
 
             merged.append(
                 candidate.copy()
             )
+
 
     return merged
 
@@ -558,11 +601,14 @@ def remove_cross_color_duplicates(
         c["center_x"]
     )
 
+
     result = []
+
 
     for candle in candles:
 
         duplicate_index = None
+
 
         for i, existing in enumerate(
             result
@@ -576,6 +622,7 @@ def remove_cross_color_duplicates(
 
             )
 
+
             threshold = max(
 
                 candle["w"],
@@ -584,11 +631,13 @@ def remove_cross_color_duplicates(
 
             ) * 0.65
 
+
             if distance <= threshold:
 
                 duplicate_index = i
 
                 break
+
 
         if duplicate_index is None:
 
@@ -602,6 +651,7 @@ def remove_cross_color_duplicates(
                 duplicate_index
             ]
 
+
             if (
                 candle["pixels"]
                 >
@@ -611,6 +661,7 @@ def remove_cross_color_duplicates(
                 result[
                     duplicate_index
                 ] = candle
+
 
     return result
 
@@ -627,19 +678,23 @@ def detect_right_side(
 
     h, w = chart.shape[:2]
 
+
     right_start = int(
         w * 0.72
     )
+
 
     purple_right = purple_mask[
         :,
         right_start:
     ]
 
+
     yellow_right = yellow_mask[
         :,
         right_start:
     ]
+
 
     purple = find_candidates(
         purple_right,
@@ -648,12 +703,14 @@ def detect_right_side(
         right_side=True
     )
 
+
     yellow = find_candidates(
         yellow_right,
         "YELLOW",
         w,
         right_side=True
     )
+
 
     for candle in (
         purple +
@@ -664,9 +721,11 @@ def detect_right_side(
             right_start
         )
 
+
         candle["center_x"] += (
             right_start
         )
+
 
     return (
         purple +
@@ -684,9 +743,11 @@ def detect_candles(
 
     h, w = img.shape[:2]
 
+
     purple_mask, yellow_mask = (
         get_color_masks(img)
     )
+
 
     purple = find_candidates(
         purple_mask,
@@ -695,6 +756,7 @@ def detect_candles(
         right_side=False
     )
 
+
     yellow = find_candidates(
         yellow_mask,
         "YELLOW",
@@ -702,18 +764,22 @@ def detect_candles(
         right_side=False
     )
 
+
     purple = merge_candidates(
         purple
     )
+
 
     yellow = merge_candidates(
         yellow
     )
 
+
     candles = (
         purple +
         yellow
     )
+
 
     right_candidates = (
         detect_right_side(
@@ -723,9 +789,11 @@ def detect_candles(
         )
     )
 
+
     candles.extend(
         right_candidates
     )
+
 
     candles = (
         remove_cross_color_duplicates(
@@ -733,537 +801,19 @@ def detect_candles(
         )
     )
 
+
     candles.sort(
         key=lambda c:
         c["center_x"],
         reverse=True
     )
 
-    return candles
-
-
-# ============================================================
-# FAST PRICE SCALE OCR
-# ============================================================
-
-def clean_price_text(text):
-
-    text = text.strip()
-
-    # Remove common OCR garbage.
-    text = text.replace(
-        ",",
-        "."
-    )
-
-    text = text.replace(
-        " ",
-        ""
-    )
-
-    # Keep only digits and decimal point.
-    cleaned = ""
-
-    for char in text:
-
-        if char.isdigit() or char == ".":
-
-            cleaned += char
-
-    # Avoid multiple decimal points.
-    parts = cleaned.split(".")
-
-    if len(parts) > 2:
-
-        cleaned = (
-            parts[0]
-            +
-            "."
-            +
-            "".join(
-                parts[1:]
-            )
-        )
-
-    return cleaned
-
-
-# ============================================================
-# CHECK WHETHER OCR TEXT LOOKS LIKE A PRICE
-# ============================================================
-
-def looks_like_price(text):
-
-    text = clean_price_text(
-        text
-    )
-
-    if not text:
-        return False
-
-    digits = sum(
-        char.isdigit()
-        for char in text
-    )
-
-    if digits < MIN_PRICE_DIGITS:
-        return False
-
-    try:
-
-        value = float(
-            text
-        )
-
-    except Exception:
-
-        return False
-
-    # Reject obvious UI numbers.
-    if value <= 0:
-        return False
-
-    # Currency prices in this application are
-    # expected to be within a reasonable range.
-    if value > 1000000:
-        return False
-
-    return True
-
-
-# ============================================================
-# OCR PRICE SCALE
-# ============================================================
-
-def read_price_scale(
-    img
-):
-
-    start_time = time.time()
-
-    if not TESSERACT_AVAILABLE:
-
-        return [], 0.0
-
-    h, w = img.shape[:2]
-
-    # ========================================================
-    # ONLY READ FAR-RIGHT PRICE SCALE
-    # ========================================================
-
-    start_x = int(
-        w *
-        PRICE_SCALE_START_RATIO
-    )
-
-    roi = img[
-        :,
-        start_x:
-    ]
-
-    if roi.size == 0:
-
-        return [], (
-            time.time() -
-            start_time
-        )
-
-    # ========================================================
-    # UPSCALE ONLY THE PRICE SCALE
-    # ========================================================
-
-    scale = 1.6
-
-    roi = cv2.resize(
-        roi,
-        None,
-        fx=scale,
-        fy=scale,
-        interpolation=cv2.INTER_CUBIC
-    )
-
-    gray = cv2.cvtColor(
-        roi,
-        cv2.COLOR_BGR2GRAY
-    )
-
-    # ========================================================
-    # CREATE TWO FAST OCR VERSIONS
-    # ========================================================
-
-    # Bright text / white labels.
-    _, threshold = cv2.threshold(
-        gray,
-        150,
-        255,
-        cv2.THRESH_BINARY
-    )
-
-    # Adaptive version helps when the chart background
-    # is not perfectly uniform.
-    adaptive = cv2.adaptiveThreshold(
-        gray,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        21,
-        8
-    )
-
-    configurations = [
-
-        (
-            threshold,
-            "--psm 6 "
-            "-c tessedit_char_whitelist=0123456789."
-        ),
-
-        (
-            adaptive,
-            "--psm 11 "
-            "-c tessedit_char_whitelist=0123456789."
-        )
-
-    ]
-
-    labels = []
-
-    for image, config in configurations:
-
-        try:
-
-            data = pytesseract.image_to_data(
-                image,
-                config=config,
-                output_type=pytesseract.Output.DICT
-            )
-
-        except Exception:
-
-            continue
-
-        count = len(
-            data["text"]
-        )
-
-        for i in range(count):
-
-            raw_text = data[
-                "text"
-            ][i]
-
-            text = clean_price_text(
-                raw_text
-            )
-
-            if not looks_like_price(
-                text
-            ):
-                continue
-
-            try:
-
-                confidence = float(
-                    data["conf"][i]
-                )
-
-            except Exception:
-
-                confidence = 0
-
-            if confidence < 20:
-
-                continue
-
-            x = int(
-                data["left"][i]
-            )
-
-            y = int(
-                data["top"][i]
-            )
-
-            box_w = int(
-                data["width"][i]
-            )
-
-            box_h = int(
-                data["height"][i]
-            )
-
-            if box_h < (
-                MIN_PRICE_TEXT_HEIGHT *
-                scale
-            ):
-
-                continue
-
-            try:
-
-                value = float(
-                    text
-                )
-
-            except Exception:
-
-                continue
-
-            # Convert coordinates back to original image.
-            center_x = (
-                start_x +
-                (
-                    x +
-                    box_w / 2
-                ) / scale
-            )
-
-            center_y = (
-                (
-                    y +
-                    box_h / 2
-                ) / scale
-            )
-
-            labels.append({
-
-                "price": value,
-
-                "x": center_x,
-
-                "y": center_y,
-
-                "confidence": confidence,
-
-                "text": text
-
-            })
-
-    # ========================================================
-    # SORT BY VERTICAL POSITION
-    # ========================================================
-
-    labels.sort(
-        key=lambda item:
-        item["y"]
-    )
-
-    # ========================================================
-    # REMOVE DUPLICATE OCR RESULTS
-    # ========================================================
-
-    cleaned_labels = []
-
-    for label in labels:
-
-        duplicate = False
-
-        for existing in cleaned_labels:
-
-            same_y = abs(
-                label["y"] -
-                existing["y"]
-            ) < 12
-
-            same_price = abs(
-                label["price"] -
-                existing["price"]
-            ) < 0.0000001
-
-            if same_y and same_price:
-
-                duplicate = True
-
-                if (
-                    label["confidence"]
-                    >
-                    existing["confidence"]
-                ):
-
-                    existing.update(
-                        label
-                    )
-
-                break
-
-        if not duplicate:
-
-            cleaned_labels.append(
-                label
-            )
-
-    # ========================================================
-    # LIMIT RESULT
-    # ========================================================
-
-    cleaned_labels = (
-        cleaned_labels[
-            :MAX_SCALE_LABELS
-        ]
-    )
-
-    elapsed = (
-        time.time() -
-        start_time
-    )
-
-    return (
-        cleaned_labels,
-        elapsed
-    )
-
-
-# ============================================================
-# PRICE INTERPOLATION
-# ============================================================
-
-def price_from_y(
-    y,
-    scale_labels
-):
-
-    if len(scale_labels) < 2:
-
-        return None
-
-    labels = sorted(
-        scale_labels,
-        key=lambda item:
-        item["y"]
-    )
-
-    # ========================================================
-    # EXACT / NEAR LABEL
-    # ========================================================
-
-    for label in labels:
-
-        if abs(
-            y -
-            label["y"]
-        ) < 2:
-
-            return label[
-                "price"
-            ]
-
-    # ========================================================
-    # BETWEEN TWO LABELS
-    # ========================================================
-
-    for i in range(
-        len(labels) - 1
-    ):
-
-        upper = labels[i]
-        lower = labels[i + 1]
-
-        if (
-            upper["y"]
-            <= y
-            <=
-            lower["y"]
-        ):
-
-            y1 = upper["y"]
-            y2 = lower["y"]
-
-            p1 = upper["price"]
-            p2 = lower["price"]
-
-            if abs(
-                y2 -
-                y1
-            ) < 0.001:
-
-                return None
-
-            ratio = (
-                (y - y1)
-                /
-                (y2 - y1)
-            )
-
-            price = (
-                p1 +
-                ratio *
-                (p2 - p1)
-            )
-
-            return price
-
-    # ========================================================
-    # OUTSIDE VISIBLE SCALE
-    # ========================================================
-
-    return None
-
-
-# ============================================================
-# CANDLE CLOSE Y POSITION
-# ============================================================
-#
-# IMPORTANT:
-#
-# PURPLE/BULLISH:
-# close is normally at the TOP of the body.
-#
-# YELLOW/BEARISH:
-# close is normally at the BOTTOM of the body.
-#
-# This gives us a much better estimate than simply using
-# the middle of the candle.
-# ============================================================
-
-def candle_close_y(
-    candle
-):
-
-    y = candle["y"]
-    h = candle["h"]
-
-    if candle["color"] == "PURPLE":
-
-        return float(
-            y
-        )
-
-    else:
-
-        return float(
-            y +
-            h
-        )
-
-
-# ============================================================
-# ADD PRICES TO CANDLES
-# ============================================================
-
-def attach_prices(
-    candles,
-    scale_labels
-):
-
-    for candle in candles:
-
-        close_y = candle_close_y(
-            candle
-        )
-
-        price = price_from_y(
-            close_y,
-            scale_labels
-        )
-
-        candle["price"] = price
-
-        candle["close_y"] = close_y
 
     return candles
 
 
 # ============================================================
-# CREATE REPORT
+# REPORT
 # ============================================================
 
 def create_report(
@@ -1278,6 +828,7 @@ def create_report(
 
     )
 
+
     yellow = sum(
 
         1
@@ -1286,149 +837,47 @@ def create_report(
 
     )
 
+
     return purple, yellow
 
 
 # ============================================================
-# FORMAT PRICE
-# ============================================================
-
-def format_price(
-    price
-):
-
-    if price is None:
-
-        return "NOT READ"
-
-    # Automatically show enough decimal places.
-    if price >= 100:
-
-        return f"{price:.3f}"
-
-    if price >= 1:
-
-        return f"{price:.5f}"
-
-    return f"{price:.6f}"
-
-
-# ============================================================
-# CREATE DETECTION MAP
+# DETECTION MAP
 # ============================================================
 
 def create_detection_map(
     img,
-    candles,
-    scale_labels
+    candles
 ):
 
     output = img.copy()
 
-    # ========================================================
-    # DRAW PRICE SCALE LABELS
-    # ========================================================
-
-    for label in scale_labels:
-
-        x = int(
-            label["x"]
-        )
-
-        y = int(
-            label["y"]
-        )
-
-        price_text = format_price(
-            label["price"]
-        )
-
-        # White price-scale text.
-        cv2.putText(
-
-            output,
-
-            price_text,
-
-            (
-                max(
-                    0,
-                    x - 100
-                ),
-                max(
-                    20,
-                    y
-                )
-            ),
-
-            cv2.FONT_HERSHEY_SIMPLEX,
-
-            0.48,
-
-            (255, 255, 255),
-
-            1,
-
-            cv2.LINE_AA
-
-        )
-
-        # Small horizontal marker.
-        cv2.line(
-
-            output,
-
-            (
-                max(
-                    0,
-                    x - 120
-                ),
-                y
-            ),
-
-            (
-                min(
-                    output.shape[1] - 1,
-                    x + 10
-                ),
-                y
-            ),
-
-            (255, 255, 255),
-
-            1
-
-        )
-
-    # ========================================================
-    # DRAW CANDLES
-    # ========================================================
 
     for number, candle in enumerate(
-
         candles,
-
         start=1
-
     ):
 
         x = int(
             candle["x"]
         )
 
+
         y = int(
             candle["y"]
         )
+
 
         w = int(
             candle["w"]
         )
 
+
         h = int(
             candle["h"]
         )
 
-        # Yellow detection box.
+
         cv2.rectangle(
 
             output,
@@ -1446,9 +895,6 @@ def create_detection_map(
 
         )
 
-        # ====================================================
-        # NUMBER COLOR
-        # ====================================================
 
         if candle["color"] == "PURPLE":
 
@@ -1465,6 +911,7 @@ def create_detection_map(
                 255,
                 255
             )
+
 
         cv2.putText(
 
@@ -1492,94 +939,517 @@ def create_detection_map(
 
         )
 
-        # ====================================================
-        # PRICE BESIDE CANDLE
-        # ====================================================
-
-        price_text = format_price(
-            candle.get(
-                "price"
-            )
-        )
-
-        # Put price immediately to the left of the candle
-        # when possible.
-        price_x = max(
-            2,
-            x - 105
-        )
-
-        price_y = max(
-            20,
-            int(
-                candle["close_y"]
-            )
-        )
-
-        cv2.putText(
-
-            output,
-
-            price_text,
-
-            (
-                price_x,
-                price_y
-            ),
-
-            cv2.FONT_HERSHEY_SIMPLEX,
-
-            0.42,
-
-            (255, 255, 255),
-
-            1,
-
-            cv2.LINE_AA
-
-        )
 
     return output
 
 
 # ============================================================
-# PRICE SUMMARY
+# OPENROUTER VISION
 # ============================================================
 
-def get_price_summary(
-    candles,
-    scale_labels
+def analyze_with_openrouter(
+    image_path
 ):
 
-    if not scale_labels:
+    if not OPENROUTER_API_KEY:
 
-        highest = None
-        lowest = None
+        return {
 
-    else:
+            "success": False,
 
-        highest = max(
-            label["price"]
-            for label in scale_labels
+            "error":
+            "OPENROUTER_API_KEY is not set in Render."
+
+        }
+
+
+    start = time.time()
+
+
+    try:
+
+        with open(
+            image_path,
+            "rb"
+        ) as image_file:
+
+            image_bytes = (
+                image_file.read()
+            )
+
+
+        base64_image = (
+            base64.b64encode(
+                image_bytes
+            ).decode(
+                "utf-8"
+            )
         )
 
-        lowest = min(
-            label["price"]
-            for label in scale_labels
+
+        prompt = r"""
+You are analyzing a screenshot of a 1-minute financial trading chart.
+
+IMPORTANT:
+Do NOT invent numbers.
+Do NOT estimate a price if the visible price scale cannot support it.
+Do NOT confuse random numbers, timestamps, indicators, account values,
+or UI numbers with the chart's price scale.
+
+Your job is ONLY to visually inspect the screenshot.
+
+Focus on the RIGHT-SIDE VERTICAL PRICE SCALE.
+
+Identify:
+
+1. HIGHEST visible price-scale value.
+2. LOWEST visible price-scale value.
+3. CURRENT price ONLY if there is a clearly visible current-price marker,
+   current-price label, or clearly readable live price associated with
+   the newest/rightmost candle.
+4. The direction of the most recent 2-5 visible candles:
+   UP, DOWN, or RANGE.
+5. Whether the recent movement appears strongly aligned or mixed.
+
+Also inspect the candles:
+- Purple candles are bullish/BUY.
+- Yellow candles are bearish/SELL.
+
+Do not create OHLC values that are not visible.
+
+Return ONLY valid JSON in exactly this structure:
+
+{
+  "highest_price": null,
+  "lowest_price": null,
+  "current_price": null,
+  "direction": "UP/DOWN/RANGE/UNCERTAIN",
+  "recent_alignment": "BULLISH/BEARISH/MIXED/UNCERTAIN",
+  "price_scale_visible": true,
+  "confidence": 0,
+  "notes": ""
+}
+
+Rules:
+
+- highest_price must be the highest ACTUAL price number visible on
+  the chart's vertical price scale.
+- lowest_price must be the lowest ACTUAL price number visible on
+  the chart's vertical price scale.
+- If you cannot read a value confidently, use null.
+- Never use a made-up value.
+- Do not use the candle's vertical position to invent a price.
+- Confidence must be 0-100.
+- Keep notes short.
+"""
+
+
+        payload = {
+
+            "model":
+            OPENROUTER_MODEL,
+
+            "messages": [
+
+                {
+
+                    "role":
+                    "user",
+
+                    "content": [
+
+                        {
+
+                            "type":
+                            "text",
+
+                            "text":
+                            prompt
+
+                        },
+
+                        {
+
+                            "type":
+                            "image_url",
+
+                            "image_url": {
+
+                                "url":
+                                "data:image/png;base64,"
+                                +
+                                base64_image
+
+                            }
+
+                        }
+
+                    ]
+
+                }
+
+            ],
+
+            "temperature":
+            0,
+
+            "max_tokens":
+            500
+
+        }
+
+
+        headers = {
+
+            "Authorization":
+            "Bearer "
+            +
+            OPENROUTER_API_KEY,
+
+            "Content-Type":
+            "application/json",
+
+            "HTTP-Referer":
+            "https://render.com",
+
+            "X-Title":
+            "OTC Candle Price Vision Test"
+
+        }
+
+
+        response = requests.post(
+
+            OPENROUTER_URL,
+
+            headers=headers,
+
+            json=payload,
+
+            timeout=15
+
         )
 
-    current = None
 
-    if candles:
-
-        current = candles[0].get(
-            "price"
+        elapsed = (
+            time.time() -
+            start
         )
+
+
+        if response.status_code != 200:
+
+            return {
+
+                "success": False,
+
+                "error":
+                f"OpenRouter HTTP "
+                f"{response.status_code}: "
+                f"{response.text[:1000]}",
+
+                "elapsed":
+                elapsed
+
+            }
+
+
+        data = response.json()
+
+
+        try:
+
+            content = (
+                data[
+                    "choices"
+                ][0][
+                    "message"
+                ][
+                    "content"
+                ]
+            )
+
+        except Exception:
+
+            return {
+
+                "success": False,
+
+                "error":
+                "OpenRouter returned no readable content.",
+
+                "raw":
+                str(data)[:1500],
+
+                "elapsed":
+                elapsed
+
+            }
+
+
+        # ====================================================
+        # CLEAN MARKDOWN JSON IF MODEL ADDS IT
+        # ====================================================
+
+        content = content.strip()
+
+
+        content = re.sub(
+
+            r"^```json\s*",
+
+            "",
+
+            content,
+
+            flags=re.IGNORECASE
+
+        )
+
+
+        content = re.sub(
+
+            r"^```\s*",
+
+            "",
+
+            content
+
+        )
+
+
+        content = re.sub(
+
+            r"\s*```$",
+
+            "",
+
+            content
+
+        )
+
+
+        # ====================================================
+        # EXTRACT JSON OBJECT
+        # ====================================================
+
+        match = re.search(
+
+            r"\{.*\}",
+
+            content,
+
+            flags=re.DOTALL
+
+        )
+
+
+        if not match:
+
+            return {
+
+                "success": False,
+
+                "error":
+                "Vision model did not return JSON.",
+
+                "raw":
+                content[:2000],
+
+                "elapsed":
+                elapsed
+
+            }
+
+
+        json_text = (
+            match.group(0)
+        )
+
+
+        try:
+
+            result = json.loads(
+                json_text
+            )
+
+        except Exception:
+
+            return {
+
+                "success": False,
+
+                "error":
+                "Could not parse vision JSON.",
+
+                "raw":
+                content[:2000],
+
+                "elapsed":
+                elapsed
+
+            }
+
+
+        result["success"] = True
+
+        result["elapsed"] = elapsed
+
+        result["raw"] = content
+
+
+        return result
+
+
+    except requests.exceptions.Timeout:
+
+        return {
+
+            "success": False,
+
+            "error":
+            "OpenRouter vision request timed out.",
+
+            "elapsed":
+            time.time() - start
+
+        }
+
+
+    except Exception as e:
+
+        return {
+
+            "success": False,
+
+            "error":
+            str(e),
+
+            "elapsed":
+            time.time() - start
+
+        }
+
+
+# ============================================================
+# FORMAT VISION RESULT
+# ============================================================
+
+def format_vision_result(
+    vision
+):
+
+    if not vision.get(
+        "success",
+        False
+    ):
+
+        return (
+
+            "👁️ **OPENROUTER VISION**\n\n"
+
+            "❌ Vision reading failed.\n\n"
+
+            f"Error: "
+            f"{vision.get('error', 'Unknown error')}"
+
+        )
+
+
+    highest = vision.get(
+        "highest_price"
+    )
+
+
+    lowest = vision.get(
+        "lowest_price"
+    )
+
+
+    current = vision.get(
+        "current_price"
+    )
+
+
+    direction = vision.get(
+        "direction",
+        "UNCERTAIN"
+    )
+
+
+    alignment = vision.get(
+        "recent_alignment",
+        "UNCERTAIN"
+    )
+
+
+    confidence = vision.get(
+        "confidence",
+        0
+    )
+
+
+    notes = vision.get(
+        "notes",
+        ""
+    )
+
+
+    highest_text = (
+        str(highest)
+        if highest is not None
+        else "NOT READ"
+    )
+
+
+    lowest_text = (
+        str(lowest)
+        if lowest is not None
+        else "NOT READ"
+    )
+
+
+    current_text = (
+        str(current)
+        if current is not None
+        else "NOT READ"
+    )
+
 
     return (
-        highest,
-        lowest,
-        current
+
+        "👁️ **OPENROUTER VISION READING**\n\n"
+
+        "💰 **VISIBLE PRICE SCALE**\n"
+
+        "━━━━━━━━━━━━━━━━━━━━\n"
+
+        f"⬆️ HIGHEST: "
+        f"{highest_text}\n"
+
+        f"⬇️ LOWEST: "
+        f"{lowest_text}\n"
+
+        f"📍 CURRENT: "
+        f"{current_text}\n\n"
+
+        "📈 **RECENT MOVEMENT**\n"
+
+        "━━━━━━━━━━━━━━━━━━━━\n"
+
+        f"Direction: {direction}\n"
+
+        f"Alignment: {alignment}\n"
+
+        f"Confidence: {confidence}%\n\n"
+
+        "📝 "
+
+        f"{notes if notes else 'No additional notes.'}\n\n"
+
+        f"⚡ Vision time: "
+        f"{vision.get('elapsed', 0):.2f}s"
+
     )
 
 
@@ -1597,13 +1467,16 @@ def handle_photo(
 
     start_time = time.time()
 
+
     original_path = (
         "chart_screenshot.png"
     )
 
+
     detection_path = (
-        "candle_price_detection.png"
+        "candle_detection.png"
     )
+
 
     try:
 
@@ -1611,13 +1484,15 @@ def handle_photo(
 
             message,
 
-            "👁️ Reading screenshot...\n"
+            "👁️ Reading chart...\n"
             "➡️ Scanning RIGHT → LEFT.\n"
-            "🟣 Purple = BUY.\n"
-            "🟡 Yellow = SELL.\n"
-            "💰 Reading visible price scale..."
+            "🟣 Detecting PURPLE candles.\n"
+            "🟡 Detecting YELLOW candles.\n"
+            "💰 Sending the screenshot to "
+            "OpenRouter Vision for price-scale reading..."
 
         )
+
 
         # ====================================================
         # DOWNLOAD HIGHEST RESOLUTION
@@ -1629,6 +1504,7 @@ def handle_photo(
 
         )
 
+
         downloaded_file = (
 
             bot.download_file(
@@ -1638,6 +1514,7 @@ def handle_photo(
             )
 
         )
+
 
         with open(
 
@@ -1651,13 +1528,15 @@ def handle_photo(
                 downloaded_file
             )
 
+
         # ====================================================
-        # LOAD
+        # LOAD IMAGE
         # ====================================================
 
         img = load_image(
             original_path
         )
+
 
         # ====================================================
         # CANDLE DETECTION
@@ -1665,36 +1544,21 @@ def handle_photo(
 
         candle_start = time.time()
 
+
         candles = detect_candles(
             img
         )
 
-        candle_time = (
-            time.time() -
+
+        candle_elapsed = (
+            time.time()
+            -
             candle_start
         )
 
-        # ====================================================
-        # PRICE SCALE OCR
-        # ====================================================
-
-        scale_labels, ocr_time = (
-            read_price_scale(
-                img
-            )
-        )
 
         # ====================================================
-        # MAP PRICE TO CANDLES
-        # ====================================================
-
-        candles = attach_prices(
-            candles,
-            scale_labels
-        )
-
-        # ====================================================
-        # COUNTS
+        # COUNT
         # ====================================================
 
         purple, yellow = (
@@ -1703,31 +1567,29 @@ def handle_photo(
             )
         )
 
+
         total = len(
             candles
         )
 
+
         # ====================================================
-        # PRICE SUMMARY
+        # OPENROUTER VISION
         # ====================================================
 
-        highest, lowest, current = (
-            get_price_summary(
-                candles,
-                scale_labels
+        vision = (
+            analyze_with_openrouter(
+                original_path
             )
         )
 
-        elapsed = (
-            time.time() -
-            start_time
-        )
 
         # ====================================================
-        # RIGHT → LEFT SEQUENCE
+        # CANDLE SEQUENCE
         # ====================================================
 
         sequence = []
+
 
         for number, candle in enumerate(
 
@@ -1737,20 +1599,11 @@ def handle_photo(
 
         ):
 
-            price_text = format_price(
-
-                candle.get(
-                    "price"
-                )
-
-            )
-
             if candle["color"] == "PURPLE":
 
                 sequence.append(
 
-                    f"{number}. 🟣 BUY "
-                    f"@ {price_text}"
+                    f"{number}. 🟣 BUY"
 
                 )
 
@@ -1758,10 +1611,10 @@ def handle_photo(
 
                 sequence.append(
 
-                    f"{number}. 🟡 SELL "
-                    f"@ {price_text}"
+                    f"{number}. 🟡 SELL"
 
                 )
+
 
         sequence_text = (
             "\n".join(
@@ -1769,32 +1622,21 @@ def handle_photo(
             )
         )
 
-        # ====================================================
-        # NO CANDLES
-        # ====================================================
-
-        if total == 0:
-
-            bot.reply_to(
-
-                message,
-
-                "❌ No reliable candle bodies detected.\n\n"
-                "No candle was generated.\n"
-                "No random candle was added.\n"
-                "No signal was generated."
-
-            )
-
-            return
 
         # ====================================================
-        # REPORT
+        # MAIN REPORT
         # ====================================================
+
+        elapsed = (
+            time.time()
+            -
+            start_time
+        )
+
 
         report = (
 
-            "🔎 **CANDLE + PRICE READING TEST**\n\n"
+            "🔎 **CANDLE + VISION READING TEST**\n\n"
 
             "➡️ **SCAN:** RIGHT → LEFT\n\n"
 
@@ -1808,20 +1650,16 @@ def handle_photo(
 
             f"📊 TOTAL: {total}\n\n"
 
-            "💰 **VISIBLE PRICE SCALE**\n"
+            f"🕯️ Candle detection time: "
+            f"{candle_elapsed:.2f}s\n\n"
 
-            "━━━━━━━━━━━━━━━━━━━━\n"
+            "💰 **VISION PRICE READING**\n"
 
-            f"⬆️ HIGHEST: "
-            f"{format_price(highest)}\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
 
-            f"⬇️ LOWEST: "
-            f"{format_price(lowest)}\n"
+            f"{format_vision_result(vision)}\n\n"
 
-            f"📍 CURRENT / NEWEST CANDLE: "
-            f"{format_price(current)}\n\n"
-
-            "🕯️ **RIGHT → LEFT READING**\n"
+            "🕯️ **RIGHT → LEFT CANDLE READING**\n"
 
             "━━━━━━━━━━━━━━━━━━━━\n"
 
@@ -1835,38 +1673,20 @@ def handle_photo(
 
             "🟡 = YELLOW / SELL\n\n"
 
-            "💰 **PRICE KEY**\n"
+            "⚠️ This is a reading test only.\n"
 
-            "The candle price is calculated from "
-            "the candle's close position and the "
-            "visible price-scale labels.\n\n"
-
-            "📌 PURPLE close = upper body position.\n"
-
-            "📌 YELLOW close = lower body position.\n\n"
-
-            "⚠️ These are screenshot-derived prices.\n"
-
-            "⚠️ They are NOT generated market data.\n"
+            "⚠️ No random candles are generated.\n"
 
             "⚠️ No random prices are generated.\n"
 
-            "⚠️ If the scale cannot be read reliably, "
-            "the bot reports NOT READ.\n\n"
+            "⚠️ Vision must return NULL/NOT READ "
+            "when it cannot confidently read a price.\n\n"
 
             f"⚡ Total processing time: "
-            f"{elapsed:.2f}s\n"
-
-            f"🕯️ Candle detection time: "
-            f"{candle_time:.2f}s\n"
-
-            f"🔎 Price OCR time: "
-            f"{ocr_time:.2f}s\n"
-
-            f"🔢 Scale labels detected: "
-            f"{len(scale_labels)}"
+            f"{elapsed:.2f}s"
 
         )
+
 
         bot.reply_to(
 
@@ -1878,8 +1698,9 @@ def handle_photo(
 
         )
 
+
         # ====================================================
-        # CREATE MAP
+        # CREATE DETECTION MAP
         # ====================================================
 
         detection_map = (
@@ -1888,13 +1709,12 @@ def handle_photo(
 
                 img,
 
-                candles,
-
-                scale_labels
+                candles
 
             )
 
         )
+
 
         cv2.imwrite(
 
@@ -1904,43 +1724,9 @@ def handle_photo(
 
         )
 
-        # ====================================================
-        # MAP CAPTION
-        # ====================================================
-
-        caption = (
-
-            "🔢 **CANDLE + PRICE DETECTION MAP**\n\n"
-
-            "1 = newest/rightmost candle.\n"
-
-            "➡️ Numbers continue RIGHT → LEFT.\n\n"
-
-            "🟣 Number = PURPLE / BUY.\n"
-
-            "🟡 Number = YELLOW / SELL.\n\n"
-
-            "💰 White values = detected "
-            "price-scale values.\n\n"
-
-            "💰 White price beside a candle = "
-            "price estimated from its vertical "
-            "position against the visible scale.\n\n"
-
-            "⬆️ HIGH = highest detected scale price.\n"
-
-            "⬇️ LOW = lowest detected scale price.\n"
-
-            "📍 CURRENT = estimated close of the "
-            "newest/rightmost candle.\n\n"
-
-            "⚠️ Compare the white prices with the "
-            "actual price scale in your screenshot."
-
-        )
 
         # ====================================================
-        # SEND MAP
+        # SEND DETECTION MAP
         # ====================================================
 
         with open(
@@ -1957,11 +1743,34 @@ def handle_photo(
 
                 photo,
 
-                caption=caption,
+                caption=(
+
+                    "🔢 **CANDLE DETECTION MAP**\n\n"
+
+                    "1 = newest/rightmost detected candle.\n"
+
+                    "➡️ Numbers continue RIGHT → LEFT.\n\n"
+
+                    "🟣 Number = PURPLE / BUY.\n"
+
+                    "🟡 Number = YELLOW / SELL.\n\n"
+
+                    "💰 OpenRouter Vision is used separately "
+                    "to read the visible price scale.\n\n"
+
+                    "⬆️ HIGHEST / ⬇️ LOWEST are only accepted "
+                    "when the vision model can identify the "
+                    "actual visible price-scale values.\n\n"
+
+                    "⚠️ This map does not generate "
+                    "market prices."
+
+                ),
 
                 parse_mode="Markdown"
 
             )
+
 
     except Exception as e:
 
@@ -1970,13 +1779,23 @@ def handle_photo(
             repr(e)
         )
 
-        bot.reply_to(
 
-            message,
+        try:
 
-            f"❌ Detection error:\n{str(e)}"
+            bot.reply_to(
 
-        )
+                message,
+
+                "❌ Detection error:\n"
+                +
+                str(e)
+
+            )
+
+        except Exception:
+
+            pass
+
 
     finally:
 
@@ -2012,7 +1831,7 @@ print(
 )
 
 print(
-    "🕯️ CANDLE + PRICE READING TEST"
+    "🕯️ CANDLE + OPENROUTER VISION TEST"
 )
 
 print(
@@ -2036,11 +1855,11 @@ print(
 )
 
 print(
-    "💰 Visible price-scale reading enabled"
+    "👁️ OpenRouter Vision enabled"
 )
 
 print(
-    "💰 Candle-to-price interpolation enabled"
+    "💰 Price-scale reading enabled"
 )
 
 print(
@@ -2052,7 +1871,7 @@ print(
 )
 
 print(
-    "🚫 No generated OHLC"
+    "🚫 No trading signals"
 )
 
 print(
@@ -2060,14 +1879,17 @@ print(
 )
 
 
-if not TESSERACT_AVAILABLE:
+if not OPENROUTER_API_KEY:
 
     print(
-        "⚠️ pytesseract is NOT installed."
+        "⚠️ WARNING: "
+        "OPENROUTER_API_KEY is not set."
     )
 
+else:
+
     print(
-        "⚠️ Price-scale reading will be NOT READ."
+        "✅ OPENROUTER_API_KEY detected."
     )
 
 
