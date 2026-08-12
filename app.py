@@ -1,9 +1,21 @@
 import os
 import cv2
 import numpy as np
-import telebot
 import time
-
+import asyncio
+import threading
+from flask import Flask
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from telegram import Update
+from telegram.constants import ParseMode
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 # ============================================================
 # TELEGRAM
 # ============================================================
