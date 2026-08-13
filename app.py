@@ -21,13 +21,13 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # SETTINGS
 # ============================================================
 
-# Right-side scanning area — UNCHANGED (width is perfect)
+# Right-side scanning area — UNCHANGED
 RIGHT_SIDE_START = 0.80
 
-# Top crop — set to 0.12
-TOP_CROP = 0.12
+# Top crop — CHANGED FROM 0.16 TO 0.10
+TOP_CROP = 0.10
 
-# Bottom crop — UNCHANGED (bottom is perfect)
+# Bottom crop — UNCHANGED
 BOTTOM_CROP = 0.28
 
 # Component filtering
@@ -1277,13 +1277,13 @@ def create_number_detection_map(
         (20, 100),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.42,
-        (255, 255, 255),
+        (200, 200, 200),
         1,
         cv2.LINE_AA
     )
 
     # ========================================================
-    # WRITE DETECTED NUMBERS INSIDE THE SCAN AREA
+    # WRITE DETECTED NUMBERS INSIDE SCAN AREA
     # ========================================================
 
     if results:
@@ -1554,9 +1554,9 @@ def handle_photo(
                     "🟨 Yellow = scan boundary\n"
                     "🟩 Green = EXACT SAME boundary\n\n"
                     "🔄 **CHANGES APPLIED:**\n"
-                    "• Top crop: 0.12\n"
-                    "• Bottom crop: 0.28\n"
-                    "• Width: 0.80 → 100%"
+                    "• Top crop: 10%\n"
+                    "• Bottom crop: 28%\n"
+                    "• Width: UNCHANGED"
                 )
 
             )
@@ -1621,9 +1621,9 @@ def start(
         "🟩 Green = exact same boundary\n\n"
 
         "🔄 **CHANGES APPLIED:**\n"
-        "• Top crop: 0.12\n"
-        "• Bottom crop: 0.28\n"
-        "• Width: 0.80 → 100%\n\n"
+        "• Top crop: 10%\n"
+        "• Bottom crop: 28%\n"
+        "• Width: UNCHANGED\n\n"
 
         "🚫 No Tesseract\n"
         "🚫 No Vision API\n"
@@ -1689,15 +1689,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ Top crop: 0.12"
-    )
-
-    print(
-        "✅ Bottom crop: 0.28"
-    )
-
-    print(
-        "✅ Width: 0.80 → 100%"
+        "✅ Width UNCHANGED"
     )
 
     print(
