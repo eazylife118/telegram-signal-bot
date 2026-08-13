@@ -25,11 +25,11 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # 0.62 = scans from 62% to 100% (wider, more to the right)
 RIGHT_SIDE_START = 0.62
 
-# Top crop — reduce top (move down slightly)
-TOP_CROP = 0.05
+# Top crop — REDUCED HEIGHT (moved down more)
+TOP_CROP = 0.12
 
-# Bottom crop — reduce bottom (move up slightly)
-BOTTOM_CROP = 0.05
+# Bottom crop — REDUCED HEIGHT (moved up more)
+BOTTOM_CROP = 0.12
 
 # Ignore tiny noise
 MIN_COMPONENT_AREA = 3
@@ -80,7 +80,7 @@ def get_right_side_roi(img):
     # Horizontal crop
     start_x = int(w * RIGHT_SIDE_START)
 
-    # Vertical crop — reduce top and bottom
+    # Vertical crop — REDUCED HEIGHT (more top and bottom crop)
     top_y = int(h * TOP_CROP)
     bottom_y = int(h * (1 - BOTTOM_CROP))
 
