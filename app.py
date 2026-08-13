@@ -21,37 +21,27 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # SETTINGS
 # ============================================================
 
-# Percentage of screenshot used for RIGHT SIDE scanning.
-# 0.62 = scans from 62% to 100% (wider, more to the right)
+# Right-side scanning area
 RIGHT_SIDE_START = 0.62
 
-# Top crop — REDUCED HEIGHT (moved down more)
+# Top and bottom crop
 TOP_CROP = 0.12
-
-# Bottom crop — REDUCED HEIGHT (moved up more)
 BOTTOM_CROP = 0.14
 
-# Ignore tiny noise
+# Component filtering
 MIN_COMPONENT_AREA = 3
-
-# Maximum component area
 MAX_COMPONENT_AREA = 5000
 
-# Digit height relative to screenshot
 MIN_DIGIT_HEIGHT = 6
 MAX_DIGIT_HEIGHT = 180
 
-# Digit width
 MIN_DIGIT_WIDTH = 1
 MAX_DIGIT_WIDTH = 100
 
-# Distance for grouping characters into one number
 GROUP_GAP_RATIO = 1.25
 
-# Recognition confidence
 MIN_RECOGNITION_SCORE = 0.34
 
-# Number must contain at least one recognized digit
 MIN_NUMBER_DIGITS = 1
 
 
@@ -70,28 +60,31 @@ def load_image(path):
 
 
 # ============================================================
-# RIGHT-SIDE ROI WITH TOP/BOTTOM CROP
+# RIGHT-SIDE ROI
 # ============================================================
 
 def get_right_side_roi(img):
 
     h, w = img.shape[:2]
 
-    # Horizontal crop
     start_x = int(w * RIGHT_SIDE_START)
 
-    # Vertical crop — REDUCED HEIGHT (more top and bottom crop)
     top_y = int(h * TOP_CROP)
-    bottom_y = int(h * (1 - BOTTOM_CROP))
 
-    # Crop: right side + reduced top/bottom
-    roi = img[top_y:bottom_y, start_x:]
+    bottom_y = int(
+        h * (1 - BOTTOM_CROP)
+    )
+
+    roi = img[
+        top_y:bottom_y,
+        start_x:w
+    ]
 
     return roi, start_x, top_y
 
 
 # ============================================================
-# CREATE MULTIPLE THRESHOLDS
+# CREATE THRESHOLDS
 # ============================================================
 
 def create_thresholds(roi):
@@ -108,10 +101,9 @@ def create_thresholds(roi):
 
     thresholds = []
 
-
-    # ========================================================
-    # 1. BRIGHT PIXELS
-    # ========================================================
+    # --------------------------------------------------------
+    # BRIGHT
+    # --------------------------------------------------------
 
     bright = cv2.inRange(
         gray,
@@ -123,10 +115,9 @@ def create_thresholds(roi):
         ("BRIGHT", bright)
     )
 
-
-    # ========================================================
-    # 2. VERY BRIGHT PIXELS
-    # ========================================================
+    # --------------------------------------------------------
+    # VERY BRIGHT
+    # --------------------------------------------------------
 
     very_bright = cv2.inRange(
         gray,
@@ -138,10 +129,9 @@ def create_thresholds(roi):
         ("VERY_BRIGHT", very_bright)
     )
 
-
-    # ========================================================
-    # 3. HSV SATURATION / BRIGHTNESS
-    # ========================================================
+    # --------------------------------------------------------
+    # COLORED BRIGHT
+    # --------------------------------------------------------
 
     saturation = hsv[:, :, 1]
     value = hsv[:, :, 2]
@@ -156,10 +146,9 @@ def create_thresholds(roi):
         ("COLORED_BRIGHT", colored_bright)
     )
 
-
-    # ========================================================
-    # 4. ADAPTIVE THRESHOLD
-    # ========================================================
+    # --------------------------------------------------------
+    # ADAPTIVE
+    # --------------------------------------------------------
 
     blurred = cv2.GaussianBlur(
         gray,
@@ -180,10 +169,9 @@ def create_thresholds(roi):
         ("ADAPTIVE", adaptive)
     )
 
-
-    # ========================================================
-    # 5. OTSU
-    # ========================================================
+    # --------------------------------------------------------
+    # OTSU
+    # --------------------------------------------------------
 
     _, otsu = cv2.threshold(
         gray,
@@ -197,7 +185,6 @@ def create_thresholds(roi):
         ("OTSU", otsu)
     )
 
-
     return thresholds
 
 
@@ -207,7 +194,6 @@ def create_thresholds(roi):
 
 def clean_mask(mask):
 
-    # Small noise removal
     kernel_small = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (2, 2)
@@ -219,8 +205,6 @@ def clean_mask(mask):
         kernel_small
     )
 
-
-    # Connect small parts of digits
     kernel_close = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (2, 2)
@@ -231,7 +215,6 @@ def clean_mask(mask):
         cv2.MORPH_CLOSE,
         kernel_close
     )
-
 
     return cleaned
 
@@ -250,7 +233,6 @@ def find_components(mask):
 
     components = []
 
-
     for contour in contours:
 
         x, y, w, h = cv2.boundingRect(
@@ -259,37 +241,27 @@ def find_components(mask):
 
         area = w * h
 
-
         if area < MIN_COMPONENT_AREA:
             continue
-
 
         if area > MAX_COMPONENT_AREA:
             continue
 
-
         if h < MIN_DIGIT_HEIGHT:
             continue
-
 
         if h > MAX_DIGIT_HEIGHT:
             continue
 
-
         if w < MIN_DIGIT_WIDTH:
             continue
-
 
         if w > MAX_DIGIT_WIDTH:
             continue
 
-
-        # Reject extremely flat horizontal objects
         if w > h * 3.5:
             continue
 
-
-        # Pixel density
         region = mask[
             y:y+h,
             x:x+w
@@ -304,13 +276,10 @@ def find_components(mask):
             float(max(1, w * h))
         )
 
-
         if density < 0.04:
             continue
 
-
         components.append({
-
             "x": x,
             "y": y,
             "w": w,
@@ -318,20 +287,17 @@ def find_components(mask):
             "area": area,
             "pixels": pixels,
             "density": density
-
         })
-
 
     components.sort(
         key=lambda c: c["x"]
     )
 
-
     return components
 
 
 # ============================================================
-# MERGE COMPONENTS THAT BELONG TO SAME DIGIT
+# MERGE CLOSE COMPONENTS
 # ============================================================
 
 def merge_close_components(
@@ -341,11 +307,9 @@ def merge_close_components(
     if not components:
         return []
 
-
     result = []
 
     used = set()
-
 
     for i, current in enumerate(
         components
@@ -354,19 +318,15 @@ def merge_close_components(
         if i in used:
             continue
 
-
         group = [current]
 
         used.add(i)
 
-
         changed = True
-
 
         while changed:
 
             changed = False
-
 
             for j, candidate in enumerate(
                 components
@@ -375,10 +335,10 @@ def merge_close_components(
                 if j in used:
                     continue
 
-
                 for member in group:
 
                     member_left = member["x"]
+
                     member_right = (
                         member["x"] +
                         member["w"]
@@ -393,42 +353,30 @@ def merge_close_components(
                         candidate["w"]
                     )
 
-
                     horizontal_gap = max(
-
                         0,
-
                         max(
                             candidate_left -
                             member_right,
-
                             member_left -
                             candidate_right
                         )
-
                     )
 
-
                     height_ratio = (
-
                         min(
                             member["h"],
                             candidate["h"]
                         )
-
                         /
-
                         float(
                             max(
                                 member["h"],
                                 candidate["h"]
                             )
                         )
-
                     )
 
-
-                    # Pieces are likely from same character
                     if (
                         horizontal_gap <= 3
                         and
@@ -445,12 +393,9 @@ def merge_close_components(
 
                         break
 
-
                 if changed:
                     break
 
-
-        # Build combined box
         x1 = min(
             c["x"]
             for c in group
@@ -471,22 +416,16 @@ def merge_close_components(
             for c in group
         )
 
-
         result.append({
-
             "x": x1,
             "y": y1,
             "w": x2 - x1,
             "h": y2 - y1
-
         })
 
-
     result.sort(
-        key=lambda c:
-        c["x"]
+        key=lambda c: c["x"]
     )
-
 
     return result
 
@@ -502,18 +441,15 @@ def group_into_numbers(
     if not components:
         return []
 
-
     groups = []
 
     current = [
         components[0]
     ]
 
-
     for component in components[1:]:
 
         previous = current[-1]
-
 
         gap = (
             component["x"]
@@ -524,19 +460,16 @@ def group_into_numbers(
             )
         )
 
-
         average_height = (
             previous["h"] +
             component["h"]
         ) / 2.0
-
 
         allowed_gap = max(
             4,
             average_height *
             GROUP_GAP_RATIO
         )
-
 
         if gap <= allowed_gap:
 
@@ -554,18 +487,16 @@ def group_into_numbers(
                 component
             ]
 
-
     if current:
         groups.append(
             current
         )
 
-
     return groups
 
 
 # ============================================================
-# NORMALIZE DIGIT IMAGE
+# NORMALIZE DIGIT
 # ============================================================
 
 def normalize_digit(
@@ -575,20 +506,15 @@ def normalize_digit(
     if image is None:
         return None
 
-
     if image.size == 0:
         return None
 
-
-    # Remove tiny border noise
     image = image.copy()
-
 
     h, w = image.shape[:2]
 
-
-    # Maintain aspect ratio
     target_h = 48
+
     scale = target_h / float(
         max(1, h)
     )
@@ -597,7 +523,6 @@ def normalize_digit(
         8,
         int(w * scale)
     )
-
 
     resized = cv2.resize(
         image,
@@ -608,16 +533,12 @@ def normalize_digit(
         interpolation=cv2.INTER_AREA
     )
 
-
-    # Put into fixed canvas
     canvas = np.zeros(
         (64, 48),
         dtype=np.uint8
     )
 
-
     rh, rw = resized.shape[:2]
-
 
     if rw > 46:
 
@@ -629,7 +550,6 @@ def normalize_digit(
 
         rh, rw = resized.shape[:2]
 
-
     x_offset = (
         48 - rw
     ) // 2
@@ -638,12 +558,10 @@ def normalize_digit(
         64 - rh
     ) // 2
 
-
     canvas[
         y_offset:y_offset+rh,
         x_offset:x_offset+rw
     ] = resized
-
 
     _, canvas = cv2.threshold(
         canvas,
@@ -651,7 +569,6 @@ def normalize_digit(
         255,
         cv2.THRESH_BINARY
     )
-
 
     return canvas
 
@@ -667,21 +584,13 @@ def generate_digit_templates():
         for i in range(10)
     }
 
-
     fonts = [
-
         cv2.FONT_HERSHEY_SIMPLEX,
-
         cv2.FONT_HERSHEY_PLAIN,
-
         cv2.FONT_HERSHEY_DUPLEX,
-
         cv2.FONT_HERSHEY_COMPLEX,
-
         cv2.FONT_HERSHEY_TRIPLEX
-
     ]
-
 
     font_scales = [
         1.0,
@@ -691,18 +600,15 @@ def generate_digit_templates():
         1.8
     ]
 
-
     thicknesses = [
         1,
         2,
         3
     ]
 
-
     for digit in range(10):
 
         text = str(digit)
-
 
         for font in fonts:
 
@@ -715,7 +621,6 @@ def generate_digit_templates():
                         dtype=np.uint8
                     )
 
-
                     size, baseline = (
                         cv2.getTextSize(
                             text,
@@ -725,49 +630,34 @@ def generate_digit_templates():
                         )
                     )
 
-
                     tw, th = size
-
 
                     x = max(
                         1,
                         (60 - tw) // 2
                     )
 
-
                     y = max(
                         th + 1,
                         (80 + th) // 2
                     )
 
-
                     cv2.putText(
-
                         canvas,
-
                         text,
-
                         (x, y),
-
                         font,
-
                         scale,
-
                         255,
-
                         thickness,
-
                         cv2.LINE_AA
-
                     )
-
 
                     normalized = (
                         normalize_digit(
                             canvas
                         )
                     )
-
 
                     if normalized is not None:
 
@@ -777,18 +667,16 @@ def generate_digit_templates():
                             normalized
                         )
 
-
     return templates
 
 
-# Generate once when program starts
 DIGIT_TEMPLATES = (
     generate_digit_templates()
 )
 
 
 # ============================================================
-# TEMPLATE SIMILARITY
+# IMAGE COMPARISON
 # ============================================================
 
 def compare_images(
@@ -803,29 +691,27 @@ def compare_images(
     ):
         return 0.0
 
+    a = (
+        image_a.astype(
+            np.float32
+        ) / 255.0
+    )
 
-    a = image_a.astype(
-        np.float32
-    ) / 255.0
+    b = (
+        image_b.astype(
+            np.float32
+        ) / 255.0
+    )
 
-    b = image_b.astype(
-        np.float32
-    ) / 255.0
-
-
-    # Pixel similarity
     mae = np.mean(
         np.abs(a - b)
     )
-
 
     pixel_score = max(
         0.0,
         1.0 - mae
     )
 
-
-    # Shape overlap
     a_binary = (
         a > 0.5
     ).astype(
@@ -838,7 +724,6 @@ def compare_images(
         np.uint8
     )
 
-
     intersection = np.sum(
         (
             a_binary &
@@ -846,14 +731,12 @@ def compare_images(
         ) > 0
     )
 
-
     union = np.sum(
         (
             a_binary |
             b_binary
         ) > 0
     )
-
 
     if union > 0:
 
@@ -866,13 +749,11 @@ def compare_images(
 
         iou = 0.0
 
-
     score = (
         pixel_score * 0.45
         +
         iou * 0.55
     )
-
 
     return float(score)
 
@@ -889,14 +770,11 @@ def recognize_digit(
         digit_image
     )
 
-
     if normalized is None:
         return None, 0.0
 
-
     best_digit = None
     best_score = 0.0
-
 
     for digit, templates in (
         DIGIT_TEMPLATES.items()
@@ -909,12 +787,10 @@ def recognize_digit(
                 template
             )
 
-
             if score > best_score:
 
                 best_score = score
                 best_digit = digit
-
 
     if (
         best_digit is None
@@ -925,7 +801,6 @@ def recognize_digit(
 
         return None, best_score
 
-
     return (
         best_digit,
         best_score
@@ -933,7 +808,7 @@ def recognize_digit(
 
 
 # ============================================================
-# EXTRACT DIGITS FROM NUMBER GROUP
+# RECOGNIZE NUMBER GROUP
 # ============================================================
 
 def recognize_number_group(
@@ -944,12 +819,9 @@ def recognize_number_group(
     if not group:
         return None, 0.0
 
-
     recognized = []
 
-
     scores = []
-
 
     for component in group:
 
@@ -958,9 +830,7 @@ def recognize_number_group(
         w = component["w"]
         h = component["h"]
 
-
         padding = 2
-
 
         left = max(
             0,
@@ -982,12 +852,10 @@ def recognize_number_group(
             y + h + padding
         )
 
-
         digit_roi = binary[
             top:bottom,
             left:right
         ]
-
 
         digit, score = (
             recognize_digit(
@@ -995,12 +863,9 @@ def recognize_number_group(
             )
         )
 
-
         if digit is None:
 
-            # Do not invent a digit
             return None, 0.0
-
 
         recognized.append(
             digit
@@ -1010,27 +875,23 @@ def recognize_number_group(
             score
         )
 
-
     if not recognized:
         return None, 0.0
-
 
     number = "".join(
         recognized
     )
-
 
     confidence = (
         sum(scores) /
         len(scores)
     )
 
-
     return number, confidence
 
 
 # ============================================================
-# FIND BEST DETECTION PASS
+# ANALYZE THRESHOLD
 # ============================================================
 
 def analyze_threshold(
@@ -1042,34 +903,27 @@ def analyze_threshold(
         binary
     )
 
-
     components = find_components(
         cleaned
     )
 
-
     if not components:
         return None
-
 
     components = merge_close_components(
         components
     )
 
-
     groups = group_into_numbers(
         components
     )
 
-
     results = []
-
 
     for group in groups:
 
         if len(group) < MIN_NUMBER_DIGITS:
             continue
-
 
         number, confidence = (
             recognize_number_group(
@@ -1078,15 +932,11 @@ def analyze_threshold(
             )
         )
 
-
         if number is None:
             continue
 
-
-        # Reject extremely weak results
         if confidence < MIN_RECOGNITION_SCORE:
             continue
-
 
         x1 = min(
             c["x"]
@@ -1108,7 +958,6 @@ def analyze_threshold(
             for c in group
         )
 
-
         results.append({
 
             "number": number,
@@ -1129,19 +978,16 @@ def analyze_threshold(
 
             "method":
                 name
-
         })
-
 
     if not results:
         return None
-
 
     return results
 
 
 # ============================================================
-# REMOVE DUPLICATE NUMBER RESULTS
+# REMOVE DUPLICATES
 # ============================================================
 
 def remove_duplicate_results(
@@ -1151,7 +997,6 @@ def remove_duplicate_results(
     if not results:
         return []
 
-
     results.sort(
         key=lambda r:
         (
@@ -1160,14 +1005,11 @@ def remove_duplicate_results(
         )
     )
 
-
     final = []
-
 
     for result in results:
 
         duplicate = False
-
 
         for existing in final:
 
@@ -1181,7 +1023,6 @@ def remove_duplicate_results(
                 existing["y"]
             )
 
-
             if (
                 x_distance < 15
                 and
@@ -1193,7 +1034,6 @@ def remove_duplicate_results(
 
                 duplicate = True
 
-
                 if (
                     result["confidence"]
                     >
@@ -1204,9 +1044,7 @@ def remove_duplicate_results(
                         result
                     )
 
-
                 break
-
 
         if not duplicate:
 
@@ -1214,12 +1052,11 @@ def remove_duplicate_results(
                 result
             )
 
-
     return final
 
 
 # ============================================================
-# MAIN NUMBER EXTRACTION
+# MAIN EXTRACTION
 # ============================================================
 
 def extract_numbers_from_image(
@@ -1230,21 +1067,17 @@ def extract_numbers_from_image(
         image_path
     )
 
-
     roi, offset_x, offset_y = (
         get_right_side_roi(
             img
         )
     )
 
-
     thresholds = create_thresholds(
         roi
     )
 
-
     all_results = []
-
 
     for name, mask in thresholds:
 
@@ -1253,12 +1086,10 @@ def extract_numbers_from_image(
             name
         )
 
-
         if results:
 
             for result in results:
 
-                # Convert ROI coordinates to full-image coordinates
                 result["x"] += (
                     offset_x
                 )
@@ -1271,17 +1102,11 @@ def extract_numbers_from_image(
                     result
                 )
 
-
     all_results = (
         remove_duplicate_results(
             all_results
         )
     )
-
-
-    # ========================================================
-    # SCORE RESULTS BY CONFIDENCE
-    # ========================================================
 
     all_results.sort(
         key=lambda r:
@@ -1289,33 +1114,27 @@ def extract_numbers_from_image(
         reverse=True
     )
 
-
-    # ========================================================
-    # KEEP STRONGEST RESULTS
-    # ========================================================
-
     final_results = []
-
 
     for result in all_results:
 
         overlapping = False
 
-
         for existing in final_results:
 
             ax1 = result["x"]
+
             ax2 = (
                 result["x"] +
                 result["w"]
             )
 
             bx1 = existing["x"]
+
             bx2 = (
                 existing["x"] +
                 existing["w"]
             )
-
 
             horizontal_overlap = (
                 max(
@@ -1325,20 +1144,17 @@ def extract_numbers_from_image(
                 )
             )
 
-
             if horizontal_overlap > 0:
 
                 overlapping = True
 
                 break
 
-
         if not overlapping:
 
             final_results.append(
                 result
             )
-
 
     final_results.sort(
         key=lambda r:
@@ -1348,12 +1164,18 @@ def extract_numbers_from_image(
         )
     )
 
-
     return img, final_results
 
 
 # ============================================================
 # CREATE DEBUG MAP
+# ============================================================
+#
+# IMPORTANT:
+# The GREEN box is now EXACTLY the same size and position
+# as the YELLOW scan rectangle.
+#
+# Individual digit boxes are NOT drawn anymore.
 # ============================================================
 
 def create_number_detection_map(
@@ -1363,111 +1185,74 @@ def create_number_detection_map(
 
     output = img.copy()
 
-
-    # Draw scan area rectangle
     h, w = img.shape[:2]
 
-    # Scan area boundaries
-    scan_x = int(w * RIGHT_SIDE_START)
-    scan_top = int(h * TOP_CROP)
-    scan_bottom = int(h * (1 - BOTTOM_CROP))
+    # ========================================================
+    # EXACT SCAN AREA
+    # ========================================================
 
-    # Draw semi-transparent scan area
-    overlay = output.copy()
+    scan_x1 = int(
+        w * RIGHT_SIDE_START
+    )
+
+    scan_y1 = int(
+        h * TOP_CROP
+    )
+
+    scan_x2 = w
+
+    scan_y2 = int(
+        h * (1 - BOTTOM_CROP)
+    )
+
+    # ========================================================
+    # YELLOW SCAN RECTANGLE
+    # ========================================================
+
     cv2.rectangle(
-        overlay,
-        (scan_x, scan_top),
-        (w, scan_bottom),
+        output,
+        (scan_x1, scan_y1),
+        (scan_x2, scan_y2),
         (0, 255, 255),
         2
     )
-    cv2.addWeighted(overlay, 0.3, output, 0.7, 0, output)
 
-    for result in results:
+    # ========================================================
+    # GREEN DETECTION RECTANGLE
+    #
+    # EXACT SAME COORDINATES
+    # EXACT SAME WIDTH
+    # EXACT SAME HEIGHT
+    # ========================================================
 
-        x = int(
-            result["x"]
-        )
+    cv2.rectangle(
+        output,
+        (scan_x1, scan_y1),
+        (scan_x2, scan_y2),
+        (0, 255, 0),
+        3
+    )
 
-        y = int(
-            result["y"]
-        )
+    # ========================================================
+    # INFORMATION PANEL
+    # ========================================================
 
-        w = int(
-            result["w"]
-        )
+    panel_height = 115
 
-        h = int(
-            result["h"]
-        )
-
-
-        cv2.rectangle(
-
-            output,
-
-            (x, y),
-
-            (
-                x + w,
-                y + h
-            ),
-
-            (0, 255, 0),
-
-            2
-
-        )
-
-
-        label = (
-            f"{result['number']} "
-            f"{result['confidence'] * 100:.0f}%"
-        )
-
-
-        cv2.putText(
-
-            output,
-
-            label,
-
-            (
-                x,
-                max(
-                    20,
-                    y - 5
-                )
-            ),
-
-            cv2.FONT_HERSHEY_SIMPLEX,
-
-            0.5,
-
-            (0, 255, 0),
-
-            2,
-
-            cv2.LINE_AA
-
-        )
-
-
-    # Add legend
     cv2.rectangle(
         output,
         (10, 10),
-        (310, 85),
+        (370, panel_height),
         (0, 0, 0),
         -1
     )
 
     cv2.putText(
         output,
-        "SCAN AREA: RIGHT SIDE",
+        "NUMBER DETECTION AREA",
         (20, 35),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
+        0.55,
         (0, 255, 255),
         1,
         cv2.LINE_AA
@@ -1475,10 +1260,21 @@ def create_number_detection_map(
 
     cv2.putText(
         output,
-        f"START: {RIGHT_SIDE_START*100:.0f}%",
-        (20, 55),
+        "GREEN = EXACT SCAN AREA",
+        (20, 58),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
+        0.48,
+        (0, 255, 0),
+        1,
+        cv2.LINE_AA
+    )
+
+    cv2.putText(
+        output,
+        f"X: {scan_x1} → {scan_x2}",
+        (20, 80),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.42,
         (255, 255, 255),
         1,
         cv2.LINE_AA
@@ -1486,15 +1282,52 @@ def create_number_detection_map(
 
     cv2.putText(
         output,
-        f"TOP: {TOP_CROP*100:.0f}%  BOTTOM: {BOTTOM_CROP*100:.0f}%",
-        (20, 75),
+        f"Y: {scan_y1} → {scan_y2}",
+        (20, 100),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
-        (200, 200, 200),
+        0.42,
+        (255, 255, 255),
         1,
         cv2.LINE_AA
     )
 
+    # ========================================================
+    # WRITE DETECTED NUMBERS INSIDE THE SCAN AREA
+    # ========================================================
+
+    if results:
+
+        text_y = scan_y1 + 25
+
+        for index, result in enumerate(
+            results[:10],
+            1
+        ):
+
+            text = (
+                f"{index}: "
+                f"{result['number']} "
+                f"({result['confidence'] * 100:.0f}%)"
+            )
+
+            # Keep text inside the scan rectangle
+            text_x = scan_x1 + 10
+
+            if text_y >= scan_y2 - 5:
+                break
+
+            cv2.putText(
+                output,
+                text,
+                (text_x, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA
+            )
+
+            text_y += 20
 
     return output
 
@@ -1506,7 +1339,6 @@ def create_number_detection_map(
 @bot.message_handler(
     content_types=["photo"]
 )
-
 def handle_photo(
     message
 ):
@@ -1521,7 +1353,6 @@ def handle_photo(
         "number_detection_map.png"
     )
 
-
     try:
 
         # ====================================================
@@ -1532,13 +1363,11 @@ def handle_photo(
             message.photo[-1].file_id
         )
 
-
         downloaded_file = (
             bot.download_file(
                 file_info.file_path
             )
         )
-
 
         with open(
             image_path,
@@ -1549,20 +1378,17 @@ def handle_photo(
                 downloaded_file
             )
 
-
         download_time = (
             time.time()
             -
             start_time
         )
 
-
         # ====================================================
-        # NUMBER ANALYSIS
+        # ANALYSIS
         # ====================================================
 
         analysis_start = time.time()
-
 
         img, results = (
             extract_numbers_from_image(
@@ -1570,20 +1396,17 @@ def handle_photo(
             )
         )
 
-
         analysis_time = (
             time.time()
             -
             analysis_start
         )
 
-
         total_time = (
             time.time()
             -
             start_time
         )
-
 
         # ====================================================
         # NO RESULTS
@@ -1614,59 +1437,56 @@ def handle_photo(
 
             return
 
-
         # ====================================================
-        # BUILD RESULT
+        # RESULT
         # ====================================================
 
         response = (
             "🔢 **RIGHT-SIDE NUMBER DETECTION**\n\n"
         )
 
-
         response += (
             f"📊 Numbers found: "
             f"{len(results)}\n"
         )
 
-
         response += (
-            f"📏 Scan: {RIGHT_SIDE_START*100:.0f}% → 100%\n"
+            f"📏 Scan: "
+            f"{RIGHT_SIDE_START*100:.0f}% → 100%\n"
         )
 
-
         response += (
-            f"📐 Top crop: {TOP_CROP*100:.0f}%\n"
+            f"📐 Top crop: "
+            f"{TOP_CROP*100:.0f}%\n"
         )
 
-
         response += (
-            f"📐 Bottom crop: {BOTTOM_CROP*100:.0f}%\n"
+            f"📐 Bottom crop: "
+            f"{BOTTOM_CROP*100:.0f}%\n"
         )
-
 
         response += (
             f"⚡ Analysis: "
             f"{analysis_time:.2f}s\n"
         )
 
-
         response += (
             f"📥 Download: "
             f"{download_time:.2f}s\n"
         )
-
 
         response += (
             f"⏱ Total: "
             f"{total_time:.2f}s\n\n"
         )
 
-
         response += (
             "━━━━━━━━━━━━━━━━━━━━\n"
         )
 
+        response += (
+            "🔢 **DETECTED NUMBERS:**\n\n"
+        )
 
         for i, result in enumerate(
             results,
@@ -1674,20 +1494,20 @@ def handle_photo(
         ):
 
             response += (
-
                 f"{i}. `{result['number']}` "
-                f"({result['confidence'] * 100:.0f}%)\n"
-
+                f"— {result['confidence'] * 100:.0f}%\n"
             )
-
 
         response += (
             "\n━━━━━━━━━━━━━━━━━━━━\n"
         )
 
+        response += (
+            "🟩 Detection box = EXACT scan area\n"
+        )
 
         response += (
-            "🎯 Scan area: RIGHT SIDE ONLY\n"
+            "🎯 Right side only\n"
         )
 
         response += (
@@ -1703,20 +1523,14 @@ def handle_photo(
         )
 
         response += (
-            "🚫 No generated prices\n"
+            "🚫 No generated prices"
         )
-
 
         bot.reply_to(
-
             message,
-
             response,
-
             parse_mode="Markdown"
-
         )
-
 
         # ====================================================
         # DEBUG MAP
@@ -1729,12 +1543,10 @@ def handle_photo(
             )
         )
 
-
         cv2.imwrite(
             map_path,
             map_img
         )
-
 
         with open(
             map_path,
@@ -1748,16 +1560,15 @@ def handle_photo(
                 photo,
 
                 caption=(
-                    "🔎 RIGHT-SIDE NUMBER MAP\n\n"
-                    "🟨 Yellow rectangle = scan area\n"
-                    "🟩 Green boxes = detected numbers\n"
-                    "The number beside each box is "
-                    "the recognition confidence.\n\n"
-                    "📏 Use this map to verify the detected numbers."
+                    "🔎 NUMBER DETECTION MAP\n\n"
+                    "🟨 Yellow = scan boundary\n"
+                    "🟩 Green = EXACT SAME boundary\n\n"
+                    "The green box is now exactly "
+                    "the same height and width as "
+                    "the yellow scan area."
                 )
 
             )
-
 
     except Exception as e:
 
@@ -1766,15 +1577,10 @@ def handle_photo(
             repr(e)
         )
 
-
         bot.reply_to(
-
             message,
-
             f"❌ Detection error:\n{str(e)}"
-
         )
-
 
     finally:
 
@@ -1786,11 +1592,9 @@ def handle_photo(
             if os.path.exists(path):
 
                 try:
-
                     os.remove(path)
 
                 except Exception:
-
                     pass
 
 
@@ -1801,7 +1605,6 @@ def handle_photo(
 @bot.message_handler(
     commands=["start"]
 )
-
 def start(
     message
 ):
@@ -1814,20 +1617,26 @@ def start(
 
         "Send a screenshot.\n\n"
 
-        "I will scan the right side:\n"
-        f"📏 {RIGHT_SIDE_START*100:.0f}% → 100% horizontally\n"
-        f"📐 Top crop: {TOP_CROP*100:.0f}%\n"
-        f"📐 Bottom crop: {BOTTOM_CROP*100:.0f}%\n\n"
+        f"📏 Horizontal scan: "
+        f"{RIGHT_SIDE_START*100:.0f}% → 100%\n"
+
+        f"📐 Top crop: "
+        f"{TOP_CROP*100:.0f}%\n"
+
+        f"📐 Bottom crop: "
+        f"{BOTTOM_CROP*100:.0f}%\n\n"
+
+        "🟨 Yellow = scan boundary\n"
+        "🟩 Green = exact same boundary\n\n"
 
         "🚫 No Tesseract\n"
         "🚫 No Vision API\n"
         "🚫 No fake numbers\n"
         "🚫 No fake prices\n\n"
 
-        "⚡ OpenCV template recognition enabled.\n\n"
-
-        "📝 Detected numbers are written on the map "
-        "so you can visually confirm they are correct.",
+        "⚡ OpenCV template recognition\n"
+        "📝 Detected numbers are written "
+        "for verification.",
 
         parse_mode="Markdown"
 
@@ -1853,15 +1662,18 @@ if __name__ == "__main__":
     )
 
     print(
-        f"📏 Scan: {RIGHT_SIDE_START*100:.0f}% → 100%"
+        f"📏 Scan: "
+        f"{RIGHT_SIDE_START*100:.0f}% → 100%"
     )
 
     print(
-        f"📐 Top crop: {TOP_CROP*100:.0f}%"
+        f"📐 Top crop: "
+        f"{TOP_CROP*100:.0f}%"
     )
 
     print(
-        f"📐 Bottom crop: {BOTTOM_CROP*100:.0f}%"
+        f"📐 Bottom crop: "
+        f"{BOTTOM_CROP*100:.0f}%"
     )
 
     print(
@@ -1877,7 +1689,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ Numbers written on map for verification"
+        "✅ Exact-size detection box"
     )
 
     print(
@@ -1892,11 +1704,7 @@ if __name__ == "__main__":
         "========================================"
     )
 
-
     bot.infinity_polling(
-
         timeout=30,
-
         long_polling_timeout=30
-
     )
