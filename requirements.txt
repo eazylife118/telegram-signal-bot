@@ -1,7 +1,5 @@
 pyTelegramBotAPI
-opencv-python
+opencv-contrib-python
 numpy
 Pillow
 requests
-easyocr
-torch
