@@ -29,7 +29,7 @@ RIGHT_SIDE_START = 0.62
 TOP_CROP = 0.12
 
 # Bottom crop — REDUCED HEIGHT (moved up more)
-BOTTOM_CROP = 0.12
+BOTTOM_CROP = 0.14
 
 # Ignore tiny noise
 MIN_COMPONENT_AREA = 3
@@ -1457,7 +1457,7 @@ def create_number_detection_map(
     cv2.rectangle(
         output,
         (10, 10),
-        (310, 60),
+        (310, 85),
         (0, 0, 0),
         -1
     )
@@ -1480,6 +1480,17 @@ def create_number_detection_map(
         cv2.FONT_HERSHEY_SIMPLEX,
         0.4,
         (255, 255, 255),
+        1,
+        cv2.LINE_AA
+    )
+
+    cv2.putText(
+        output,
+        f"TOP: {TOP_CROP*100:.0f}%  BOTTOM: {BOTTOM_CROP*100:.0f}%",
+        (20, 75),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.4,
+        (200, 200, 200),
         1,
         cv2.LINE_AA
     )
@@ -1741,7 +1752,8 @@ def handle_photo(
                     "🟨 Yellow rectangle = scan area\n"
                     "🟩 Green boxes = detected numbers\n"
                     "The number beside each box is "
-                    "the recognition confidence."
+                    "the recognition confidence.\n\n"
+                    "📏 Use this map to verify the detected numbers."
                 )
 
             )
@@ -1812,7 +1824,10 @@ def start(
         "🚫 No fake numbers\n"
         "🚫 No fake prices\n\n"
 
-        "⚡ OpenCV template recognition enabled.",
+        "⚡ OpenCV template recognition enabled.\n\n"
+
+        "📝 Detected numbers are written on the map "
+        "so you can visually confirm they are correct.",
 
         parse_mode="Markdown"
 
@@ -1859,6 +1874,10 @@ if __name__ == "__main__":
 
     print(
         "✅ Template recognition"
+    )
+
+    print(
+        "✅ Numbers written on map for verification"
     )
 
     print(
