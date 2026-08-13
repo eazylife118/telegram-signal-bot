@@ -3,10 +3,6 @@ import cv2
 import numpy as np
 import telebot
 import time
-import requests
-import base64
-import json
-import re
 
 
 # ============================================================
@@ -19,23 +15,6 @@ TELEGRAM_TOKEN = os.getenv(
 )
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-
-
-# ============================================================
-# OPENROUTER
-# ============================================================
-
-OPENROUTER_API_KEY = os.getenv(
-    "OPENROUTER_API_KEY"
-)
-
-OPENROUTER_URL = (
-    "https://openrouter.ai/api/v1/chat/completions"
-)
-
-# OpenRouter automatically chooses a currently available
-# FREE model that supports the required capability.
-OPENROUTER_MODEL = "openrouter/free"
 
 
 # ============================================================
@@ -52,6 +31,8 @@ RIGHT_MIN_BODY_HEIGHT = 2
 MAX_CANDLE_WIDTH_RATIO = 0.045
 
 MERGE_DISTANCE_RATIO = 0.55
+
+MIN_COLOR_DENSITY = 0.25
 
 
 # ============================================================
@@ -72,11 +53,38 @@ MIN_YELLOW_SATURATION = 100
 MIN_YELLOW_VALUE = 70
 
 
-MIN_COLOR_DENSITY = 0.25
-
+# ============================================================
+# COLOR DOMINANCE
+# ============================================================
 
 PURPLE_DOMINANCE_RATIO = 1.20
 YELLOW_DOMINANCE_RATIO = 1.10
+
+
+# ============================================================
+# MAP VERIFICATION SETTINGS
+# ============================================================
+
+# How much colored evidence must exist around a detected body.
+VERIFY_MIN_PIXELS = 8
+
+# Minimum percentage of the verification region that must
+# contain the detected candle color.
+VERIFY_MIN_DENSITY = 0.08
+
+# How far left/right around the detected candle center
+# the verifier checks.
+VERIFY_HORIZONTAL_RADIUS = 0.70
+
+# Minimum distance between independent verification peaks.
+VERIFY_MIN_DISTANCE_RATIO = 0.55
+
+# How many colored pixels are needed in a vertical column
+# before it becomes a possible candle location.
+VERIFY_COLUMN_THRESHOLD = 3
+
+# Verification confidence required to mark a candle as verified.
+VERIFY_CONFIDENCE_THRESHOLD = 65
 
 
 # ============================================================
@@ -120,7 +128,6 @@ def get_color_masks(img):
         img,
         cv2.COLOR_BGR2HSV
     )
-
 
     # ========================================================
     # PURPLE
@@ -169,7 +176,7 @@ def get_color_masks(img):
 
 
     # ========================================================
-    # BGR
+    # BGR CHANNELS
     # ========================================================
 
     b, g, r = cv2.split(img)
@@ -274,7 +281,6 @@ def find_candidates(
         (2, 2)
     )
 
-
     cleaned = cv2.morphologyEx(
         mask,
         cv2.MORPH_OPEN,
@@ -286,7 +292,6 @@ def find_candidates(
         cv2.MORPH_RECT,
         (3, 3)
     )
-
 
     cleaned = cv2.morphologyEx(
         cleaned,
@@ -330,7 +335,6 @@ def find_candidates(
         area = cv2.contourArea(
             contour
         )
-
 
         if area < min_area:
             continue
@@ -540,7 +544,6 @@ def merge_candidates(
 
 
                 existing["x"] = left
-
                 existing["y"] = top
 
                 existing["w"] = (
@@ -553,12 +556,9 @@ def merge_candidates(
                     top
                 )
 
-
                 existing["center_x"] = (
-
                     left +
                     existing["w"] / 2
-
                 )
 
 
@@ -667,7 +667,7 @@ def remove_cross_color_duplicates(
 
 
 # ============================================================
-# RIGHT-SIDE IMPROVEMENT
+# RIGHT SIDE DETECTION
 # ============================================================
 
 def detect_right_side(
@@ -721,7 +721,6 @@ def detect_right_side(
             right_start
         )
 
-
         candle["center_x"] += (
             right_start
         )
@@ -734,7 +733,7 @@ def detect_right_side(
 
 
 # ============================================================
-# DETECT CANDLES
+# MAIN CANDLE DETECTOR
 # ============================================================
 
 def detect_candles(
@@ -748,6 +747,10 @@ def detect_candles(
         get_color_masks(img)
     )
 
+
+    # ========================================================
+    # MAIN PASS
+    # ========================================================
 
     purple = find_candidates(
         purple_mask,
@@ -781,6 +784,10 @@ def detect_candles(
     )
 
 
+    # ========================================================
+    # RIGHT-SIDE PASS
+    # ========================================================
+
     right_candidates = (
         detect_right_side(
             img,
@@ -795,12 +802,20 @@ def detect_candles(
     )
 
 
+    # ========================================================
+    # DUPLICATE REMOVAL
+    # ========================================================
+
     candles = (
         remove_cross_color_duplicates(
             candles
         )
     )
 
+
+    # ========================================================
+    # RIGHT → LEFT
+    # ========================================================
 
     candles.sort(
         key=lambda c:
@@ -810,6 +825,782 @@ def detect_candles(
 
 
     return candles
+
+
+# ============================================================
+# ============================================================
+# INDEPENDENT MAP VERIFICATION
+# ============================================================
+# ============================================================
+#
+# This is NOT Vision API.
+#
+# It does not simply trust the original detector.
+#
+# It independently examines the actual color masks around
+# every detected candle.
+#
+# It checks:
+#
+# 1. Is there really colored candle evidence here?
+# 2. Is the color actually PURPLE or YELLOW?
+# 3. Does the color agree with the detector?
+# 4. Is the detected candle separated from neighboring candles?
+#
+# ============================================================
+
+
+def verify_single_candle(
+    candle,
+    purple_mask,
+    yellow_mask
+):
+
+    x = int(
+        candle["center_x"]
+    )
+
+    y = int(
+        candle["y"]
+    )
+
+    w = max(
+        2,
+        int(candle["w"])
+    )
+
+    h = max(
+        2,
+        int(candle["h"])
+    )
+
+
+    # ========================================================
+    # VERIFICATION REGION
+    # ========================================================
+
+    radius = max(
+        2,
+        int(
+            w *
+            VERIFY_HORIZONTAL_RADIUS
+        )
+    )
+
+
+    left = max(
+        0,
+        x - radius
+    )
+
+
+    right = min(
+        purple_mask.shape[1],
+        x + radius + 1
+    )
+
+
+    top = max(
+        0,
+        y - max(2, int(h * 0.25))
+    )
+
+
+    bottom = min(
+        purple_mask.shape[0],
+        y + h + max(2, int(h * 0.25))
+    )
+
+
+    purple_region = purple_mask[
+        top:bottom,
+        left:right
+    ]
+
+
+    yellow_region = yellow_mask[
+        top:bottom,
+        left:right
+    ]
+
+
+    purple_pixels = int(
+        np.sum(
+            purple_region > 0
+        )
+    )
+
+
+    yellow_pixels = int(
+        np.sum(
+            yellow_region > 0
+        )
+    )
+
+
+    total_pixels = max(
+        1,
+        purple_region.shape[0] *
+        purple_region.shape[1]
+    )
+
+
+    if candle["color"] == "PURPLE":
+
+        own_pixels = purple_pixels
+        other_pixels = yellow_pixels
+
+    else:
+
+        own_pixels = yellow_pixels
+        other_pixels = purple_pixels
+
+
+    own_density = (
+        own_pixels /
+        total_pixels
+    )
+
+
+    # ========================================================
+    # COLOR AGREEMENT
+    # ========================================================
+
+    if own_pixels >= VERIFY_MIN_PIXELS:
+
+        if own_pixels >= (
+            other_pixels * 1.15
+        ):
+
+            color_agrees = True
+
+        else:
+
+            color_agrees = False
+
+    else:
+
+        color_agrees = False
+
+
+    # ========================================================
+    # BODY EVIDENCE
+    # ========================================================
+
+    body_evidence = min(
+        100,
+        (
+            own_pixels /
+            float(
+                max(
+                    VERIFY_MIN_PIXELS,
+                    1
+                )
+            )
+        ) * 100
+    )
+
+
+    # ========================================================
+    # DENSITY EVIDENCE
+    # ========================================================
+
+    density_evidence = min(
+        100,
+        (
+            own_density /
+            VERIFY_MIN_DENSITY
+        ) * 100
+    )
+
+
+    # ========================================================
+    # FINAL VERIFICATION SCORE
+    # ========================================================
+
+    score = (
+        body_evidence * 0.50
+        +
+        density_evidence * 0.25
+        +
+        (100 if color_agrees else 0) * 0.25
+    )
+
+
+    score = max(
+        0,
+        min(
+            100,
+            score
+        )
+    )
+
+
+    verified = (
+        color_agrees
+        and
+        score >= VERIFY_CONFIDENCE_THRESHOLD
+    )
+
+
+    return {
+
+        "verified": verified,
+
+        "score": score,
+
+        "own_pixels": own_pixels,
+
+        "other_pixels": other_pixels,
+
+        "own_density": own_density,
+
+        "color_agrees": color_agrees
+
+    }
+
+
+# ============================================================
+# INDEPENDENT COLUMN PEAK SCANNER
+# ============================================================
+#
+# This second check looks across the screenshot and searches
+# for independent vertical concentrations of candle color.
+#
+# It helps detect:
+#
+# - possible missed candles
+# - possible merged candles
+#
+# ============================================================
+
+def build_verification_peaks(
+    img,
+    purple_mask,
+    yellow_mask,
+    primary_candles
+):
+
+    h, w = img.shape[:2]
+
+
+    combined = cv2.bitwise_or(
+        purple_mask,
+        yellow_mask
+    )
+
+
+    # ========================================================
+    # Limit scan to the chart's main area.
+    #
+    # We avoid the very top and bottom UI areas.
+    # ========================================================
+
+    top_limit = int(
+        h * 0.18
+    )
+
+    bottom_limit = int(
+        h * 0.82
+    )
+
+
+    chart_mask = combined[
+        top_limit:bottom_limit,
+        :
+    ]
+
+
+    column_strength = np.sum(
+        chart_mask > 0,
+        axis=0
+    )
+
+
+    # Small smoothing.
+    kernel_size = 3
+
+    kernel = np.ones(
+        kernel_size,
+        dtype=np.float32
+    ) / kernel_size
+
+
+    smoothed = np.convolve(
+        column_strength.astype(
+            np.float32
+        ),
+        kernel,
+        mode="same"
+    )
+
+
+    # ========================================================
+    # Estimate normal candle spacing from primary detector.
+    # ========================================================
+
+    primary_x = sorted([
+        c["center_x"]
+        for c in primary_candles
+    ])
+
+
+    spacings = []
+
+
+    for i in range(
+        1,
+        len(primary_x)
+    ):
+
+        distance = (
+            primary_x[i]
+            -
+            primary_x[i - 1]
+        )
+
+
+        if distance >= 3:
+
+            spacings.append(
+                distance
+            )
+
+
+    if spacings:
+
+        median_spacing = float(
+            np.median(
+                spacings
+            )
+        )
+
+    else:
+
+        median_spacing = max(
+            8,
+            w * 0.018
+        )
+
+
+    minimum_distance = max(
+        4,
+        int(
+            median_spacing *
+            VERIFY_MIN_DISTANCE_RATIO
+        )
+    )
+
+
+    # ========================================================
+    # Find local maxima.
+    # ========================================================
+
+    possible_peaks = []
+
+
+    threshold = max(
+        VERIFY_COLUMN_THRESHOLD,
+        int(
+            median_spacing * 0.15
+        )
+    )
+
+
+    for x in range(
+        2,
+        w - 2
+    ):
+
+        value = smoothed[x]
+
+
+        if value < threshold:
+            continue
+
+
+        if (
+            value >= smoothed[x - 1]
+            and
+            value >= smoothed[x + 1]
+        ):
+
+            possible_peaks.append(
+                (
+                    x,
+                    value
+                )
+            )
+
+
+    # ========================================================
+    # Separate close peaks.
+    # ========================================================
+
+    possible_peaks.sort(
+        key=lambda item:
+        item[1],
+        reverse=True
+    )
+
+
+    selected = []
+
+
+    for x, strength in possible_peaks:
+
+        too_close = False
+
+
+        for selected_x, _ in selected:
+
+            if abs(
+                x -
+                selected_x
+            ) < minimum_distance:
+
+                too_close = True
+
+                break
+
+
+        if not too_close:
+
+            selected.append(
+                (
+                    x,
+                    strength
+                )
+            )
+
+
+    selected.sort(
+        key=lambda item:
+        item[0]
+    )
+
+
+    return selected
+
+
+# ============================================================
+# MATCH VERIFICATION PEAKS TO CANDLES
+# ============================================================
+
+def compare_map_with_independent_scan(
+    candles,
+    peaks
+):
+
+    if not candles:
+
+        return {
+
+            "matched": 0,
+
+            "possible_missing": [],
+
+            "possible_extra": [],
+
+            "agreement": 0.0
+
+        }
+
+
+    candle_x = [
+        c["center_x"]
+        for c in candles
+    ]
+
+
+    # Estimate matching tolerance.
+    if len(candle_x) >= 2:
+
+        sorted_x = sorted(
+            candle_x
+        )
+
+        spacings = [
+
+            sorted_x[i] -
+            sorted_x[i - 1]
+
+            for i in range(
+                1,
+                len(sorted_x)
+            )
+
+            if (
+                sorted_x[i] -
+                sorted_x[i - 1]
+            ) > 2
+
+        ]
+
+
+        if spacings:
+
+            tolerance = max(
+                5,
+                float(
+                    np.median(
+                        spacings
+                    )
+                ) * 0.55
+            )
+
+        else:
+
+            tolerance = 8
+
+    else:
+
+        tolerance = 8
+
+
+    matched = 0
+
+    matched_candles = set()
+
+    matched_peaks = set()
+
+
+    # ========================================================
+    # Match each peak to closest candle.
+    # ========================================================
+
+    for peak_index, (
+        peak_x,
+        strength
+    ) in enumerate(peaks):
+
+        best_index = None
+        best_distance = None
+
+
+        for candle_index, cx in enumerate(
+            candle_x
+        ):
+
+            if candle_index in matched_candles:
+                continue
+
+
+            distance = abs(
+                peak_x -
+                cx
+            )
+
+
+            if distance <= tolerance:
+
+                if (
+                    best_distance is None
+                    or
+                    distance < best_distance
+                ):
+
+                    best_distance = distance
+                    best_index = candle_index
+
+
+        if best_index is not None:
+
+            matched += 1
+
+            matched_candles.add(
+                best_index
+            )
+
+            matched_peaks.add(
+                peak_index
+            )
+
+
+    # ========================================================
+    # Possible missing candles.
+    # ========================================================
+
+    possible_missing = []
+
+
+    for peak_index, (
+        peak_x,
+        strength
+    ) in enumerate(peaks):
+
+        if peak_index not in matched_peaks:
+
+            possible_missing.append(
+                peak_x
+            )
+
+
+    # ========================================================
+    # Possible extra detections.
+    # ========================================================
+
+    possible_extra = []
+
+
+    for candle_index, cx in enumerate(
+        candle_x
+    ):
+
+        if candle_index not in matched_candles:
+
+            possible_extra.append(
+                cx
+            )
+
+
+    # ========================================================
+    # Agreement
+    # ========================================================
+
+    denominator = max(
+        len(candles),
+        len(peaks),
+        1
+    )
+
+
+    agreement = (
+        matched /
+        denominator
+    ) * 100
+
+
+    return {
+
+        "matched": matched,
+
+        "possible_missing": possible_missing,
+
+        "possible_extra": possible_extra,
+
+        "agreement": agreement
+
+    }
+
+
+# ============================================================
+# FULL MAP VERIFICATION
+# ============================================================
+
+def verify_candle_map(
+    img,
+    candles
+):
+
+    purple_mask, yellow_mask = (
+        get_color_masks(img)
+    )
+
+
+    # ========================================================
+    # VERIFY EACH PRIMARY CANDLE
+    # ========================================================
+
+    results = []
+
+
+    for candle in candles:
+
+        result = verify_single_candle(
+            candle,
+            purple_mask,
+            yellow_mask
+        )
+
+
+        verified_candle = candle.copy()
+
+        verified_candle[
+            "verification"
+        ] = result
+
+
+        results.append(
+            verified_candle
+        )
+
+
+    # ========================================================
+    # INDEPENDENT COLUMN SCAN
+    # ========================================================
+
+    peaks = build_verification_peaks(
+        img,
+        purple_mask,
+        yellow_mask,
+        candles
+    )
+
+
+    comparison = (
+        compare_map_with_independent_scan(
+            candles,
+            peaks
+        )
+    )
+
+
+    # ========================================================
+    # VERIFIED COLOR COUNTS
+    # ========================================================
+
+    verified_purple = 0
+    verified_yellow = 0
+
+    unverified = 0
+
+
+    for candle in results:
+
+        if candle[
+            "verification"
+        ]["verified"]:
+
+            if candle[
+                "color"
+            ] == "PURPLE":
+
+                verified_purple += 1
+
+            else:
+
+                verified_yellow += 1
+
+        else:
+
+            unverified += 1
+
+
+    return {
+
+        "candles": results,
+
+        "verified_purple":
+            verified_purple,
+
+        "verified_yellow":
+            verified_yellow,
+
+        "verified_total":
+            verified_purple +
+            verified_yellow,
+
+        "unverified":
+            unverified,
+
+        "peaks":
+            peaks,
+
+        "comparison":
+            comparison
+
+    }
 
 
 # ============================================================
@@ -842,16 +1633,25 @@ def create_report(
 
 
 # ============================================================
-# DETECTION MAP
+# CREATE VERIFIED DETECTION MAP
 # ============================================================
 
 def create_detection_map(
     img,
-    candles
+    verification
 ):
 
     output = img.copy()
 
+
+    candles = verification[
+        "candles"
+    ]
+
+
+    # ========================================================
+    # DRAW PRIMARY CANDLES
+    # ========================================================
 
     for number, candle in enumerate(
         candles,
@@ -862,20 +1662,54 @@ def create_detection_map(
             candle["x"]
         )
 
-
         y = int(
             candle["y"]
         )
-
 
         w = int(
             candle["w"]
         )
 
-
         h = int(
             candle["h"]
         )
+
+
+        verify = candle[
+            "verification"
+        ]
+
+
+        verified = verify[
+            "verified"
+        ]
+
+
+        score = verify[
+            "score"
+        ]
+
+
+        # ====================================================
+        # VERIFIED = GREEN BOX
+        # UNVERIFIED = RED BOX
+        # ====================================================
+
+        if verified:
+
+            box_color = (
+                0,
+                255,
+                0
+            )
+
+        else:
+
+            box_color = (
+                0,
+                0,
+                255
+            )
 
 
         cv2.rectangle(
@@ -889,14 +1723,20 @@ def create_detection_map(
                 y + h
             ),
 
-            (0, 255, 255),
+            box_color,
 
             2
 
         )
 
 
-        if candle["color"] == "PURPLE":
+        # ====================================================
+        # NUMBER COLOR
+        # ====================================================
+
+        if candle[
+            "color"
+        ] == "PURPLE":
 
             label_color = (
                 255,
@@ -912,6 +1752,10 @@ def create_detection_map(
                 255
             )
 
+
+        # ====================================================
+        # CANDLE NUMBER
+        # ====================================================
 
         cv2.putText(
 
@@ -940,517 +1784,99 @@ def create_detection_map(
         )
 
 
+        # ====================================================
+        # VERIFICATION MARK
+        # ====================================================
+
+        mark = "V" if verified else "?"
+
+
+        cv2.putText(
+
+            output,
+
+            mark,
+
+            (
+                x + w + 3,
+                y + 15
+            ),
+
+            cv2.FONT_HERSHEY_SIMPLEX,
+
+            0.45,
+
+            box_color,
+
+            2,
+
+            cv2.LINE_AA
+
+        )
+
+
+    # ========================================================
+    # LEGEND
+    # ========================================================
+
+    cv2.rectangle(
+        output,
+        (10, 10),
+        (410, 105),
+        (20, 20, 20),
+        -1
+    )
+
+
+    cv2.putText(
+        output,
+        "MAP VERIFICATION",
+        (20, 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA
+    )
+
+
+    cv2.putText(
+        output,
+        "GREEN = VERIFIED",
+        (20, 60),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.50,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA
+    )
+
+
+    cv2.putText(
+        output,
+        "RED = CHECK",
+        (220, 60),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.50,
+        (0, 0, 255),
+        2,
+        cv2.LINE_AA
+    )
+
+
+    cv2.putText(
+        output,
+        "V = INDEPENDENT COLOR CHECK PASSED",
+        (20, 88),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.40,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA
+    )
+
+
     return output
-
-
-# ============================================================
-# OPENROUTER VISION
-# ============================================================
-
-def analyze_with_openrouter(
-    image_path
-):
-
-    if not OPENROUTER_API_KEY:
-
-        return {
-
-            "success": False,
-
-            "error":
-            "OPENROUTER_API_KEY is not set in Render."
-
-        }
-
-
-    start = time.time()
-
-
-    try:
-
-        with open(
-            image_path,
-            "rb"
-        ) as image_file:
-
-            image_bytes = (
-                image_file.read()
-            )
-
-
-        base64_image = (
-            base64.b64encode(
-                image_bytes
-            ).decode(
-                "utf-8"
-            )
-        )
-
-
-        prompt = r"""
-You are analyzing a screenshot of a 1-minute financial trading chart.
-
-IMPORTANT:
-Do NOT invent numbers.
-Do NOT estimate a price if the visible price scale cannot support it.
-Do NOT confuse random numbers, timestamps, indicators, account values,
-or UI numbers with the chart's price scale.
-
-Your job is ONLY to visually inspect the screenshot.
-
-Focus on the RIGHT-SIDE VERTICAL PRICE SCALE.
-
-Identify:
-
-1. HIGHEST visible price-scale value.
-2. LOWEST visible price-scale value.
-3. CURRENT price ONLY if there is a clearly visible current-price marker,
-   current-price label, or clearly readable live price associated with
-   the newest/rightmost candle.
-4. The direction of the most recent 2-5 visible candles:
-   UP, DOWN, or RANGE.
-5. Whether the recent movement appears strongly aligned or mixed.
-
-Also inspect the candles:
-- Purple candles are bullish/BUY.
-- Yellow candles are bearish/SELL.
-
-Do not create OHLC values that are not visible.
-
-Return ONLY valid JSON in exactly this structure:
-
-{
-  "highest_price": null,
-  "lowest_price": null,
-  "current_price": null,
-  "direction": "UP/DOWN/RANGE/UNCERTAIN",
-  "recent_alignment": "BULLISH/BEARISH/MIXED/UNCERTAIN",
-  "price_scale_visible": true,
-  "confidence": 0,
-  "notes": ""
-}
-
-Rules:
-
-- highest_price must be the highest ACTUAL price number visible on
-  the chart's vertical price scale.
-- lowest_price must be the lowest ACTUAL price number visible on
-  the chart's vertical price scale.
-- If you cannot read a value confidently, use null.
-- Never use a made-up value.
-- Do not use the candle's vertical position to invent a price.
-- Confidence must be 0-100.
-- Keep notes short.
-"""
-
-
-        payload = {
-
-            "model":
-            OPENROUTER_MODEL,
-
-            "messages": [
-
-                {
-
-                    "role":
-                    "user",
-
-                    "content": [
-
-                        {
-
-                            "type":
-                            "text",
-
-                            "text":
-                            prompt
-
-                        },
-
-                        {
-
-                            "type":
-                            "image_url",
-
-                            "image_url": {
-
-                                "url":
-                                "data:image/png;base64,"
-                                +
-                                base64_image
-
-                            }
-
-                        }
-
-                    ]
-
-                }
-
-            ],
-
-            "temperature":
-            0,
-
-            "max_tokens":
-            500
-
-        }
-
-
-        headers = {
-
-            "Authorization":
-            "Bearer "
-            +
-            OPENROUTER_API_KEY,
-
-            "Content-Type":
-            "application/json",
-
-            "HTTP-Referer":
-            "https://render.com",
-
-            "X-Title":
-            "OTC Candle Price Vision Test"
-
-        }
-
-
-        response = requests.post(
-
-            OPENROUTER_URL,
-
-            headers=headers,
-
-            json=payload,
-
-            timeout=15
-
-        )
-
-
-        elapsed = (
-            time.time() -
-            start
-        )
-
-
-        if response.status_code != 200:
-
-            return {
-
-                "success": False,
-
-                "error":
-                f"OpenRouter HTTP "
-                f"{response.status_code}: "
-                f"{response.text[:1000]}",
-
-                "elapsed":
-                elapsed
-
-            }
-
-
-        data = response.json()
-
-
-        try:
-
-            content = (
-                data[
-                    "choices"
-                ][0][
-                    "message"
-                ][
-                    "content"
-                ]
-            )
-
-        except Exception:
-
-            return {
-
-                "success": False,
-
-                "error":
-                "OpenRouter returned no readable content.",
-
-                "raw":
-                str(data)[:1500],
-
-                "elapsed":
-                elapsed
-
-            }
-
-
-        # ====================================================
-        # CLEAN MARKDOWN JSON IF MODEL ADDS IT
-        # ====================================================
-
-        content = content.strip()
-
-
-        content = re.sub(
-
-            r"^```json\s*",
-
-            "",
-
-            content,
-
-            flags=re.IGNORECASE
-
-        )
-
-
-        content = re.sub(
-
-            r"^```\s*",
-
-            "",
-
-            content
-
-        )
-
-
-        content = re.sub(
-
-            r"\s*```$",
-
-            "",
-
-            content
-
-        )
-
-
-        # ====================================================
-        # EXTRACT JSON OBJECT
-        # ====================================================
-
-        match = re.search(
-
-            r"\{.*\}",
-
-            content,
-
-            flags=re.DOTALL
-
-        )
-
-
-        if not match:
-
-            return {
-
-                "success": False,
-
-                "error":
-                "Vision model did not return JSON.",
-
-                "raw":
-                content[:2000],
-
-                "elapsed":
-                elapsed
-
-            }
-
-
-        json_text = (
-            match.group(0)
-        )
-
-
-        try:
-
-            result = json.loads(
-                json_text
-            )
-
-        except Exception:
-
-            return {
-
-                "success": False,
-
-                "error":
-                "Could not parse vision JSON.",
-
-                "raw":
-                content[:2000],
-
-                "elapsed":
-                elapsed
-
-            }
-
-
-        result["success"] = True
-
-        result["elapsed"] = elapsed
-
-        result["raw"] = content
-
-
-        return result
-
-
-    except requests.exceptions.Timeout:
-
-        return {
-
-            "success": False,
-
-            "error":
-            "OpenRouter vision request timed out.",
-
-            "elapsed":
-            time.time() - start
-
-        }
-
-
-    except Exception as e:
-
-        return {
-
-            "success": False,
-
-            "error":
-            str(e),
-
-            "elapsed":
-            time.time() - start
-
-        }
-
-
-# ============================================================
-# FORMAT VISION RESULT
-# ============================================================
-
-def format_vision_result(
-    vision
-):
-
-    if not vision.get(
-        "success",
-        False
-    ):
-
-        return (
-
-            "👁️ **OPENROUTER VISION**\n\n"
-
-            "❌ Vision reading failed.\n\n"
-
-            f"Error: "
-            f"{vision.get('error', 'Unknown error')}"
-
-        )
-
-
-    highest = vision.get(
-        "highest_price"
-    )
-
-
-    lowest = vision.get(
-        "lowest_price"
-    )
-
-
-    current = vision.get(
-        "current_price"
-    )
-
-
-    direction = vision.get(
-        "direction",
-        "UNCERTAIN"
-    )
-
-
-    alignment = vision.get(
-        "recent_alignment",
-        "UNCERTAIN"
-    )
-
-
-    confidence = vision.get(
-        "confidence",
-        0
-    )
-
-
-    notes = vision.get(
-        "notes",
-        ""
-    )
-
-
-    highest_text = (
-        str(highest)
-        if highest is not None
-        else "NOT READ"
-    )
-
-
-    lowest_text = (
-        str(lowest)
-        if lowest is not None
-        else "NOT READ"
-    )
-
-
-    current_text = (
-        str(current)
-        if current is not None
-        else "NOT READ"
-    )
-
-
-    return (
-
-        "👁️ **OPENROUTER VISION READING**\n\n"
-
-        "💰 **VISIBLE PRICE SCALE**\n"
-
-        "━━━━━━━━━━━━━━━━━━━━\n"
-
-        f"⬆️ HIGHEST: "
-        f"{highest_text}\n"
-
-        f"⬇️ LOWEST: "
-        f"{lowest_text}\n"
-
-        f"📍 CURRENT: "
-        f"{current_text}\n\n"
-
-        "📈 **RECENT MOVEMENT**\n"
-
-        "━━━━━━━━━━━━━━━━━━━━\n"
-
-        f"Direction: {direction}\n"
-
-        f"Alignment: {alignment}\n"
-
-        f"Confidence: {confidence}%\n\n"
-
-        "📝 "
-
-        f"{notes if notes else 'No additional notes.'}\n\n"
-
-        f"⚡ Vision time: "
-        f"{vision.get('elapsed', 0):.2f}s"
-
-    )
 
 
 # ============================================================
@@ -1474,7 +1900,7 @@ def handle_photo(
 
 
     detection_path = (
-        "candle_detection.png"
+        "candle_verification_map.png"
     )
 
 
@@ -1484,12 +1910,11 @@ def handle_photo(
 
             message,
 
-            "👁️ Reading chart...\n"
+            "👁️ Reading candle map...\n"
             "➡️ Scanning RIGHT → LEFT.\n"
-            "🟣 Detecting PURPLE candles.\n"
-            "🟡 Detecting YELLOW candles.\n"
-            "💰 Sending the screenshot to "
-            "OpenRouter Vision for price-scale reading..."
+            "🟣 Checking PURPLE candles = BUY.\n"
+            "🟡 Checking YELLOW candles = SELL.\n"
+            "🔎 Running independent map verification..."
 
         )
 
@@ -1530,7 +1955,7 @@ def handle_photo(
 
 
         # ====================================================
-        # LOAD IMAGE
+        # LOAD
         # ====================================================
 
         img = load_image(
@@ -1539,10 +1964,10 @@ def handle_photo(
 
 
         # ====================================================
-        # CANDLE DETECTION
+        # PRIMARY DETECTION
         # ====================================================
 
-        candle_start = time.time()
+        detection_start = time.time()
 
 
         candles = detect_candles(
@@ -1550,15 +1975,15 @@ def handle_photo(
         )
 
 
-        candle_elapsed = (
+        detection_time = (
             time.time()
             -
-            candle_start
+            detection_start
         )
 
 
         # ====================================================
-        # COUNT
+        # PRIMARY COUNT
         # ====================================================
 
         purple, yellow = (
@@ -1574,18 +1999,119 @@ def handle_photo(
 
 
         # ====================================================
-        # OPENROUTER VISION
+        # NO CANDLES
         # ====================================================
 
-        vision = (
-            analyze_with_openrouter(
-                original_path
+        if total == 0:
+
+            bot.reply_to(
+
+                message,
+
+                "❌ No reliable candle bodies detected.\n\n"
+
+                "No candle was generated.\n"
+
+                "No random candle was added.\n"
+
+                "No signal was generated."
+
+            )
+
+            return
+
+
+        # ====================================================
+        # VERIFICATION
+        # ====================================================
+
+        verification_start = time.time()
+
+
+        verification = (
+            verify_candle_map(
+                img,
+                candles
             )
         )
 
 
+        verification_time = (
+            time.time()
+            -
+            verification_start
+        )
+
+
         # ====================================================
-        # CANDLE SEQUENCE
+        # VERIFIED COUNTS
+        # ====================================================
+
+        verified_purple = (
+            verification[
+                "verified_purple"
+            ]
+        )
+
+
+        verified_yellow = (
+            verification[
+                "verified_yellow"
+            ]
+        )
+
+
+        verified_total = (
+            verification[
+                "verified_total"
+            ]
+        )
+
+
+        unverified = (
+            verification[
+                "unverified"
+            ]
+        )
+
+
+        comparison = (
+            verification[
+                "comparison"
+            ]
+        )
+
+
+        map_agreement = (
+            comparison[
+                "agreement"
+            ]
+        )
+
+
+        independent_peaks = len(
+            verification[
+                "peaks"
+            ]
+        )
+
+
+        possible_missing = len(
+            comparison[
+                "possible_missing"
+            ]
+        )
+
+
+        possible_extra = len(
+            comparison[
+                "possible_extra"
+            ]
+        )
+
+
+        # ====================================================
+        # RIGHT → LEFT SEQUENCE
         # ====================================================
 
         sequence = []
@@ -1593,27 +2119,51 @@ def handle_photo(
 
         for number, candle in enumerate(
 
-            candles,
+            verification[
+                "candles"
+            ],
 
             start=1
 
         ):
 
-            if candle["color"] == "PURPLE":
+            if candle[
+                "color"
+            ] == "PURPLE":
 
-                sequence.append(
-
-                    f"{number}. 🟣 BUY"
-
-                )
+                color_text = "🟣 BUY"
 
             else:
 
-                sequence.append(
+                color_text = "🟡 SELL"
 
-                    f"{number}. 🟡 SELL"
 
-                )
+            verified = candle[
+                "verification"
+            ]["verified"]
+
+
+            score = candle[
+                "verification"
+            ]["score"]
+
+
+            if verified:
+
+                status = "✓"
+
+            else:
+
+                status = "?"
+
+
+            sequence.append(
+
+                f"{number}. {color_text} "
+                f"{status} "
+                f"({score:.0f}%)"
+
+            )
 
 
         sequence_text = (
@@ -1624,23 +2174,27 @@ def handle_photo(
 
 
         # ====================================================
-        # MAIN REPORT
+        # PROCESSING TIME
         # ====================================================
 
-        elapsed = (
+        total_time = (
             time.time()
             -
             start_time
         )
 
 
+        # ====================================================
+        # RESULT REPORT
+        # ====================================================
+
         report = (
 
-            "🔎 **CANDLE + VISION READING TEST**\n\n"
+            "🔎 **CANDLE + MAP VERIFICATION TEST**\n\n"
 
             "➡️ **SCAN:** RIGHT → LEFT\n\n"
 
-            "📊 **CANDLE DETECTION**\n"
+            "📊 **PRIMARY CANDLE DETECTION**\n"
 
             "━━━━━━━━━━━━━━━━━━━━\n"
 
@@ -1650,40 +2204,88 @@ def handle_photo(
 
             f"📊 TOTAL: {total}\n\n"
 
-            f"🕯️ Candle detection time: "
-            f"{candle_elapsed:.2f}s\n\n"
 
-            "💰 **VISION PRICE READING**\n"
+            "🔎 **INDEPENDENT MAP VERIFICATION**\n"
 
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
 
-            f"{format_vision_result(vision)}\n\n"
+            f"🟣 VERIFIED PURPLE: {verified_purple}\n"
 
-            "🕯️ **RIGHT → LEFT CANDLE READING**\n"
+            f"🟡 VERIFIED YELLOW: {verified_yellow}\n"
+
+            f"✅ VERIFIED TOTAL: {verified_total}\n"
+
+            f"❓ NEEDS CHECK: {unverified}\n\n"
+
+
+            "🧭 **INDEPENDENT COLUMN SCAN**\n"
+
+            "━━━━━━━━━━━━━━━━━━━━\n"
+
+            f"🔎 Possible candle positions: "
+            f"{independent_peaks}\n"
+
+            f"🤝 Matched positions: "
+            f"{comparison['matched']}\n"
+
+            f"⚠️ Possible missed: "
+            f"{possible_missing}\n"
+
+            f"⚠️ Possible extra: "
+            f"{possible_extra}\n"
+
+            f"📊 MAP AGREEMENT: "
+            f"{map_agreement:.1f}%\n\n"
+
+
+            "🕯️ **RIGHT → LEFT READING**\n"
 
             "━━━━━━━━━━━━━━━━━━━━\n"
 
             f"{sequence_text}\n\n"
 
+
             "━━━━━━━━━━━━━━━━━━━━\n"
 
-            "🎯 **COLOR KEY**\n"
+            "🎯 **MAP KEY**\n"
 
             "🟣 = PURPLE / BUY\n"
 
-            "🟡 = YELLOW / SELL\n\n"
+            "🟡 = YELLOW / SELL\n"
 
-            "⚠️ This is a reading test only.\n"
+            "🟩 ✓ = independently verified\n"
 
-            "⚠️ No random candles are generated.\n"
+            "🟥 ? = needs visual checking\n\n"
 
-            "⚠️ No random prices are generated.\n"
 
-            "⚠️ Vision must return NULL/NOT READ "
-            "when it cannot confidently read a price.\n\n"
+            "🔢 Number 1 = newest/rightmost "
+            "detected candle.\n\n"
 
-            f"⚡ Total processing time: "
-            f"{elapsed:.2f}s"
+
+            "⚠️ **IMPORTANT**\n"
+
+            "This is a candle-reading and "
+            "verification test only.\n"
+
+            "No Vision API is used.\n"
+
+            "No random candles are generated.\n"
+
+            "No random prices are generated.\n"
+
+            "No OHLC data is generated.\n"
+
+            "No trading signal is generated.\n\n"
+
+
+            f"🕯️ Detection: "
+            f"{detection_time:.2f}s\n"
+
+            f"🔎 Verification: "
+            f"{verification_time:.2f}s\n"
+
+            f"⚡ Total: "
+            f"{total_time:.2f}s"
 
         )
 
@@ -1700,7 +2302,7 @@ def handle_photo(
 
 
         # ====================================================
-        # CREATE DETECTION MAP
+        # CREATE VERIFICATION MAP
         # ====================================================
 
         detection_map = (
@@ -1709,7 +2311,7 @@ def handle_photo(
 
                 img,
 
-                candles
+                verification
 
             )
 
@@ -1726,7 +2328,7 @@ def handle_photo(
 
 
         # ====================================================
-        # SEND DETECTION MAP
+        # SEND MAP
         # ====================================================
 
         with open(
@@ -1745,25 +2347,24 @@ def handle_photo(
 
                 caption=(
 
-                    "🔢 **CANDLE DETECTION MAP**\n\n"
+                    "🔎 **CANDLE MAP VERIFICATION**\n\n"
 
-                    "1 = newest/rightmost detected candle.\n"
+                    "➡️ RIGHT → LEFT\n"
 
-                    "➡️ Numbers continue RIGHT → LEFT.\n\n"
+                    "🔢 1 = newest/rightmost\n\n"
 
-                    "🟣 Number = PURPLE / BUY.\n"
+                    "🟣 Number = PURPLE / BUY\n"
 
-                    "🟡 Number = YELLOW / SELL.\n\n"
+                    "🟡 Number = YELLOW / SELL\n\n"
 
-                    "💰 OpenRouter Vision is used separately "
-                    "to read the visible price scale.\n\n"
+                    "🟩 ✓ = independent verification passed\n"
 
-                    "⬆️ HIGHEST / ⬇️ LOWEST are only accepted "
-                    "when the vision model can identify the "
-                    "actual visible price-scale values.\n\n"
+                    "🟥 ? = detector found it, "
+                    "but verification needs checking\n\n"
 
-                    "⚠️ This map does not generate "
-                    "market prices."
+                    "The verification pass checks the "
+                    "actual candle-color pixels instead "
+                    "of using Vision API."
 
                 ),
 
@@ -1780,21 +2381,13 @@ def handle_photo(
         )
 
 
-        try:
+        bot.reply_to(
 
-            bot.reply_to(
+            message,
 
-                message,
+            f"❌ Detection error:\n{str(e)}"
 
-                "❌ Detection error:\n"
-                +
-                str(e)
-
-            )
-
-        except Exception:
-
-            pass
+        )
 
 
     finally:
@@ -1831,7 +2424,7 @@ print(
 )
 
 print(
-    "🕯️ CANDLE + OPENROUTER VISION TEST"
+    "🕯️ CANDLE + MAP VERIFICATION BOT"
 )
 
 print(
@@ -1855,11 +2448,19 @@ print(
 )
 
 print(
-    "👁️ OpenRouter Vision enabled"
+    "🔎 Primary candle detector enabled"
 )
 
 print(
-    "💰 Price-scale reading enabled"
+    "🔎 Independent map verification enabled"
+)
+
+print(
+    "🚫 OpenRouter Vision removed"
+)
+
+print(
+    "🚫 No OHLC generation"
 )
 
 print(
@@ -1877,20 +2478,6 @@ print(
 print(
     "========================================"
 )
-
-
-if not OPENROUTER_API_KEY:
-
-    print(
-        "⚠️ WARNING: "
-        "OPENROUTER_API_KEY is not set."
-    )
-
-else:
-
-    print(
-        "✅ OPENROUTER_API_KEY detected."
-    )
 
 
 bot.infinity_polling(
