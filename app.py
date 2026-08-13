@@ -21,14 +21,14 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # SETTINGS
 # ============================================================
 
-# Right-side scanning area — REDUCED WIDTH BY HALF (shifted right)
+# Right-side scanning area — UNCHANGED (width is perfect)
 RIGHT_SIDE_START = 0.80
 
 # Top crop — a little more
-TOP_CROP = 0.14
+TOP_CROP = 0.16
 
 # Bottom crop — more
-BOTTOM_CROP = 0.22
+BOTTOM_CROP = 0.28
 
 # Component filtering
 MIN_COMPONENT_AREA = 3
@@ -1556,8 +1556,7 @@ def handle_photo(
                     "🔄 **CHANGES APPLIED:**\n"
                     "• Top crop: slightly more\n"
                     "• Bottom crop: more\n"
-                    "• Width: reduced by half\n"
-                    "• Shifted: from the left side"
+                    "• Width: UNCHANGED"
                 )
 
             )
@@ -1624,8 +1623,7 @@ def start(
         "🔄 **CHANGES APPLIED:**\n"
         "• Top crop: slightly more\n"
         "• Bottom crop: more\n"
-        "• Width: reduced by half\n"
-        "• Shifted: from the left side\n\n"
+        "• Width: UNCHANGED\n\n"
 
         "🚫 No Tesseract\n"
         "🚫 No Vision API\n"
@@ -1691,7 +1689,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "🔄 Width reduced by half (from left)"
+        "✅ Width UNCHANGED"
     )
 
     print(
