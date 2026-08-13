@@ -24,8 +24,8 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # Right-side scanning area — UNCHANGED
 RIGHT_SIDE_START = 0.80
 
-# Top crop — CHANGED FROM 0.16 TO 0.10
-TOP_CROP = 0.10
+# Top crop — CHANGED FROM 0.10 TO 0.06
+TOP_CROP = 0.06
 
 # Bottom crop — UNCHANGED
 BOTTOM_CROP = 0.28
@@ -1554,7 +1554,7 @@ def handle_photo(
                     "🟨 Yellow = scan boundary\n"
                     "🟩 Green = EXACT SAME boundary\n\n"
                     "🔄 **CHANGES APPLIED:**\n"
-                    "• Top crop: 10%\n"
+                    "• Top crop: 6%\n"
                     "• Bottom crop: 28%\n"
                     "• Width: UNCHANGED"
                 )
@@ -1621,7 +1621,7 @@ def start(
         "🟩 Green = exact same boundary\n\n"
 
         "🔄 **CHANGES APPLIED:**\n"
-        "• Top crop: 10%\n"
+        "• Top crop: 6%\n"
         "• Bottom crop: 28%\n"
         "• Width: UNCHANGED\n\n"
 
