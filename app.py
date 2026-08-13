@@ -24,9 +24,8 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # Right-side scanning area — UNCHANGED (width is perfect)
 RIGHT_SIDE_START = 0.80
 
-# Top crop — MOVED DOWN TO JUST ABOVE 251.500
-# This excludes the expiration-time area above it.
-TOP_CROP = 0.35
+# Top crop — just below expiry time (between 0.16 and 0.20)
+TOP_CROP = 0.17
 
 # Bottom crop — UNCHANGED (bottom is perfect)
 BOTTOM_CROP = 0.28
@@ -1555,7 +1554,7 @@ def handle_photo(
                     "🟨 Yellow = scan boundary\n"
                     "🟩 Green = EXACT SAME boundary\n\n"
                     "🔄 **CHANGES APPLIED:**\n"
-                    "• Top crop: 0.35\n"
+                    "• Top crop: 0.17\n"
                     "• Bottom crop: 0.28\n"
                     "• Width: 0.80 → 100%"
                 )
@@ -1622,7 +1621,7 @@ def start(
         "🟩 Green = exact same boundary\n\n"
 
         "🔄 **CHANGES APPLIED:**\n"
-        "• Top crop: 0.35\n"
+        "• Top crop: 0.17\n"
         "• Bottom crop: 0.28\n"
         "• Width: 0.80 → 100%\n\n"
 
@@ -1665,12 +1664,12 @@ if __name__ == "__main__":
 
     print(
         f"📐 Top crop: "
-        f"{TOP_CROP:.2f}"
+        f"{TOP_CROP*100:.0f}%"
     )
 
     print(
         f"📐 Bottom crop: "
-        f"{BOTTOM_CROP:.2f}"
+        f"{BOTTOM_CROP*100:.0f}%"
     )
 
     print(
@@ -1690,7 +1689,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ Top crop: 0.35"
+        "✅ Top crop: 0.17"
     )
 
     print(
