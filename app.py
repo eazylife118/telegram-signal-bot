@@ -18,39 +18,71 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 
 # ============================================================
-# SETTINGS
+# PRICE AREA SETTINGS
+# ============================================================
+#
+# Pocket Option screenshot:
+#
+# The price scale is on the RIGHT side of the chart.
+#
+# We deliberately DO NOT scan:
+# - demo amount
+# - balance
+# - payout
+# - buttons
+# - bottom controls
+#
+# Only the right chart price area is examined.
 # ============================================================
 
-# Percentage of screenshot used for RIGHT SIDE scanning.
-# We intentionally ignore most of the screenshot.
-RIGHT_SIDE_START = 0.68
+PRICE_X_START = 0.78
+PRICE_X_END = 0.995
 
-# Ignore tiny noise
-MIN_COMPONENT_AREA = 3
-
-# Maximum component area
-MAX_COMPONENT_AREA = 5000
-
-# Digit height relative to screenshot
-MIN_DIGIT_HEIGHT = 6
-MAX_DIGIT_HEIGHT = 180
-
-# Digit width
-MIN_DIGIT_WIDTH = 1
-MAX_DIGIT_WIDTH = 100
-
-# Distance for grouping characters into one number
-GROUP_GAP_RATIO = 1.25
-
-# Recognition confidence
-MIN_RECOGNITION_SCORE = 0.34
-
-# Number must contain at least one recognized digit
-MIN_NUMBER_DIGITS = 1
+PRICE_Y_START = 0.18
+PRICE_Y_END = 0.82
 
 
 # ============================================================
-# IMAGE LOAD
+# IMAGE SETTINGS
+# ============================================================
+
+MIN_IMAGE_WIDTH = 900
+
+
+# ============================================================
+# TEXT DETECTION SETTINGS
+# ============================================================
+
+MIN_TEXT_HEIGHT = 8
+MAX_TEXT_HEIGHT = 45
+
+MIN_TEXT_WIDTH = 2
+MAX_TEXT_WIDTH = 25
+
+MIN_TEXT_PIXELS = 8
+
+
+# ============================================================
+# NUMBER SETTINGS
+# ============================================================
+
+EXPECTED_DECIMAL_DIGITS = 5
+
+# Example:
+#
+# 0.274300
+# 0.274200
+# 0.274501
+#
+# We expect numbers similar to:
+#
+# 0.xxxxxx
+#
+# but the recognizer does not require this exact format.
+
+
+# ============================================================
+# LOAD IMAGE
 # ============================================================
 
 def load_image(path):
@@ -58,639 +90,318 @@ def load_image(path):
     img = cv2.imread(path)
 
     if img is None:
-        raise ValueError("Could not read screenshot.")
+        raise ValueError(
+            "Could not read screenshot."
+        )
+
+    h, w = img.shape[:2]
+
+    if w < MIN_IMAGE_WIDTH:
+
+        scale = MIN_IMAGE_WIDTH / float(w)
+
+        img = cv2.resize(
+            img,
+            (
+                int(w * scale),
+                int(h * scale)
+            ),
+            interpolation=cv2.INTER_CUBIC
+        )
 
     return img
 
 
 # ============================================================
-# RIGHT-SIDE ROI
+# CROP ONLY RIGHT PRICE AREA
 # ============================================================
 
-def get_right_side_roi(img):
+def crop_price_area(img):
 
     h, w = img.shape[:2]
 
-    start_x = int(w * RIGHT_SIDE_START)
+    x1 = int(w * PRICE_X_START)
+    x2 = int(w * PRICE_X_END)
 
-    roi = img[:, start_x:]
+    y1 = int(h * PRICE_Y_START)
+    y2 = int(h * PRICE_Y_END)
 
-    return roi, start_x
+    crop = img[
+        y1:y2,
+        x1:x2
+    ]
+
+    return crop, (
+        x1,
+        y1
+    )
 
 
 # ============================================================
-# CREATE MULTIPLE THRESHOLDS
+# CREATE BRIGHT TEXT MASK
 # ============================================================
 
-def create_thresholds(roi):
+def create_text_masks(crop):
 
     hsv = cv2.cvtColor(
-        roi,
+        crop,
         cv2.COLOR_BGR2HSV
     )
 
     gray = cv2.cvtColor(
-        roi,
+        crop,
         cv2.COLOR_BGR2GRAY
     )
 
-    thresholds = []
+    # --------------------------------------------------------
+    # WHITE / LIGHT TEXT
+    # --------------------------------------------------------
 
+    white_mask = cv2.inRange(
+        hsv,
+        np.array([0, 0, 90]),
+        np.array([180, 130, 255])
+    )
 
-    # ========================================================
-    # 1. BRIGHT PIXELS
-    # ========================================================
+    # --------------------------------------------------------
+    # LIGHT COLORED TEXT
+    #
+    # Current-price label can be blue/gray.
+    # --------------------------------------------------------
 
-    bright = cv2.inRange(
+    bright_mask = cv2.inRange(
         gray,
-        150,
+        95,
         255
     )
 
-    thresholds.append(
-        ("BRIGHT", bright)
+    # Combine
+    combined = cv2.bitwise_or(
+        white_mask,
+        bright_mask
     )
 
-
-    # ========================================================
-    # 2. VERY BRIGHT PIXELS
-    # ========================================================
-
-    very_bright = cv2.inRange(
-        gray,
-        190,
-        255
+    # Remove tiny noise.
+    kernel = np.ones(
+        (2, 2),
+        np.uint8
     )
 
-    thresholds.append(
-        ("VERY_BRIGHT", very_bright)
-    )
-
-
-    # ========================================================
-    # 3. HSV SATURATION / BRIGHTNESS
-    # ========================================================
-
-    saturation = hsv[:, :, 1]
-    value = hsv[:, :, 2]
-
-    colored_bright = (
-        (value > 130)
-        &
-        (saturation > 40)
-    ).astype(np.uint8) * 255
-
-    thresholds.append(
-        ("COLORED_BRIGHT", colored_bright)
-    )
-
-
-    # ========================================================
-    # 4. ADAPTIVE THRESHOLD
-    # ========================================================
-
-    blurred = cv2.GaussianBlur(
-        gray,
-        (3, 3),
-        0
-    )
-
-    adaptive = cv2.adaptiveThreshold(
-        blurred,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        21,
-        -3
-    )
-
-    thresholds.append(
-        ("ADAPTIVE", adaptive)
-    )
-
-
-    # ========================================================
-    # 5. OTSU
-    # ========================================================
-
-    _, otsu = cv2.threshold(
-        gray,
-        0,
-        255,
-        cv2.THRESH_BINARY +
-        cv2.THRESH_OTSU
-    )
-
-    thresholds.append(
-        ("OTSU", otsu)
-    )
-
-
-    return thresholds
-
-
-# ============================================================
-# CLEAN MASK
-# ============================================================
-
-def clean_mask(mask):
-
-    # Small noise removal
-    kernel_small = cv2.getStructuringElement(
-        cv2.MORPH_RECT,
-        (2, 2)
-    )
-
-    cleaned = cv2.morphologyEx(
-        mask,
+    combined = cv2.morphologyEx(
+        combined,
         cv2.MORPH_OPEN,
-        kernel_small
+        kernel
     )
 
-
-    # Connect small parts of digits
-    kernel_close = cv2.getStructuringElement(
-        cv2.MORPH_RECT,
-        (2, 2)
-    )
-
-    cleaned = cv2.morphologyEx(
-        cleaned,
-        cv2.MORPH_CLOSE,
-        kernel_close
-    )
-
-
-    return cleaned
+    return combined
 
 
 # ============================================================
-# FIND CHARACTER COMPONENTS
+# FIND TEXT ROWS
+# ============================================================
+#
+# Instead of detecting every digit separately first,
+# we detect horizontal rows containing price text.
+#
+# Example:
+#
+# 0.274300
+# 0.274200
+# 0.274501
+# 0.274100
+# 0.274305
+#
 # ============================================================
 
-def find_components(mask):
+def find_price_rows(mask):
 
-    contours, _ = cv2.findContours(
-        mask,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
+    h, w = mask.shape[:2]
+
+    # Count bright pixels in each horizontal row.
+    row_strength = np.sum(
+        mask > 0,
+        axis=1
     )
 
-    components = []
+    rows = []
 
+    in_row = False
+    start = 0
 
-    for contour in contours:
+    for y in range(h):
 
-        x, y, w, h = cv2.boundingRect(
-            contour
+        active = (
+            row_strength[y] >= 2
         )
 
-        area = w * h
+        if active and not in_row:
 
+            start = y
+            in_row = True
 
-        if area < MIN_COMPONENT_AREA:
-            continue
+        elif not active and in_row:
 
+            end = y - 1
 
-        if area > MAX_COMPONENT_AREA:
-            continue
+            height = end - start + 1
 
-
-        if h < MIN_DIGIT_HEIGHT:
-            continue
-
-
-        if h > MAX_DIGIT_HEIGHT:
-            continue
-
-
-        if w < MIN_DIGIT_WIDTH:
-            continue
-
-
-        if w > MAX_DIGIT_WIDTH:
-            continue
-
-
-        # Reject extremely flat horizontal objects
-        if w > h * 3.5:
-            continue
-
-
-        # Pixel density
-        region = mask[
-            y:y+h,
-            x:x+w
-        ]
-
-        pixels = int(
-            np.sum(region > 0)
-        )
-
-        density = (
-            pixels /
-            float(max(1, w * h))
-        )
-
-
-        if density < 0.04:
-            continue
-
-
-        components.append({
-
-            "x": x,
-            "y": y,
-            "w": w,
-            "h": h,
-            "area": area,
-            "pixels": pixels,
-            "density": density
-
-        })
-
-
-    components.sort(
-        key=lambda c: c["x"]
-    )
-
-
-    return components
-
-
-# ============================================================
-# MERGE COMPONENTS THAT BELONG TO SAME DIGIT
-# ============================================================
-
-def merge_close_components(
-    components
-):
-
-    if not components:
-        return []
-
-
-    result = []
-
-    used = set()
-
-
-    for i, current in enumerate(
-        components
-    ):
-
-        if i in used:
-            continue
-
-
-        group = [current]
-
-        used.add(i)
-
-
-        changed = True
-
-
-        while changed:
-
-            changed = False
-
-
-            for j, candidate in enumerate(
-                components
+            if (
+                MIN_TEXT_HEIGHT
+                <= height
+                <= MAX_TEXT_HEIGHT
             ):
 
-                if j in used:
-                    continue
-
-
-                for member in group:
-
-                    member_left = member["x"]
-                    member_right = (
-                        member["x"] +
-                        member["w"]
+                rows.append(
+                    (
+                        start,
+                        end
                     )
+                )
 
-                    candidate_left = (
-                        candidate["x"]
-                    )
+            in_row = False
 
-                    candidate_right = (
-                        candidate["x"] +
-                        candidate["w"]
-                    )
+    if in_row:
 
+        end = h - 1
 
-                    horizontal_gap = max(
+        height = end - start + 1
 
-                        0,
+        if (
+            MIN_TEXT_HEIGHT
+            <= height
+            <= MAX_TEXT_HEIGHT
+        ):
 
-                        max(
-                            candidate_left -
-                            member_right,
-
-                            member_left -
-                            candidate_right
-                        )
-
-                    )
-
-
-                    height_ratio = (
-
-                        min(
-                            member["h"],
-                            candidate["h"]
-                        )
-
-                        /
-
-                        float(
-                            max(
-                                member["h"],
-                                candidate["h"]
-                            )
-                        )
-
-                    )
-
-
-                    # Pieces are likely from same character
-                    if (
-                        horizontal_gap <= 3
-                        and
-                        height_ratio >= 0.45
-                    ):
-
-                        group.append(
-                            candidate
-                        )
-
-                        used.add(j)
-
-                        changed = True
-
-                        break
-
-
-                if changed:
-                    break
-
-
-        # Build combined box
-        x1 = min(
-            c["x"]
-            for c in group
-        )
-
-        y1 = min(
-            c["y"]
-            for c in group
-        )
-
-        x2 = max(
-            c["x"] + c["w"]
-            for c in group
-        )
-
-        y2 = max(
-            c["y"] + c["h"]
-            for c in group
-        )
-
-
-        result.append({
-
-            "x": x1,
-            "y": y1,
-            "w": x2 - x1,
-            "h": y2 - y1
-
-        })
-
-
-    result.sort(
-        key=lambda c:
-        c["x"]
-    )
-
-
-    return result
-
-
-# ============================================================
-# GROUP DIGITS INTO NUMBERS
-# ============================================================
-
-def group_into_numbers(
-    components
-):
-
-    if not components:
-        return []
-
-
-    groups = []
-
-    current = [
-        components[0]
-    ]
-
-
-    for component in components[1:]:
-
-        previous = current[-1]
-
-
-        gap = (
-            component["x"]
-            -
-            (
-                previous["x"] +
-                previous["w"]
+            rows.append(
+                (
+                    start,
+                    end
+                )
             )
-        )
 
+    # --------------------------------------------------------
+    # Merge rows that are extremely close.
+    # --------------------------------------------------------
 
-        average_height = (
-            previous["h"] +
-            component["h"]
-        ) / 2.0
+    merged = []
 
+    for row in rows:
 
-        allowed_gap = max(
-            4,
-            average_height *
-            GROUP_GAP_RATIO
-        )
+        if not merged:
 
-
-        if gap <= allowed_gap:
-
-            current.append(
-                component
+            merged.append(
+                list(row)
             )
+
+            continue
+
+        previous = merged[-1]
+
+        if row[0] - previous[1] <= 3:
+
+            previous[1] = row[1]
 
         else:
 
-            groups.append(
-                current
+            merged.append(
+                list(row)
             )
 
-            current = [
-                component
-            ]
-
-
-    if current:
-        groups.append(
-            current
-        )
-
-
-    return groups
+    return merged
 
 
 # ============================================================
-# NORMALIZE DIGIT IMAGE
+# GET ROW REGION
 # ============================================================
 
-def normalize_digit(
-    image
+def get_row_region(
+    mask,
+    y1,
+    y2
 ):
 
-    if image is None:
+    region = mask[
+        y1:y2 + 1,
+        :
+    ]
+
+    column_strength = np.sum(
+        region > 0,
+        axis=0
+    )
+
+    active_columns = np.where(
+        column_strength >= 1
+    )[0]
+
+    if len(active_columns) == 0:
+
         return None
 
+    left = int(
+        np.min(active_columns)
+    )
 
-    if image.size == 0:
+    right = int(
+        np.max(active_columns)
+    )
+
+    # --------------------------------------------------------
+    # We only want price text.
+    #
+    # Ignore extremely tiny fragments.
+    # --------------------------------------------------------
+
+    if right - left < 15:
+
         return None
 
-
-    # Remove tiny border noise
-    image = image.copy()
-
-
-    h, w = image.shape[:2]
-
-
-    # Maintain aspect ratio
-    target_h = 48
-    scale = target_h / float(
-        max(1, h)
-    )
-
-    target_w = max(
-        8,
-        int(w * scale)
-    )
-
-
-    resized = cv2.resize(
-        image,
-        (
-            target_w,
-            target_h
-        ),
-        interpolation=cv2.INTER_AREA
-    )
-
-
-    # Put into fixed canvas
-    canvas = np.zeros(
-        (64, 48),
-        dtype=np.uint8
-    )
-
-
-    rh, rw = resized.shape[:2]
-
-
-    if rw > 46:
-
-        resized = cv2.resize(
-            resized,
-            (46, 60),
-            interpolation=cv2.INTER_AREA
-        )
-
-        rh, rw = resized.shape[:2]
-
-
-    x_offset = (
-        48 - rw
-    ) // 2
-
-    y_offset = (
-        64 - rh
-    ) // 2
-
-
-    canvas[
-        y_offset:y_offset+rh,
-        x_offset:x_offset+rw
-    ] = resized
-
-
-    _, canvas = cv2.threshold(
-        canvas,
-        100,
-        255,
-        cv2.THRESH_BINARY
-    )
-
-
-    return canvas
+    return region[
+        :,
+        left:right + 1
+    ], left, right
 
 
 # ============================================================
-# GENERATE DIGIT TEMPLATES
+# DIGIT TEMPLATE GENERATOR
+# ============================================================
+#
+# No Tesseract.
+#
+# OpenCV creates reference digits.
+#
+# Several font sizes are generated so that the recognizer
+# has multiple references to compare against.
+#
 # ============================================================
 
-def generate_digit_templates():
+def make_digit_templates():
 
-    templates = {
-        str(i): []
-        for i in range(10)
-    }
-
+    templates = []
 
     fonts = [
-
         cv2.FONT_HERSHEY_SIMPLEX,
-
-        cv2.FONT_HERSHEY_PLAIN,
-
         cv2.FONT_HERSHEY_DUPLEX,
-
-        cv2.FONT_HERSHEY_COMPLEX,
-
-        cv2.FONT_HERSHEY_TRIPLEX
-
+        cv2.FONT_HERSHEY_PLAIN
     ]
-
 
     font_scales = [
-        1.0,
-        1.2,
-        1.4,
-        1.6,
-        1.8
+        0.45,
+        0.50,
+        0.55,
+        0.60,
+        0.65,
+        0.70
     ]
-
 
     thicknesses = [
         1,
-        2,
-        3
+        2
     ]
-
 
     for digit in range(10):
 
-        text = str(digit)
-
+        character = str(digit)
 
         for font in fonts:
 
@@ -699,724 +410,836 @@ def generate_digit_templates():
                 for thickness in thicknesses:
 
                     canvas = np.zeros(
-                        (80, 60),
+                        (50, 40),
                         dtype=np.uint8
                     )
 
-
-                    size, baseline = (
-                        cv2.getTextSize(
-                            text,
-                            font,
-                            scale,
-                            thickness
-                        )
-                    )
-
-
-                    tw, th = size
-
-
-                    x = max(
-                        1,
-                        (60 - tw) // 2
-                    )
-
-
-                    y = max(
-                        th + 1,
-                        (80 + th) // 2
-                    )
-
-
                     cv2.putText(
-
                         canvas,
-
-                        text,
-
-                        (x, y),
-
+                        character,
+                        (5, 35),
                         font,
-
                         scale,
-
                         255,
-
                         thickness,
-
                         cv2.LINE_AA
-
                     )
 
-
-                    normalized = (
-                        normalize_digit(
-                            canvas
-                        )
+                    ys, xs = np.where(
+                        canvas > 0
                     )
 
+                    if len(xs) == 0:
+                        continue
 
-                    if normalized is not None:
+                    x1 = max(
+                        0,
+                        int(xs.min()) - 2
+                    )
 
-                        templates[
-                            text
-                        ].append(
-                            normalized
+                    x2 = min(
+                        canvas.shape[1],
+                        int(xs.max()) + 3
+                    )
+
+                    y1 = max(
+                        0,
+                        int(ys.min()) - 2
+                    )
+
+                    y2 = min(
+                        canvas.shape[0],
+                        int(ys.max()) + 3
+                    )
+
+                    cropped = canvas[
+                        y1:y2,
+                        x1:x2
+                    ]
+
+                    cropped = cv2.resize(
+                        cropped,
+                        (24, 36),
+                        interpolation=cv2.INTER_AREA
+                    )
+
+                    _, cropped = cv2.threshold(
+                        cropped,
+                        80,
+                        255,
+                        cv2.THRESH_BINARY
+                    )
+
+                    templates.append(
+                        (
+                            digit,
+                            cropped
                         )
-
+                    )
 
     return templates
 
 
-# Generate once when program starts
-DIGIT_TEMPLATES = (
-    generate_digit_templates()
-)
+DIGIT_TEMPLATES = make_digit_templates()
 
 
 # ============================================================
-# TEMPLATE SIMILARITY
+# NORMALIZE DIGIT
 # ============================================================
 
-def compare_images(
-    image_a,
-    image_b
+def normalize_digit(roi):
+
+    if roi is None:
+        return None
+
+    if roi.size == 0:
+        return None
+
+    ys, xs = np.where(
+        roi > 0
+    )
+
+    if len(xs) == 0:
+        return None
+
+    x1 = max(
+        0,
+        int(xs.min()) - 1
+    )
+
+    x2 = min(
+        roi.shape[1],
+        int(xs.max()) + 2
+    )
+
+    y1 = max(
+        0,
+        int(ys.min()) - 1
+    )
+
+    y2 = min(
+        roi.shape[0],
+        int(ys.max()) + 2
+    )
+
+    roi = roi[
+        y1:y2,
+        x1:x2
+    ]
+
+    roi = cv2.resize(
+        roi,
+        (24, 36),
+        interpolation=cv2.INTER_AREA
+    )
+
+    _, roi = cv2.threshold(
+        roi,
+        80,
+        255,
+        cv2.THRESH_BINARY
+    )
+
+    return roi
+
+
+# ============================================================
+# TEMPLATE MATCH DIGIT
+# ============================================================
+
+def recognize_digit(roi):
+
+    normalized = normalize_digit(
+        roi
+    )
+
+    if normalized is None:
+
+        return "?", 0.0
+
+    best_digit = "?"
+    best_score = -1
+
+    for digit, template in DIGIT_TEMPLATES:
+
+        # Correlation
+        score = cv2.matchTemplate(
+            normalized,
+            template,
+            cv2.TM_CCOEFF_NORMED
+        )[0][0]
+
+        if score > best_score:
+
+            best_score = score
+            best_digit = str(digit)
+
+    confidence = (
+        max(
+            0,
+            min(
+                100,
+                (best_score + 1) * 50
+            )
+        )
+    )
+
+    return (
+        best_digit,
+        confidence
+    )
+
+
+# ============================================================
+# SEGMENT POSSIBLE DIGITS
+# ============================================================
+
+def segment_row(
+    row_mask
 ):
 
-    if (
-        image_a is None
-        or
-        image_b is None
-    ):
-        return 0.0
+    # Slight horizontal closing joins parts of digits
+    # without joining distant price rows.
 
-
-    a = image_a.astype(
-        np.float32
-    ) / 255.0
-
-    b = image_b.astype(
-        np.float32
-    ) / 255.0
-
-
-    # Pixel similarity
-    mae = np.mean(
-        np.abs(a - b)
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (2, 1)
     )
 
-
-    pixel_score = max(
-        0.0,
-        1.0 - mae
+    work = cv2.morphologyEx(
+        row_mask,
+        cv2.MORPH_CLOSE,
+        kernel
     )
 
-
-    # Shape overlap
-    a_binary = (
-        a > 0.5
-    ).astype(
-        np.uint8
+    contours, _ = cv2.findContours(
+        work,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
     )
 
-    b_binary = (
-        b > 0.5
-    ).astype(
-        np.uint8
+    boxes = []
+
+    h, w = work.shape[:2]
+
+    for contour in contours:
+
+        x, y, cw, ch = cv2.boundingRect(
+            contour
+        )
+
+        area = cw * ch
+
+        if area < MIN_TEXT_PIXELS:
+            continue
+
+        if ch < 5:
+            continue
+
+        if ch > h + 2:
+            continue
+
+        if cw > MAX_TEXT_WIDTH:
+            continue
+
+        # Ignore extremely small noise.
+        if cw < MIN_TEXT_WIDTH and ch < 8:
+            continue
+
+        boxes.append(
+            (
+                x,
+                y,
+                cw,
+                ch
+            )
+        )
+
+    boxes.sort(
+        key=lambda b: b[0]
     )
 
+    return boxes
 
-    intersection = np.sum(
-        (
-            a_binary &
-            b_binary
-        ) > 0
+
+# ============================================================
+# RECOGNIZE PRICE ROW
+# ============================================================
+
+def recognize_price_row(
+    row_mask
+):
+
+    boxes = segment_row(
+        row_mask
     )
 
+    if not boxes:
 
-    union = np.sum(
-        (
-            a_binary |
-            b_binary
-        ) > 0
+        return None, 0.0, []
+
+    digits = []
+    confidences = []
+
+    debug_boxes = []
+
+    # --------------------------------------------------------
+    # Recognize characters.
+    # --------------------------------------------------------
+
+    for x, y, w, h in boxes:
+
+        roi = row_mask[
+            y:y+h,
+            x:x+w
+        ]
+
+        # Very small isolated point can be decimal point.
+        if (
+            h <= 9
+            and
+            w <= 8
+        ):
+
+            digits.append(".")
+
+            confidences.append(
+                90
+            )
+
+            debug_boxes.append(
+                (x, y, w, h, ".")
+            )
+
+            continue
+
+        digit, confidence = (
+            recognize_digit(
+                roi
+            )
+        )
+
+        if digit != "?":
+
+            digits.append(
+                digit
+            )
+
+            confidences.append(
+                confidence
+            )
+
+            debug_boxes.append(
+                (
+                    x,
+                    y,
+                    w,
+                    h,
+                    digit
+                )
+            )
+
+    if not digits:
+
+        return None, 0.0, []
+
+    number = "".join(
+        digits
     )
 
+    # --------------------------------------------------------
+    # Clean common segmentation mistakes.
+    # --------------------------------------------------------
 
-    if union > 0:
+    number = number.replace(
+        "..",
+        "."
+    )
 
-        iou = (
-            intersection /
-            float(union)
+    # A price normally contains one decimal.
+    if number.count(".") > 1:
+
+        first = number.find(".")
+
+        cleaned = (
+            number[:first + 1]
+            +
+            number[first + 1:].replace(
+                ".",
+                ""
+            )
+        )
+
+        number = cleaned
+
+    if confidences:
+
+        confidence = (
+            sum(confidences)
+            /
+            len(confidences)
         )
 
     else:
 
-        iou = 0.0
-
-
-    score = (
-        pixel_score * 0.45
-        +
-        iou * 0.55
-    )
-
-
-    return float(score)
-
-
-# ============================================================
-# RECOGNIZE ONE DIGIT
-# ============================================================
-
-def recognize_digit(
-    digit_image
-):
-
-    normalized = normalize_digit(
-        digit_image
-    )
-
-
-    if normalized is None:
-        return None, 0.0
-
-
-    best_digit = None
-    best_score = 0.0
-
-
-    for digit, templates in (
-        DIGIT_TEMPLATES.items()
-    ):
-
-        for template in templates:
-
-            score = compare_images(
-                normalized,
-                template
-            )
-
-
-            if score > best_score:
-
-                best_score = score
-                best_digit = digit
-
-
-    if (
-        best_digit is None
-        or
-        best_score <
-        MIN_RECOGNITION_SCORE
-    ):
-
-        return None, best_score
-
+        confidence = 0
 
     return (
-        best_digit,
-        best_score
+        number,
+        confidence,
+        debug_boxes
     )
 
 
 # ============================================================
-# EXTRACT DIGITS FROM NUMBER GROUP
+# PRICE VALIDATION
 # ============================================================
 
-def recognize_number_group(
-    group,
-    binary
+def is_price_like(number):
+
+    if not number:
+        return False
+
+    # Must contain digits.
+    if not any(
+        c.isdigit()
+        for c in number
+    ):
+        return False
+
+    # A chart price should normally contain a decimal.
+    if "." not in number:
+        return False
+
+    parts = number.split(".")
+
+    if len(parts) != 2:
+        return False
+
+    left = parts[0]
+    right = parts[1]
+
+    if not left.isdigit():
+        return False
+
+    if not right.isdigit():
+        return False
+
+    # Ignore obviously tiny values.
+    if len(right) < 3:
+        return False
+
+    # Price labels in this chart are normally compact.
+    if len(number) > 15:
+        return False
+
+    return True
+
+
+# ============================================================
+# REMOVE DUPLICATE PRICE ROWS
+# ============================================================
+
+def remove_duplicate_prices(
+    rows
 ):
 
-    if not group:
-        return None, 0.0
+    result = []
 
+    for row in rows:
 
-    recognized = []
+        number = row["number"]
 
-
-    scores = []
-
-
-    for component in group:
-
-        x = component["x"]
-        y = component["y"]
-        w = component["w"]
-        h = component["h"]
-
-
-        padding = 2
-
-
-        left = max(
-            0,
-            x - padding
-        )
-
-        top = max(
-            0,
-            y - padding
-        )
-
-        right = min(
-            binary.shape[1],
-            x + w + padding
-        )
-
-        bottom = min(
-            binary.shape[0],
-            y + h + padding
-        )
-
-
-        digit_roi = binary[
-            top:bottom,
-            left:right
-        ]
-
-
-        digit, score = (
-            recognize_digit(
-                digit_roi
-            )
-        )
-
-
-        if digit is None:
-
-            # Do not invent a digit
-            return None, 0.0
-
-
-        recognized.append(
-            digit
-        )
-
-        scores.append(
-            score
-        )
-
-
-    if not recognized:
-        return None, 0.0
-
-
-    number = "".join(
-        recognized
-    )
-
-
-    confidence = (
-        sum(scores) /
-        len(scores)
-    )
-
-
-    return number, confidence
-
-
-# ============================================================
-# FIND BEST DETECTION PASS
-# ============================================================
-
-def analyze_threshold(
-    binary,
-    name
-):
-
-    cleaned = clean_mask(
-        binary
-    )
-
-
-    components = find_components(
-        cleaned
-    )
-
-
-    if not components:
-        return None
-
-
-    components = merge_close_components(
-        components
-    )
-
-
-    groups = group_into_numbers(
-        components
-    )
-
-
-    results = []
-
-
-    for group in groups:
-
-        if len(group) < MIN_NUMBER_DIGITS:
+        if not number:
             continue
-
-
-        number, confidence = (
-            recognize_number_group(
-                group,
-                cleaned
-            )
-        )
-
-
-        if number is None:
-            continue
-
-
-        # Reject extremely weak results
-        if confidence < MIN_RECOGNITION_SCORE:
-            continue
-
-
-        x1 = min(
-            c["x"]
-            for c in group
-        )
-
-        y1 = min(
-            c["y"]
-            for c in group
-        )
-
-        x2 = max(
-            c["x"] + c["w"]
-            for c in group
-        )
-
-        y2 = max(
-            c["y"] + c["h"]
-            for c in group
-        )
-
-
-        results.append({
-
-            "number": number,
-
-            "confidence":
-                confidence,
-
-            "x": x1,
-
-            "y": y1,
-
-            "w": x2 - x1,
-
-            "h": y2 - y1,
-
-            "components":
-                len(group),
-
-            "method":
-                name
-
-        })
-
-
-    if not results:
-        return None
-
-
-    return results
-
-
-# ============================================================
-# REMOVE DUPLICATE NUMBER RESULTS
-# ============================================================
-
-def remove_duplicate_results(
-    results
-):
-
-    if not results:
-        return []
-
-
-    results.sort(
-        key=lambda r:
-        (
-            r["y"],
-            r["x"]
-        )
-    )
-
-
-    final = []
-
-
-    for result in results:
 
         duplicate = False
 
+        for existing in result:
 
-        for existing in final:
+            if number == existing["number"]:
 
-            x_distance = abs(
-                result["x"] -
-                existing["x"]
-            )
-
-            y_distance = abs(
-                result["y"] -
-                existing["y"]
-            )
-
-
-            if (
-                x_distance < 15
-                and
-                y_distance < 15
-                and
-                result["number"] ==
-                existing["number"]
-            ):
-
-                duplicate = True
-
-
+                # Keep stronger recognition.
                 if (
-                    result["confidence"]
+                    row["confidence"]
                     >
                     existing["confidence"]
                 ):
 
                     existing.update(
-                        result
+                        row
                     )
 
+                duplicate = True
 
                 break
-
 
         if not duplicate:
 
-            final.append(
-                result
+            result.append(
+                row
             )
 
-
-    return final
+    return result
 
 
 # ============================================================
-# MAIN NUMBER EXTRACTION
+# READ RIGHT-SIDE PRICES
 # ============================================================
 
-def extract_numbers_from_image(
-    image_path
+def read_right_side_prices(
+    img
 ):
 
-    img = load_image(
-        image_path
+    crop, origin = crop_price_area(
+        img
     )
 
+    x_origin, y_origin = origin
 
-    roi, offset_x = (
-        get_right_side_roi(
-            img
-        )
+    mask = create_text_masks(
+        crop
     )
 
-
-    thresholds = create_thresholds(
-        roi
+    rows = find_price_rows(
+        mask
     )
 
+    detected = []
 
-    all_results = []
+    for y1, y2 in rows:
 
-
-    for name, mask in thresholds:
-
-        results = analyze_threshold(
+        region_info = get_row_region(
             mask,
-            name
+            y1,
+            y2
         )
 
+        if region_info is None:
+            continue
 
-        if results:
-
-            for result in results:
-
-                # Convert ROI x to full-image x
-                result["x"] += (
-                    offset_x
-                )
-
-                all_results.append(
-                    result
-                )
-
-
-    all_results = (
-        remove_duplicate_results(
-            all_results
+        row_mask, left, right = (
+            region_info
         )
+
+        number, confidence, boxes = (
+            recognize_price_row(
+                row_mask
+            )
+        )
+
+        if not is_price_like(
+            number
+        ):
+            continue
+
+        # Convert row position back to full screenshot.
+        center_y = (
+            y_origin
+            +
+            (y1 + y2) / 2
+        )
+
+        detected.append({
+
+            "number": number,
+
+            "confidence": confidence,
+
+            "center_y": center_y,
+
+            "x1": x_origin + left,
+
+            "x2": x_origin + right,
+
+            "y1": y_origin + y1,
+
+            "y2": y_origin + y2,
+
+            "boxes": boxes
+
+        })
+
+    detected = remove_duplicate_prices(
+        detected
     )
 
-
-    # ========================================================
-    # SCORE RESULTS BY CONFIDENCE
-    # ========================================================
-
-    all_results.sort(
+    detected.sort(
         key=lambda r:
-        r["confidence"],
-        reverse=True
+        r["center_y"]
     )
 
-
-    # ========================================================
-    # KEEP STRONGEST RESULTS
-    # ========================================================
-
-    final_results = []
+    return detected
 
 
-    for result in all_results:
+# ============================================================
+# FIND HIGHEST / LOWEST
+# ============================================================
 
-        overlapping = False
+def get_price_extremes(
+    prices
+):
 
+    numeric = []
 
-        for existing in final_results:
+    for p in prices:
 
-            ax1 = result["x"]
-            ax2 = (
-                result["x"] +
-                result["w"]
+        try:
+
+            value = float(
+                p["number"]
             )
 
-            bx1 = existing["x"]
-            bx2 = (
-                existing["x"] +
-                existing["w"]
-            )
-
-
-            horizontal_overlap = (
-                max(
-                    0,
-                    min(ax2, bx2) -
-                    max(ax1, bx1)
+            numeric.append(
+                (
+                    value,
+                    p
                 )
             )
 
+        except Exception:
+            pass
 
-            if horizontal_overlap > 0:
+    if not numeric:
 
-                overlapping = True
+        return None, None
 
-                break
+    highest = max(
+        numeric,
+        key=lambda x:
+        x[0]
+    )[1]
 
+    lowest = min(
+        numeric,
+        key=lambda x:
+        x[0]
+    )[1]
 
-        if not overlapping:
-
-            final_results.append(
-                result
-            )
-
-
-    final_results.sort(
-        key=lambda r:
-        (
-            r["y"],
-            r["x"]
-        )
+    return (
+        highest,
+        lowest
     )
 
 
-    return img, final_results
+# ============================================================
+# FIND CURRENT PRICE
+# ============================================================
+#
+# Pocket Option often displays the current price in a
+# highlighted/colored label around the current candle level.
+#
+# We look for the price row closest to the strongest horizontal
+# highlighted region.
+#
+# ============================================================
+
+def find_current_price(
+    img,
+    prices
+):
+
+    if not prices:
+
+        return None
+
+    h, w = img.shape[:2]
+
+    # Look at the right side where current-price label lives.
+    x1 = int(
+        w * 0.82
+    )
+
+    x2 = int(
+        w * 0.995
+    )
+
+    y1 = int(
+        h * 0.25
+    )
+
+    y2 = int(
+        h * 0.78
+    )
+
+    region = img[
+        y1:y2,
+        x1:x2
+    ]
+
+    hsv = cv2.cvtColor(
+        region,
+        cv2.COLOR_BGR2HSV
+    )
+
+    # Look for blue/cyan highlighted price labels.
+    blue = cv2.inRange(
+        hsv,
+        np.array([80, 40, 70]),
+        np.array([130, 255, 255])
+    )
+
+    row_strength = np.sum(
+        blue > 0,
+        axis=1
+    )
+
+    if len(row_strength) == 0:
+        return None
+
+    strongest_y = int(
+        np.argmax(
+            row_strength
+        )
+    )
+
+    absolute_y = (
+        y1 +
+        strongest_y
+    )
+
+    # Find detected price closest to highlight.
+    closest = min(
+        prices,
+        key=lambda p:
+        abs(
+            p["center_y"]
+            -
+            absolute_y
+        )
+    )
+
+    distance = abs(
+        closest["center_y"]
+        -
+        absolute_y
+    )
+
+    # Only accept if reasonably close.
+    if distance <= 35:
+
+        return closest
+
+    return None
 
 
 # ============================================================
 # CREATE DEBUG MAP
 # ============================================================
 
-def create_number_detection_map(
+def create_price_map(
     img,
-    results
+    prices,
+    highest,
+    lowest,
+    current
 ):
 
     output = img.copy()
 
+    for p in prices:
 
-    for result in results:
-
-        x = int(
-            result["x"]
+        x1 = int(
+            p["x1"]
         )
 
-        y = int(
-            result["y"]
+        x2 = int(
+            p["x2"]
         )
 
-        w = int(
-            result["w"]
+        y1 = int(
+            p["y1"]
         )
 
-        h = int(
-            result["h"]
+        y2 = int(
+            p["y2"]
         )
 
-
+        # Green = detected price
         cv2.rectangle(
-
             output,
-
-            (x, y),
-
-            (
-                x + w,
-                y + h
-            ),
-
+            (x1, y1),
+            (x2, y2),
             (0, 255, 0),
-
             2
-
         )
-
-
-        label = (
-            f"{result['number']} "
-            f"{result['confidence'] * 100:.0f}%"
-        )
-
 
         cv2.putText(
-
             output,
-
-            label,
-
+            p["number"],
             (
-                x,
+                x1,
                 max(
                     20,
-                    y - 5
+                    y1 - 5
                 )
             ),
-
             cv2.FONT_HERSHEY_SIMPLEX,
-
-            0.5,
-
+            0.45,
             (0, 255, 0),
-
-            2,
-
+            1,
             cv2.LINE_AA
-
         )
 
+    # --------------------------------------------------------
+    # Mark highest
+    # --------------------------------------------------------
+
+    if highest:
+
+        cv2.putText(
+            output,
+            "HIGHEST",
+            (
+                int(highest["x1"]),
+                int(highest["y2"]) + 18
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (255, 255, 0),
+            2,
+            cv2.LINE_AA
+        )
+
+    # --------------------------------------------------------
+    # Mark lowest
+    # --------------------------------------------------------
+
+    if lowest:
+
+        cv2.putText(
+            output,
+            "LOWEST",
+            (
+                int(lowest["x1"]),
+                int(lowest["y2"]) + 18
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (255, 255, 0),
+            2,
+            cv2.LINE_AA
+        )
+
+    # --------------------------------------------------------
+    # Mark current
+    # --------------------------------------------------------
+
+    if current:
+
+        cv2.putText(
+            output,
+            "CURRENT",
+            (
+                int(current["x1"]),
+                int(current["y1"]) - 10
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (0, 255, 255),
+            2,
+            cv2.LINE_AA
+        )
 
     return output
 
@@ -1429,38 +1252,38 @@ def create_number_detection_map(
     content_types=["photo"]
 )
 
-def handle_photo(
-    message
-):
+def handle_photo(message):
 
     start_time = time.time()
 
     image_path = (
-        "number_screenshot.png"
+        "price_screenshot.png"
     )
 
     map_path = (
-        "number_detection_map.png"
+        "price_detection_map.png"
     )
-
 
     try:
 
-        # ====================================================
-        # DOWNLOAD
-        # ====================================================
+        bot.reply_to(
+            message,
+            "🔎 Reading RIGHT-SIDE price numbers..."
+        )
+
+        # ----------------------------------------------------
+        # DOWNLOAD HIGHEST RESOLUTION
+        # ----------------------------------------------------
 
         file_info = bot.get_file(
             message.photo[-1].file_id
         )
-
 
         downloaded_file = (
             bot.download_file(
                 file_info.file_path
             )
         )
-
 
         with open(
             image_path,
@@ -1471,177 +1294,148 @@ def handle_photo(
                 downloaded_file
             )
 
+        # ----------------------------------------------------
+        # LOAD
+        # ----------------------------------------------------
 
-        download_time = (
-            time.time()
-            -
-            start_time
+        img = load_image(
+            image_path
         )
 
+        # ----------------------------------------------------
+        # READ PRICES
+        # ----------------------------------------------------
 
-        # ====================================================
-        # NUMBER ANALYSIS
-        # ====================================================
+        prices = read_right_side_prices(
+            img
+        )
 
-        analysis_start = time.time()
+        # ----------------------------------------------------
+        # EXTREMES
+        # ----------------------------------------------------
 
-
-        img, results = (
-            extract_numbers_from_image(
-                image_path
+        highest, lowest = (
+            get_price_extremes(
+                prices
             )
         )
 
+        # ----------------------------------------------------
+        # CURRENT
+        # ----------------------------------------------------
 
-        analysis_time = (
-            time.time()
-            -
-            analysis_start
+        current = find_current_price(
+            img,
+            prices
         )
 
-
-        total_time = (
+        elapsed = (
             time.time()
             -
             start_time
         )
 
+        # ----------------------------------------------------
+        # NO RESULT
+        # ----------------------------------------------------
 
-        # ====================================================
-        # NO RESULTS
-        # ====================================================
-
-        if not results:
+        if not prices:
 
             bot.reply_to(
-
                 message,
-
-                "❌ No reliable numbers detected.\n\n"
-
-                "Nothing was generated.\n"
-                "No fake number was created.\n"
-                "No price was guessed.\n\n"
-
-                f"⚡ Analysis: "
-                f"{analysis_time:.2f}s\n"
-
-                f"📥 Download: "
-                f"{download_time:.2f}s\n"
-
-                f"⏱ Total: "
-                f"{total_time:.2f}s"
-
+                (
+                    "❌ No price numbers detected.\n\n"
+                    "I only scanned the RIGHT-SIDE "
+                    "chart price area.\n"
+                    "Demo amount was ignored.\n"
+                    "No Tesseract.\n"
+                    "No random numbers."
+                )
             )
 
             return
 
-
-        # ====================================================
-        # BUILD RESULT
-        # ====================================================
+        # ----------------------------------------------------
+        # RESULT
+        # ----------------------------------------------------
 
         response = (
-            "🔢 **RIGHT-SIDE NUMBER DETECTION**\n\n"
+            "🔢 **RIGHT-SIDE PRICE READER**\n\n"
+            "📍 **Detected prices:**\n"
         )
 
-
-        response += (
-            f"📊 Numbers found: "
-            f"{len(results)}\n"
-        )
-
-
-        response += (
-            f"⚡ Analysis: "
-            f"{analysis_time:.2f}s\n"
-        )
-
-
-        response += (
-            f"📥 Download: "
-            f"{download_time:.2f}s\n"
-        )
-
-
-        response += (
-            f"⏱ Total: "
-            f"{total_time:.2f}s\n\n"
-        )
-
-
-        response += (
-            "━━━━━━━━━━━━━━━━━━━━\n"
-        )
-
-
-        for i, result in enumerate(
-            results,
+        for i, price in enumerate(
+            prices,
             1
         ):
 
             response += (
-
-                f"{i}. `{result['number']}` "
-                f"({result['confidence'] * 100:.0f}%)\n"
-
+                f"{i}. `{price['number']}` "
+                f"({price['confidence']:.0f}%)\n"
             )
 
+        response += "\n"
+
+        if highest:
+
+            response += (
+                f"🔺 **HIGHEST:** "
+                f"`{highest['number']}`\n"
+            )
+
+        if lowest:
+
+            response += (
+                f"🔻 **LOWEST:** "
+                f"`{lowest['number']}`\n"
+            )
+
+        if current:
+
+            response += (
+                f"🎯 **CURRENT:** "
+                f"`{current['number']}`\n"
+            )
+
+        else:
+
+            response += (
+                "🎯 **CURRENT:** "
+                "Not confidently identified\n"
+            )
 
         response += (
             "\n━━━━━━━━━━━━━━━━━━━━\n"
-        )
-
-
-        response += (
-            "🎯 Scan area: RIGHT SIDE ONLY\n"
-        )
-
-        response += (
+            "🚫 Demo amount ignored\n"
             "🚫 No Tesseract\n"
+            "🚫 No random numbers\n"
+            "🚫 No OHLC generation\n"
+            "🚫 No trading signal\n"
+            f"\n⚡ Processing: {elapsed:.2f}s"
         )
-
-        response += (
-            "🚫 No Vision API\n"
-        )
-
-        response += (
-            "🚫 No generated numbers\n"
-        )
-
-        response += (
-            "🚫 No generated prices\n"
-        )
-
 
         bot.reply_to(
-
             message,
-
             response,
-
             parse_mode="Markdown"
-
         )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # DEBUG MAP
-        # ====================================================
+        # ----------------------------------------------------
 
-        map_img = (
-            create_number_detection_map(
-                img,
-                results
-            )
+        detection_map = create_price_map(
+            img,
+            prices,
+            highest,
+            lowest,
+            current
         )
-
 
         cv2.imwrite(
             map_path,
-            map_img
+            detection_map
         )
-
 
         with open(
             map_path,
@@ -1649,20 +1443,17 @@ def handle_photo(
         ) as photo:
 
             bot.send_photo(
-
                 message.chat.id,
-
                 photo,
-
                 caption=(
-                    "🔎 RIGHT-SIDE NUMBER MAP\n\n"
-                    "Green boxes = detected numbers.\n"
-                    "The number beside each box is "
-                    "the recognition confidence."
+                    "🔎 RIGHT-SIDE PRICE MAP\n\n"
+                    "🟩 = detected price\n"
+                    "🔺 = highest\n"
+                    "🔻 = lowest\n"
+                    "🎯 = current candidate\n\n"
+                    "Demo amount is outside the scan area."
                 )
-
             )
-
 
     except Exception as e:
 
@@ -1671,15 +1462,10 @@ def handle_photo(
             repr(e)
         )
 
-
         bot.reply_to(
-
             message,
-
-            f"❌ Detection error:\n{str(e)}"
-
+            f"❌ Price reader error:\n{str(e)}"
         )
-
 
     finally:
 
@@ -1707,31 +1493,26 @@ def handle_photo(
     commands=["start"]
 )
 
-def start(
-    message
-):
+def start(message):
 
     bot.reply_to(
-
         message,
-
-        "🔢 **RIGHT-SIDE NUMBER READER**\n\n"
-
-        "Send a screenshot.\n\n"
-
-        "I will scan only the right side "
-        "for real visible numbers.\n\n"
-
-        "🚫 No Tesseract\n"
-        "🚫 No Vision API\n"
-        "🚫 No fake numbers\n"
-        "🚫 No fake prices\n"
-        "🚫 No OHLC\n\n"
-
-        "⚡ OpenCV recognition enabled.",
-
+        (
+            "🔢 **POCKET OPTION PRICE READER**\n\n"
+            "Send a screenshot.\n\n"
+            "I will scan ONLY the right-side "
+            "chart price area.\n\n"
+            "It will try to read:\n"
+            "🔺 Highest visible price\n"
+            "🔻 Lowest visible price\n"
+            "🎯 Current price\n"
+            "📊 All detected price numbers\n\n"
+            "🚫 Demo amount ignored\n"
+            "🚫 No Tesseract\n"
+            "🚫 No random data\n"
+            "🚫 No OHLC generation"
+        ),
         parse_mode="Markdown"
-
     )
 
 
@@ -1741,55 +1522,18 @@ def start(
 
 if __name__ == "__main__":
 
-    print(
-        "========================================"
-    )
-
-    print(
-        "🔢 RIGHT-SIDE NUMBER READER"
-    )
-
-    print(
-        "========================================"
-    )
-
-    print(
-        "✅ OpenCV only"
-    )
-
-    print(
-        "✅ No Tesseract"
-    )
-
-    print(
-        "✅ Right-side scan"
-    )
-
-    print(
-        "✅ Multiple threshold methods"
-    )
-
-    print(
-        "✅ Template recognition"
-    )
-
-    print(
-        "🚫 No fake numbers"
-    )
-
-    print(
-        "🚫 No fake prices"
-    )
-
-    print(
-        "========================================"
-    )
-
+    print("=" * 50)
+    print("🔢 POCKET OPTION RIGHT-SIDE PRICE READER")
+    print("=" * 50)
+    print("✅ RIGHT-SIDE PRICE AREA ONLY")
+    print("✅ DEMO AMOUNT IGNORED")
+    print("✅ NO TESSERACT")
+    print("✅ NO RANDOM NUMBERS")
+    print("✅ HIGHEST / LOWEST / CURRENT")
+    print("✅ DEBUG MAP ENABLED")
+    print("=" * 50)
 
     bot.infinity_polling(
-
         timeout=30,
-
         long_polling_timeout=30
-
     )
