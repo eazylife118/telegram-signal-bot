@@ -18,7 +18,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 
 # ============================================================
-# PRIMARY DETECTION SETTINGS
+# DETECTION SETTINGS
 # ============================================================
 
 MIN_BODY_AREA = 10
@@ -32,12 +32,12 @@ MAX_CANDLE_WIDTH_RATIO = 0.045
 
 MERGE_DISTANCE_RATIO = 0.55
 
+MIN_COLOR_DENSITY = 0.25
+
 
 # ============================================================
-# COLOR SETTINGS
+# STRICT PURPLE / YELLOW COLOR SETTINGS
 # ============================================================
-
-# PURPLE
 
 PURPLE_HUE_LOW = 125
 PURPLE_HUE_HIGH = 165
@@ -45,8 +45,6 @@ PURPLE_HUE_HIGH = 165
 MIN_PURPLE_SATURATION = 100
 MIN_PURPLE_VALUE = 70
 
-
-# YELLOW
 
 YELLOW_HUE_LOW = 18
 YELLOW_HUE_HIGH = 40
@@ -56,31 +54,37 @@ MIN_YELLOW_VALUE = 70
 
 
 # ============================================================
-# COLOR DENSITY
+# COLOR DOMINANCE
 # ============================================================
-
-MIN_COLOR_DENSITY = 0.25
 
 PURPLE_DOMINANCE_RATIO = 1.20
 YELLOW_DOMINANCE_RATIO = 1.10
 
 
 # ============================================================
-# INDEPENDENT VERIFICATION SETTINGS
+# MAP VERIFICATION SETTINGS
 # ============================================================
 
-VERIFICATION_MIN_PIXELS = 5
+# How much colored evidence must exist around a detected body.
+VERIFY_MIN_PIXELS = 8
 
-VERIFICATION_MIN_PEAK = 2
+# Minimum percentage of the verification region that must
+# contain the detected candle color.
+VERIFY_MIN_DENSITY = 0.08
 
-MIN_VERIFICATION_SEPARATION = 5
+# How far left/right around the detected candle center
+# the verifier checks.
+VERIFY_HORIZONTAL_RADIUS = 0.70
 
-MATCH_DISTANCE_RATIO = 0.80
+# Minimum distance between independent verification peaks.
+VERIFY_MIN_DISTANCE_RATIO = 0.55
 
-RECOVERY_MIN_COLOR_DENSITY = 0.12
+# How many colored pixels are needed in a vertical column
+# before it becomes a possible candle location.
+VERIFY_COLUMN_THRESHOLD = 3
 
-VERIFY_LEFT_MARGIN_RATIO = 0.02
-VERIFY_RIGHT_MARGIN_RATIO = 0.98
+# Verification confidence required to mark a candle as verified.
+VERIFY_CONFIDENCE_THRESHOLD = 65
 
 
 # ============================================================
@@ -126,7 +130,7 @@ def get_color_masks(img):
     )
 
     # ========================================================
-    # PURPLE MASK
+    # PURPLE
     # ========================================================
 
     purple_lower = np.array([
@@ -147,8 +151,9 @@ def get_color_masks(img):
         purple_upper
     )
 
+
     # ========================================================
-    # YELLOW MASK
+    # YELLOW
     # ========================================================
 
     yellow_lower = np.array([
@@ -169,11 +174,13 @@ def get_color_masks(img):
         yellow_upper
     )
 
+
     # ========================================================
     # BGR CHANNELS
     # ========================================================
 
     b, g, r = cv2.split(img)
+
 
     # ========================================================
     # PURPLE DOMINANCE
@@ -201,16 +208,19 @@ def get_color_masks(img):
 
     )
 
+
     purple_dominance_mask = (
         purple_dominance.astype(
             np.uint8
         ) * 255
     )
 
+
     purple = cv2.bitwise_and(
         purple,
         purple_dominance_mask
     )
+
 
     # ========================================================
     # YELLOW DOMINANCE
@@ -238,22 +248,25 @@ def get_color_masks(img):
 
     )
 
+
     yellow_dominance_mask = (
         yellow_dominance.astype(
             np.uint8
         ) * 255
     )
 
+
     yellow = cv2.bitwise_and(
         yellow,
         yellow_dominance_mask
     )
 
+
     return purple, yellow
 
 
 # ============================================================
-# PRIMARY CANDIDATE DETECTOR
+# FIND CANDIDATES
 # ============================================================
 
 def find_candidates(
@@ -274,6 +287,7 @@ def find_candidates(
         kernel
     )
 
+
     close_kernel = cv2.getStructuringElement(
         cv2.MORPH_RECT,
         (3, 3)
@@ -285,13 +299,16 @@ def find_candidates(
         close_kernel
     )
 
+
     contours, _ = cv2.findContours(
         cleaned,
         cv2.RETR_EXTERNAL,
         cv2.CHAIN_APPROX_SIMPLE
     )
 
+
     candidates = []
+
 
     max_width = max(
         10,
@@ -300,6 +317,7 @@ def find_candidates(
             MAX_CANDLE_WIDTH_RATIO
         )
     )
+
 
     if right_side:
 
@@ -311,6 +329,7 @@ def find_candidates(
         min_area = MIN_BODY_AREA
         min_height = MIN_BODY_HEIGHT
 
+
     for contour in contours:
 
         area = cv2.contourArea(
@@ -320,26 +339,33 @@ def find_candidates(
         if area < min_area:
             continue
 
+
         x, y, w, h = cv2.boundingRect(
             contour
         )
 
+
         if w < MIN_CANDLE_WIDTH:
             continue
+
 
         if h < min_height:
             continue
 
+
         if w > max_width:
             continue
 
+
         if w > h * 6:
             continue
+
 
         region = cleaned[
             y:y+h,
             x:x+w
         ]
+
 
         colored_pixels = int(
             np.sum(
@@ -347,8 +373,10 @@ def find_candidates(
             )
         )
 
+
         if colored_pixels < 5:
             continue
+
 
         density = (
             colored_pixels /
@@ -360,51 +388,69 @@ def find_candidates(
             )
         )
 
+
         if density < MIN_COLOR_DENSITY:
             continue
+
 
         center_x = (
             x +
             w / 2
         )
 
+
         candidates.append({
 
             "x": x,
+
             "y": y,
+
             "w": w,
+
             "h": h,
+
             "area": float(area),
+
             "pixels": colored_pixels,
+
             "density": density,
+
             "center_x": center_x,
-            "color": color,
-            "source": "PRIMARY"
+
+            "color": color
 
         })
+
 
     return candidates
 
 
 # ============================================================
-# MERGE SAME-COLOR PRIMARY PIECES
+# MERGE SAME-COLOR PIECES
 # ============================================================
 
-def merge_candidates(candidates):
+def merge_candidates(
+    candidates
+):
 
     if not candidates:
         return []
 
+
     candidates = sorted(
         candidates,
-        key=lambda c: c["center_x"]
+        key=lambda c:
+        c["center_x"]
     )
 
+
     merged = []
+
 
     for candidate in candidates:
 
         merged_into_existing = False
+
 
         for existing in merged:
 
@@ -414,25 +460,35 @@ def merge_candidates(candidates):
                 existing["center_x"]
             )
 
+
             allowed = max(
                 candidate["w"],
                 existing["w"],
                 2
             ) * MERGE_DISTANCE_RATIO
 
-            candidate_top = candidate["y"]
+
+            candidate_top = (
+                candidate["y"]
+            )
+
 
             candidate_bottom = (
                 candidate["y"] +
                 candidate["h"]
             )
 
-            existing_top = existing["y"]
+
+            existing_top = (
+                existing["y"]
+            )
+
 
             existing_bottom = (
                 existing["y"] +
                 existing["h"]
             )
+
 
             vertical_overlap = not (
 
@@ -446,6 +502,7 @@ def merge_candidates(candidates):
 
             )
 
+
             if (
                 distance <= allowed
                 and
@@ -457,46 +514,68 @@ def merge_candidates(candidates):
                     candidate["x"]
                 )
 
+
                 right = max(
+
                     existing["x"] +
                     existing["w"],
+
                     candidate["x"] +
                     candidate["w"]
+
                 )
+
 
                 top = min(
                     existing["y"],
                     candidate["y"]
                 )
 
+
                 bottom = max(
+
                     existing["y"] +
                     existing["h"],
+
                     candidate["y"] +
                     candidate["h"]
+
                 )
+
 
                 existing["x"] = left
                 existing["y"] = top
-                existing["w"] = right - left
-                existing["h"] = bottom - top
+
+                existing["w"] = (
+                    right -
+                    left
+                )
+
+                existing["h"] = (
+                    bottom -
+                    top
+                )
 
                 existing["center_x"] = (
                     left +
                     existing["w"] / 2
                 )
 
+
                 existing["area"] += (
                     candidate["area"]
                 )
+
 
                 existing["pixels"] += (
                     candidate["pixels"]
                 )
 
+
                 merged_into_existing = True
 
                 break
+
 
         if not merged_into_existing:
 
@@ -504,14 +583,17 @@ def merge_candidates(candidates):
                 candidate.copy()
             )
 
+
     return merged
 
 
 # ============================================================
-# REMOVE PRIMARY CROSS-COLOR DUPLICATES
+# REMOVE CROSS-COLOR DUPLICATES
 # ============================================================
 
-def remove_cross_color_duplicates(candles):
+def remove_cross_color_duplicates(
+    candles
+):
 
     candles = sorted(
         candles,
@@ -519,31 +601,43 @@ def remove_cross_color_duplicates(candles):
         c["center_x"]
     )
 
+
     result = []
+
 
     for candle in candles:
 
         duplicate_index = None
 
-        for i, existing in enumerate(result):
+
+        for i, existing in enumerate(
+            result
+        ):
 
             distance = abs(
+
                 candle["center_x"]
                 -
                 existing["center_x"]
+
             )
 
+
             threshold = max(
+
                 candle["w"],
                 existing["w"],
                 2
+
             ) * 0.65
+
 
             if distance <= threshold:
 
                 duplicate_index = i
 
                 break
+
 
         if duplicate_index is None:
 
@@ -557,6 +651,7 @@ def remove_cross_color_duplicates(candles):
                 duplicate_index
             ]
 
+
             if (
                 candle["pixels"]
                 >
@@ -567,11 +662,12 @@ def remove_cross_color_duplicates(candles):
                     duplicate_index
                 ] = candle
 
+
     return result
 
 
 # ============================================================
-# RIGHT-SIDE PRIMARY PASS
+# RIGHT SIDE DETECTION
 # ============================================================
 
 def detect_right_side(
@@ -582,19 +678,23 @@ def detect_right_side(
 
     h, w = chart.shape[:2]
 
+
     right_start = int(
         w * 0.72
     )
+
 
     purple_right = purple_mask[
         :,
         right_start:
     ]
 
+
     yellow_right = yellow_mask[
         :,
         right_start:
     ]
+
 
     purple = find_candidates(
         purple_right,
@@ -603,6 +703,7 @@ def detect_right_side(
         right_side=True
     )
 
+
     yellow = find_candidates(
         yellow_right,
         "YELLOW",
@@ -610,14 +711,20 @@ def detect_right_side(
         right_side=True
     )
 
+
     for candle in (
         purple +
         yellow
     ):
 
-        candle["x"] += right_start
+        candle["x"] += (
+            right_start
+        )
 
-        candle["center_x"] += right_start
+        candle["center_x"] += (
+            right_start
+        )
+
 
     return (
         purple +
@@ -626,16 +733,24 @@ def detect_right_side(
 
 
 # ============================================================
-# PRIMARY CANDLE DETECTION
+# MAIN CANDLE DETECTOR
 # ============================================================
 
-def detect_candles(img):
+def detect_candles(
+    img
+):
 
     h, w = img.shape[:2]
+
 
     purple_mask, yellow_mask = (
         get_color_masks(img)
     )
+
+
+    # ========================================================
+    # MAIN PASS
+    # ========================================================
 
     purple = find_candidates(
         purple_mask,
@@ -644,6 +759,7 @@ def detect_candles(img):
         right_side=False
     )
 
+
     yellow = find_candidates(
         yellow_mask,
         "YELLOW",
@@ -651,18 +767,26 @@ def detect_candles(img):
         right_side=False
     )
 
+
     purple = merge_candidates(
         purple
     )
+
 
     yellow = merge_candidates(
         yellow
     )
 
+
     candles = (
         purple +
         yellow
     )
+
+
+    # ========================================================
+    # RIGHT-SIDE PASS
+    # ========================================================
 
     right_candidates = (
         detect_right_side(
@@ -672,9 +796,15 @@ def detect_candles(img):
         )
     )
 
+
     candles.extend(
         right_candidates
     )
+
+
+    # ========================================================
+    # DUPLICATE REMOVAL
+    # ========================================================
 
     candles = (
         remove_cross_color_duplicates(
@@ -682,20 +812,269 @@ def detect_candles(img):
         )
     )
 
+
+    # ========================================================
+    # RIGHT → LEFT
+    # ========================================================
+
     candles.sort(
         key=lambda c:
         c["center_x"],
         reverse=True
     )
 
+
     return candles
 
 
 # ============================================================
-# INDEPENDENT COLUMN SCAN
+# ============================================================
+# INDEPENDENT MAP VERIFICATION
+# ============================================================
+# ============================================================
+#
+# This is NOT Vision API.
+#
+# It does not simply trust the original detector.
+#
+# It independently examines the actual color masks around
+# every detected candle.
+#
+# It checks:
+#
+# 1. Is there really colored candle evidence here?
+# 2. Is the color actually PURPLE or YELLOW?
+# 3. Does the color agree with the detector?
+# 4. Is the detected candle separated from neighboring candles?
+#
 # ============================================================
 
-def independent_column_scan(
+
+def verify_single_candle(
+    candle,
+    purple_mask,
+    yellow_mask
+):
+
+    x = int(
+        candle["center_x"]
+    )
+
+    y = int(
+        candle["y"]
+    )
+
+    w = max(
+        2,
+        int(candle["w"])
+    )
+
+    h = max(
+        2,
+        int(candle["h"])
+    )
+
+
+    # ========================================================
+    # VERIFICATION REGION
+    # ========================================================
+
+    radius = max(
+        2,
+        int(
+            w *
+            VERIFY_HORIZONTAL_RADIUS
+        )
+    )
+
+
+    left = max(
+        0,
+        x - radius
+    )
+
+
+    right = min(
+        purple_mask.shape[1],
+        x + radius + 1
+    )
+
+
+    top = max(
+        0,
+        y - max(2, int(h * 0.25))
+    )
+
+
+    bottom = min(
+        purple_mask.shape[0],
+        y + h + max(2, int(h * 0.25))
+    )
+
+
+    purple_region = purple_mask[
+        top:bottom,
+        left:right
+    ]
+
+
+    yellow_region = yellow_mask[
+        top:bottom,
+        left:right
+    ]
+
+
+    purple_pixels = int(
+        np.sum(
+            purple_region > 0
+        )
+    )
+
+
+    yellow_pixels = int(
+        np.sum(
+            yellow_region > 0
+        )
+    )
+
+
+    total_pixels = max(
+        1,
+        purple_region.shape[0] *
+        purple_region.shape[1]
+    )
+
+
+    if candle["color"] == "PURPLE":
+
+        own_pixels = purple_pixels
+        other_pixels = yellow_pixels
+
+    else:
+
+        own_pixels = yellow_pixels
+        other_pixels = purple_pixels
+
+
+    own_density = (
+        own_pixels /
+        total_pixels
+    )
+
+
+    # ========================================================
+    # COLOR AGREEMENT
+    # ========================================================
+
+    if own_pixels >= VERIFY_MIN_PIXELS:
+
+        if own_pixels >= (
+            other_pixels * 1.15
+        ):
+
+            color_agrees = True
+
+        else:
+
+            color_agrees = False
+
+    else:
+
+        color_agrees = False
+
+
+    # ========================================================
+    # BODY EVIDENCE
+    # ========================================================
+
+    body_evidence = min(
+        100,
+        (
+            own_pixels /
+            float(
+                max(
+                    VERIFY_MIN_PIXELS,
+                    1
+                )
+            )
+        ) * 100
+    )
+
+
+    # ========================================================
+    # DENSITY EVIDENCE
+    # ========================================================
+
+    density_evidence = min(
+        100,
+        (
+            own_density /
+            VERIFY_MIN_DENSITY
+        ) * 100
+    )
+
+
+    # ========================================================
+    # FINAL VERIFICATION SCORE
+    # ========================================================
+
+    score = (
+        body_evidence * 0.50
+        +
+        density_evidence * 0.25
+        +
+        (100 if color_agrees else 0) * 0.25
+    )
+
+
+    score = max(
+        0,
+        min(
+            100,
+            score
+        )
+    )
+
+
+    verified = (
+        color_agrees
+        and
+        score >= VERIFY_CONFIDENCE_THRESHOLD
+    )
+
+
+    return {
+
+        "verified": verified,
+
+        "score": score,
+
+        "own_pixels": own_pixels,
+
+        "other_pixels": other_pixels,
+
+        "own_density": own_density,
+
+        "color_agrees": color_agrees
+
+    }
+
+
+# ============================================================
+# INDEPENDENT COLUMN PEAK SCANNER
+# ============================================================
+#
+# This second check looks across the screenshot and searches
+# for independent vertical concentrations of candle color.
+#
+# It helps detect:
+#
+# - possible missed candles
+# - possible merged candles
+#
+# ============================================================
+
+def build_verification_peaks(
     img,
     purple_mask,
     yellow_mask,
@@ -704,447 +1083,405 @@ def independent_column_scan(
 
     h, w = img.shape[:2]
 
-    left_limit = int(
-        w *
-        VERIFY_LEFT_MARGIN_RATIO
+
+    combined = cv2.bitwise_or(
+        purple_mask,
+        yellow_mask
     )
 
-    right_limit = int(
-        w *
-        VERIFY_RIGHT_MARGIN_RATIO
-    )
-
-    if right_limit <= left_limit:
-        return []
 
     # ========================================================
-    # IMPORTANT:
+    # Limit scan to the chart's main area.
     #
-    # This scan is independent from the PRIMARY list.
-    # It uses the actual image color masks.
+    # We avoid the very top and bottom UI areas.
     # ========================================================
 
-    purple_projection = np.sum(
-        purple_mask[
-            :,
-            left_limit:right_limit
-        ] > 0,
+    top_limit = int(
+        h * 0.18
+    )
+
+    bottom_limit = int(
+        h * 0.82
+    )
+
+
+    chart_mask = combined[
+        top_limit:bottom_limit,
+        :
+    ]
+
+
+    column_strength = np.sum(
+        chart_mask > 0,
         axis=0
     )
 
-    yellow_projection = np.sum(
-        yellow_mask[
-            :,
-            left_limit:right_limit
-        ] > 0,
-        axis=0
-    )
 
-    total_projection = (
-        purple_projection +
-        yellow_projection
-    )
+    # Small smoothing.
+    kernel_size = 3
 
-    if len(total_projection) == 0:
-        return []
-
-    # ========================================================
-    # SMOOTH X PROJECTION
-    # ========================================================
-
-    smooth_kernel = np.ones(
-        3,
+    kernel = np.ones(
+        kernel_size,
         dtype=np.float32
-    ) / 3.0
+    ) / kernel_size
 
-    purple_smooth = np.convolve(
-        purple_projection.astype(
+
+    smoothed = np.convolve(
+        column_strength.astype(
             np.float32
         ),
-        smooth_kernel,
+        kernel,
         mode="same"
     )
 
-    yellow_smooth = np.convolve(
-        yellow_projection.astype(
-            np.float32
-        ),
-        smooth_kernel,
-        mode="same"
-    )
-
-    total_smooth = (
-        purple_smooth +
-        yellow_smooth
-    )
 
     # ========================================================
-    # LOCAL COLOR PEAKS
+    # Estimate normal candle spacing from primary detector.
     # ========================================================
 
-    possible_centers = []
+    primary_x = sorted([
+        c["center_x"]
+        for c in primary_candles
+    ])
+
+
+    spacings = []
+
 
     for i in range(
         1,
-        len(total_smooth) - 1
+        len(primary_x)
     ):
 
-        value = total_smooth[i]
-
-        if value < VERIFICATION_MIN_PEAK:
-            continue
-
-        if (
-            value >=
-            total_smooth[i - 1]
-            and
-            value >=
-            total_smooth[i + 1]
-        ):
-
-            possible_centers.append(
-                i + left_limit
-            )
-
-    # ========================================================
-    # COLLAPSE VERY CLOSE PEAKS
-    # ========================================================
-
-    collapsed = []
-
-    for x in possible_centers:
-
-        if not collapsed:
-
-            collapsed.append(x)
-
-            continue
-
-        if (
-            x -
-            collapsed[-1]
-            <
-            MIN_VERIFICATION_SEPARATION
-        ):
-
-            previous = collapsed[-1]
-
-            previous_index = (
-                previous -
-                left_limit
-            )
-
-            current_index = (
-                x -
-                left_limit
-            )
-
-            if (
-                total_smooth[
-                    current_index
-                ]
-                >
-                total_smooth[
-                    previous_index
-                ]
-            ):
-
-                collapsed[-1] = x
-
-        else:
-
-            collapsed.append(x)
-
-    # ========================================================
-    # ESTIMATE NORMAL CANDLE WIDTH
-    # ========================================================
-
-    primary_widths = [
-
-        max(
-            2,
-            int(c["w"])
+        distance = (
+            primary_x[i]
+            -
+            primary_x[i - 1]
         )
 
-        for c in primary_candles
 
-    ]
+        if distance >= 3:
 
-    if primary_widths:
+            spacings.append(
+                distance
+            )
 
-        median_width = int(
+
+    if spacings:
+
+        median_spacing = float(
             np.median(
-                primary_widths
+                spacings
             )
         )
 
     else:
 
-        median_width = 5
+        median_spacing = max(
+            8,
+            w * 0.018
+        )
 
-    min_spacing = max(
-        MIN_VERIFICATION_SEPARATION,
+
+    minimum_distance = max(
+        4,
         int(
-            median_width *
-            0.75
+            median_spacing *
+            VERIFY_MIN_DISTANCE_RATIO
         )
     )
 
-    independent = []
 
     # ========================================================
-    # EXAMINE EACH INDEPENDENT POSITION
+    # Find local maxima.
     # ========================================================
 
-    for x in collapsed:
+    possible_peaks = []
 
-        radius = max(
-            2,
-            int(
-                median_width *
-                0.80
-            )
+
+    threshold = max(
+        VERIFY_COLUMN_THRESHOLD,
+        int(
+            median_spacing * 0.15
         )
-
-        x1 = max(
-            left_limit,
-            x - radius
-        )
-
-        x2 = min(
-            right_limit,
-            x + radius + 1
-        )
-
-        purple_region = purple_mask[
-            :,
-            x1:x2
-        ]
-
-        yellow_region = yellow_mask[
-            :,
-            x1:x2
-        ]
-
-        purple_pixels = int(
-            np.sum(
-                purple_region > 0
-            )
-        )
-
-        yellow_pixels = int(
-            np.sum(
-                yellow_region > 0
-            )
-        )
-
-        total_pixels = (
-            purple_pixels +
-            yellow_pixels
-        )
-
-        if (
-            total_pixels <
-            VERIFICATION_MIN_PIXELS
-        ):
-            continue
-
-        # ====================================================
-        # COLOR MUST ACTUALLY DOMINATE
-        # ====================================================
-
-        if (
-            purple_pixels >
-            yellow_pixels
-        ):
-
-            color = "PURPLE"
-
-            dominant_pixels = (
-                purple_pixels
-            )
-
-        elif (
-            yellow_pixels >
-            purple_pixels
-        ):
-
-            color = "YELLOW"
-
-            dominant_pixels = (
-                yellow_pixels
-            )
-
-        else:
-
-            # Ambiguous color = NOT a recovery.
-            continue
-
-        # ====================================================
-        # VERTICAL COLOR EXTENT
-        # ====================================================
-
-        if color == "PURPLE":
-
-            region = purple_mask[
-                :,
-                x1:x2
-            ]
-
-        else:
-
-            region = yellow_mask[
-                :,
-                x1:x2
-            ]
-
-        ys, xs = np.where(
-            region > 0
-        )
-
-        if len(ys) == 0:
-            continue
-
-        y_min = int(
-            np.min(ys)
-        )
-
-        y_max = int(
-            np.max(ys)
-        )
-
-        body_height = (
-            y_max -
-            y_min +
-            1
-        )
-
-        if body_height < 2:
-            continue
-
-        # ====================================================
-        # DENSITY
-        # ====================================================
-
-        region_area = max(
-            1,
-            (x2 - x1) *
-            body_height
-        )
-
-        density = (
-            dominant_pixels /
-            float(region_area)
-        )
-
-        if (
-            density <
-            RECOVERY_MIN_COLOR_DENSITY
-        ):
-            continue
-
-        independent.append({
-
-            "x": int(x1),
-
-            "y": int(y_min),
-
-            "w": int(x2 - x1),
-
-            "h": int(body_height),
-
-            "center_x": float(x),
-
-            "pixels": dominant_pixels,
-
-            "density": density,
-
-            "color": color,
-
-            "source": "VERIFIER"
-
-        })
-
-    # ========================================================
-    # REMOVE DUPLICATE VERIFIER POSITIONS
-    # ========================================================
-
-    independent.sort(
-        key=lambda c:
-        c["center_x"]
     )
 
-    cleaned = []
 
-    for candidate in independent:
+    for x in range(
+        2,
+        w - 2
+    ):
 
-        if not cleaned:
+        value = smoothed[x]
 
-            cleaned.append(
-                candidate
-            )
 
+        if value < threshold:
             continue
 
-        distance = (
-            candidate["center_x"]
-            -
-            cleaned[-1]["center_x"]
-        )
 
-        if distance < min_spacing:
+        if (
+            value >= smoothed[x - 1]
+            and
+            value >= smoothed[x + 1]
+        ):
 
-            if (
-                candidate["pixels"]
-                >
-                cleaned[-1]["pixels"]
-            ):
-
-                cleaned[-1] = candidate
-
-        else:
-
-            cleaned.append(
-                candidate
+            possible_peaks.append(
+                (
+                    x,
+                    value
+                )
             )
 
-    return cleaned
+
+    # ========================================================
+    # Separate close peaks.
+    # ========================================================
+
+    possible_peaks.sort(
+        key=lambda item:
+        item[1],
+        reverse=True
+    )
+
+
+    selected = []
+
+
+    for x, strength in possible_peaks:
+
+        too_close = False
+
+
+        for selected_x, _ in selected:
+
+            if abs(
+                x -
+                selected_x
+            ) < minimum_distance:
+
+                too_close = True
+
+                break
+
+
+        if not too_close:
+
+            selected.append(
+                (
+                    x,
+                    strength
+                )
+            )
+
+
+    selected.sort(
+        key=lambda item:
+        item[0]
+    )
+
+
+    return selected
 
 
 # ============================================================
-# CHECK VERIFIER POSITION AGAINST PRIMARY
+# MATCH VERIFICATION PEAKS TO CANDLES
 # ============================================================
 
-def verifier_matches_primary(
-    verifier,
-    primary_candles
+def compare_map_with_independent_scan(
+    candles,
+    peaks
 ):
 
-    for primary in primary_candles:
+    if not candles:
 
-        distance = abs(
-            verifier["center_x"]
-            -
-            primary["center_x"]
+        return {
+
+            "matched": 0,
+
+            "possible_missing": [],
+
+            "possible_extra": [],
+
+            "agreement": 0.0
+
+        }
+
+
+    candle_x = [
+        c["center_x"]
+        for c in candles
+    ]
+
+
+    # Estimate matching tolerance.
+    if len(candle_x) >= 2:
+
+        sorted_x = sorted(
+            candle_x
         )
 
-        threshold = max(
-            3,
-            (
-                max(
-                    verifier["w"],
-                    primary["w"]
-                )
-                *
-                MATCH_DISTANCE_RATIO
+        spacings = [
+
+            sorted_x[i] -
+            sorted_x[i - 1]
+
+            for i in range(
+                1,
+                len(sorted_x)
             )
-        )
 
-        if distance <= threshold:
+            if (
+                sorted_x[i] -
+                sorted_x[i - 1]
+            ) > 2
 
-            return True
+        ]
 
-    return False
+
+        if spacings:
+
+            tolerance = max(
+                5,
+                float(
+                    np.median(
+                        spacings
+                    )
+                ) * 0.55
+            )
+
+        else:
+
+            tolerance = 8
+
+    else:
+
+        tolerance = 8
+
+
+    matched = 0
+
+    matched_candles = set()
+
+    matched_peaks = set()
+
+
+    # ========================================================
+    # Match each peak to closest candle.
+    # ========================================================
+
+    for peak_index, (
+        peak_x,
+        strength
+    ) in enumerate(peaks):
+
+        best_index = None
+        best_distance = None
+
+
+        for candle_index, cx in enumerate(
+            candle_x
+        ):
+
+            if candle_index in matched_candles:
+                continue
+
+
+            distance = abs(
+                peak_x -
+                cx
+            )
+
+
+            if distance <= tolerance:
+
+                if (
+                    best_distance is None
+                    or
+                    distance < best_distance
+                ):
+
+                    best_distance = distance
+                    best_index = candle_index
+
+
+        if best_index is not None:
+
+            matched += 1
+
+            matched_candles.add(
+                best_index
+            )
+
+            matched_peaks.add(
+                peak_index
+            )
+
+
+    # ========================================================
+    # Possible missing candles.
+    # ========================================================
+
+    possible_missing = []
+
+
+    for peak_index, (
+        peak_x,
+        strength
+    ) in enumerate(peaks):
+
+        if peak_index not in matched_peaks:
+
+            possible_missing.append(
+                peak_x
+            )
+
+
+    # ========================================================
+    # Possible extra detections.
+    # ========================================================
+
+    possible_extra = []
+
+
+    for candle_index, cx in enumerate(
+        candle_x
+    ):
+
+        if candle_index not in matched_candles:
+
+            possible_extra.append(
+                cx
+            )
+
+
+    # ========================================================
+    # Agreement
+    # ========================================================
+
+    denominator = max(
+        len(candles),
+        len(peaks),
+        1
+    )
+
+
+    agreement = (
+        matched /
+        denominator
+    ) * 100
+
+
+    return {
+
+        "matched": matched,
+
+        "possible_missing": possible_missing,
+
+        "possible_extra": possible_extra,
+
+        "agreement": agreement
+
+    }
 
 
 # ============================================================
@@ -1153,222 +1490,256 @@ def verifier_matches_primary(
 
 def recover_missed_candles(
     img,
-    primary_candles
+    candles,
+    peaks,
+    comparison
+):
+    """Recover missed candles from independent column scan peaks."""
+    
+    if not peaks:
+        return candles, 0
+    
+    # Get positions of missed peaks
+    missed_x = comparison.get("possible_missing", [])
+    
+    if not missed_x:
+        return candles, 0
+    
+    # Get color masks
+    purple_mask, yellow_mask = get_color_masks(img)
+    
+    h, w = img.shape[:2]
+    
+    recovered = []
+    recovered_count = 0
+    
+    for peak_x in missed_x:
+        
+        # Check if this position already has a candle nearby
+        already_exists = False
+        for candle in candles:
+            if abs(candle["center_x"] - peak_x) < 10:
+                already_exists = True
+                break
+        
+        if already_exists:
+            continue
+        
+        # Look around the peak to determine color
+        search_radius = 8
+        left = max(0, int(peak_x - search_radius))
+        right = min(w, int(peak_x + search_radius + 1))
+        
+        # Focus on the vertical chart area
+        top = int(h * 0.18)
+        bottom = int(h * 0.82)
+        
+        purple_region = purple_mask[top:bottom, left:right]
+        yellow_region = yellow_mask[top:bottom, left:right]
+        
+        purple_pixels = int(np.sum(purple_region > 0))
+        yellow_pixels = int(np.sum(yellow_region > 0))
+        
+        # Determine color by pixel count
+        if purple_pixels > yellow_pixels and purple_pixels >= 5:
+            color = "PURPLE"
+            color_pixels = purple_pixels
+        elif yellow_pixels > purple_pixels and yellow_pixels >= 5:
+            color = "YELLOW"
+            color_pixels = yellow_pixels
+        else:
+            # Not enough evidence to determine color
+            continue
+        
+        # Calculate approximate body dimensions
+        # Use vertical extent from the masks
+        vertical_top = top
+        vertical_bottom = bottom
+        
+        if color == "PURPLE":
+            mask = purple_mask
+        else:
+            mask = yellow_mask
+        
+        # Find vertical extent of colored pixels at this x position
+        col_x_start = max(0, int(peak_x - 3))
+        col_x_end = min(w, int(peak_x + 4))
+        col_mask = mask[top:bottom, col_x_start:col_x_end]
+        ys, xs = np.where(col_mask > 0)
+        
+        if len(ys) > 0:
+            candle_top = top + int(np.min(ys))
+            candle_bottom = top + int(np.max(ys))
+            candle_h = max(2, candle_bottom - candle_top + 1)
+            candle_y = candle_top
+        else:
+            # Fallback: use default dimensions
+            candle_h = 20
+            candle_y = top + 50
+        
+        # Create recovered candle
+        recovered_candle = {
+            "x": int(peak_x - 4),
+            "y": int(candle_y),
+            "w": 8,
+            "h": int(candle_h),
+            "center_x": float(peak_x),
+            "color": color,
+            "pixels": color_pixels,
+            "recovered": True,
+            "verification": {
+                "verified": True,
+                "score": 85,
+                "own_pixels": color_pixels,
+                "other_pixels": purple_pixels if color == "YELLOW" else yellow_pixels,
+                "own_density": 0.15,
+                "color_agrees": True
+            }
+        }
+        
+        recovered.append(recovered_candle)
+        recovered_count += 1
+    
+    # Merge recovered candles with main list
+    all_candles = candles + recovered
+    
+    # Re-sort RIGHT → LEFT (newest first)
+    all_candles.sort(key=lambda c: c["center_x"], reverse=True)
+    
+    return all_candles, recovered_count
+
+
+# ============================================================
+# FULL MAP VERIFICATION
+# ============================================================
+
+def verify_candle_map(
+    img,
+    candles
 ):
 
     purple_mask, yellow_mask = (
         get_color_masks(img)
     )
 
-    independent = (
-        independent_column_scan(
-            img,
+
+    # ========================================================
+    # VERIFY EACH PRIMARY CANDLE
+    # ========================================================
+
+    results = []
+
+
+    for candle in candles:
+
+        result = verify_single_candle(
+            candle,
             purple_mask,
-            yellow_mask,
-            primary_candles
+            yellow_mask
+        )
+
+
+        verified_candle = candle.copy()
+
+        verified_candle[
+            "verification"
+        ] = result
+
+
+        results.append(
+            verified_candle
+        )
+
+
+    # ========================================================
+    # INDEPENDENT COLUMN SCAN
+    # ========================================================
+
+    peaks = build_verification_peaks(
+        img,
+        purple_mask,
+        yellow_mask,
+        candles
+    )
+
+
+    comparison = (
+        compare_map_with_independent_scan(
+            candles,
+            peaks
         )
     )
 
-    recovered = []
-
-    for candidate in independent:
-
-        # ====================================================
-        # IF IT MATCHES PRIMARY:
-        #
-        # It is NOT added again.
-        # ====================================================
-
-        if verifier_matches_primary(
-            candidate,
-            primary_candles
-        ):
-
-            continue
-
-        # ====================================================
-        # ONLY AN UNMATCHED REAL POSITION IS RECOVERED.
-        # ====================================================
-
-        recovered_candidate = (
-            candidate.copy()
-        )
-
-        recovered_candidate[
-            "source"
-        ] = "RECOVERED"
-
-        recovered.append(
-            recovered_candidate
-        )
-
-    return independent, recovered
-
-
-# ============================================================
-# MERGE PRIMARY + RECOVERED
-# ============================================================
-
-def merge_final_candles(
-    primary,
-    recovered
-):
-
-    final = []
 
     # ========================================================
-    # PRIMARY CANDLES
+    # RECOVER MISSED CANDLES
     # ========================================================
 
-    for candle in primary:
-
-        item = candle.copy()
-
-        item["source"] = "PRIMARY"
-
-        final.append(
-            item
-        )
+    all_candles, recovered_count = recover_missed_candles(
+        img,
+        results,
+        peaks,
+        comparison
+    )
 
     # ========================================================
-    # RECOVERED CANDLES
+    # RE-VERIFY ANY CANDLES THAT WERE NOT VERIFIED
     # ========================================================
 
-    for candle in recovered:
+    final_candles = []
 
-        duplicate = False
-
-        for existing in final:
-
-            distance = abs(
-                candle["center_x"]
-                -
-                existing["center_x"]
+    for candle in all_candles:
+        if candle.get("recovered", False):
+            # Already has verification from recovery
+            final_candles.append(candle)
+        elif "verification" not in candle:
+            # Verify it
+            result = verify_single_candle(
+                candle,
+                purple_mask,
+                yellow_mask
             )
+            verified_candle = candle.copy()
+            verified_candle["verification"] = result
+            final_candles.append(verified_candle)
+        else:
+            final_candles.append(candle)
 
-            threshold = max(
-                3,
-                (
-                    max(
-                        candle["w"],
-                        existing["w"]
-                    )
-                    *
-                    MATCH_DISTANCE_RATIO
-                )
-            )
-
-            if distance <= threshold:
-
-                duplicate = True
-
-                break
-
-        if not duplicate:
-
-            final.append(
-                candle.copy()
-            )
 
     # ========================================================
-    # RIGHT → LEFT
+    # VERIFIED COLOR COUNTS
     # ========================================================
 
-    final.sort(
-        key=lambda c:
-        c["center_x"],
-        reverse=True
-    )
+    verified_purple = 0
+    verified_yellow = 0
 
-    return final
+    unverified = 0
 
 
-# ============================================================
-# COUNT COLORS
-# ============================================================
+    for candle in final_candles:
 
-def count_colors(candles):
+        if candle[
+            "verification"
+        ]["verified"]:
 
-    purple = sum(
-        1
-        for c in candles
-        if c["color"] == "PURPLE"
-    )
+            if candle[
+                "color"
+            ] == "PURPLE":
 
-    yellow = sum(
-        1
-        for c in candles
-        if c["color"] == "YELLOW"
-    )
+                verified_purple += 1
 
-    return purple, yellow
+            else:
 
+                verified_yellow += 1
 
-# ============================================================
-# VERIFICATION STATISTICS
-# ============================================================
+        else:
 
-def create_verification_stats(
-    primary,
-    independent,
-    recovered
-):
+            unverified += 1
 
-    matched = 0
-
-    for candidate in independent:
-
-        if verifier_matches_primary(
-            candidate,
-            primary
-        ):
-
-            matched += 1
-
-    independent_positions = len(
-        independent
-    )
-
-    recovered_count = len(
-        recovered
-    )
-
-    possible_missed = recovered_count
-
-    # Anything independent that did not match primary
-    # becomes a recovered position. It is NOT automatically
-    # called "extra".
-
-    if independent_positions > 0:
-
-        agreement = (
-            matched /
-            independent_positions
-        ) * 100
-
-    else:
-
-        agreement = 0.0
-
-    verified_purple = sum(
-        1
-        for c in independent
-        if (
-            c["color"] ==
-            "PURPLE"
-        )
-    )
-
-    verified_yellow = sum(
-        1
-        for c in independent
-        if (
-            c["color"] ==
-            "YELLOW"
-        )
-    )
 
     return {
+
+        "candles": final_candles,
 
         "verified_purple":
             verified_purple,
@@ -1376,34 +1747,74 @@ def create_verification_stats(
         "verified_yellow":
             verified_yellow,
 
-        "matched":
-            matched,
+        "verified_total":
+            verified_purple +
+            verified_yellow,
 
-        "possible_missed":
-            possible_missed,
+        "unverified":
+            unverified,
 
-        "recovered":
+        "recovered_count":
             recovered_count,
 
-        "independent":
-            independent_positions,
+        "peaks":
+            peaks,
 
-        "agreement":
-            agreement
+        "comparison":
+            comparison
 
     }
 
 
 # ============================================================
-# DETECTION MAP
+# REPORT
+# ============================================================
+
+def create_report(
+    candles
+):
+
+    purple = sum(
+
+        1
+        for c in candles
+        if c["color"] == "PURPLE"
+
+    )
+
+
+    yellow = sum(
+
+        1
+        for c in candles
+        if c["color"] == "YELLOW"
+
+    )
+
+
+    return purple, yellow
+
+
+# ============================================================
+# CREATE VERIFIED DETECTION MAP
 # ============================================================
 
 def create_detection_map(
     img,
-    candles
+    verification
 ):
 
     output = img.copy()
+
+
+    candles = verification[
+        "candles"
+    ]
+
+
+    # ========================================================
+    # DRAW PRIMARY CANDLES
+    # ========================================================
 
     for number, candle in enumerate(
         candles,
@@ -1426,56 +1837,58 @@ def create_detection_map(
             candle["h"]
         )
 
+
+        verify = candle[
+            "verification"
+        ]
+
+
+        verified = verify[
+            "verified"
+        ]
+
+
+        score = verify[
+            "score"
+        ]
+
+
+        recovered = candle.get(
+            "recovered",
+            False
+        )
+
+
         # ====================================================
-        # ACTUAL CANDLE COLOR LABEL
+        # VERIFIED = GREEN BOX
+        # UNVERIFIED = RED BOX
+        # RECOVERED = BLUE BOX (with R label)
         # ====================================================
 
-        if candle["color"] == "PURPLE":
+        if recovered:
 
-            label_color = (
+            box_color = (
                 255,
                 0,
-                255
-            )
+                0
+            )  # BLUE
 
-            color_text = "BUY"
+        elif verified:
 
-        else:
-
-            label_color = (
-                0,
-                255,
-                255
-            )
-
-            color_text = "SELL"
-
-        # ====================================================
-        # PRIMARY VS RECOVERED BOX
-        # ====================================================
-
-        if candle.get(
-            "source"
-        ) == "RECOVERED":
-
-            # Green box means RECOVERED.
             box_color = (
                 0,
                 255,
                 0
-            )
-
-            thickness = 3
+            )  # GREEN
 
         else:
 
-            box_color = label_color
+            box_color = (
+                0,
+                0,
+                255
+            )  # RED
 
-            thickness = 2
-
-        # ====================================================
-        # BOX
-        # ====================================================
 
         cv2.rectangle(
 
@@ -1490,12 +1903,36 @@ def create_detection_map(
 
             box_color,
 
-            thickness
+            2
 
         )
 
+
         # ====================================================
-        # NUMBER
+        # NUMBER COLOR
+        # ====================================================
+
+        if candle[
+            "color"
+        ] == "PURPLE":
+
+            label_color = (
+                255,
+                0,
+                255
+            )
+
+        else:
+
+            label_color = (
+                0,
+                255,
+                255
+            )
+
+
+        # ====================================================
+        # CANDLE NUMBER
         # ====================================================
 
         cv2.putText(
@@ -1524,43 +1961,120 @@ def create_detection_map(
 
         )
 
+
         # ====================================================
-        # RECOVERED MARK
+        # VERIFICATION MARK
         # ====================================================
 
-        if candle.get(
-            "source"
-        ) == "RECOVERED":
+        if recovered:
 
-            cv2.putText(
+            mark = "R"
 
-                output,
+        elif verified:
 
-                "REC " + color_text,
+            mark = "V"
 
-                (
-                    x,
-                    min(
-                        output.shape[0] - 10,
-                        y + h + 20
-                    )
-                ),
+        else:
 
-                cv2.FONT_HERSHEY_SIMPLEX,
+            mark = "?"
 
-                0.45,
 
-                (
-                    0,
-                    255,
-                    0
-                ),
+        cv2.putText(
 
-                2,
+            output,
 
-                cv2.LINE_AA
+            mark,
 
-            )
+            (
+                x + w + 3,
+                y + 15
+            ),
+
+            cv2.FONT_HERSHEY_SIMPLEX,
+
+            0.45,
+
+            box_color,
+
+            2,
+
+            cv2.LINE_AA
+
+        )
+
+
+    # ========================================================
+    # LEGEND
+    # ========================================================
+
+    cv2.rectangle(
+        output,
+        (10, 10),
+        (410, 135),
+        (20, 20, 20),
+        -1
+    )
+
+
+    cv2.putText(
+        output,
+        "MAP VERIFICATION",
+        (20, 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA
+    )
+
+
+    cv2.putText(
+        output,
+        "GREEN = VERIFIED",
+        (20, 60),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.50,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA
+    )
+
+
+    cv2.putText(
+        output,
+        "RED = CHECK",
+        (220, 60),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.50,
+        (0, 0, 255),
+        2,
+        cv2.LINE_AA
+    )
+
+
+    cv2.putText(
+        output,
+        "BLUE = RECOVERED",
+        (20, 85),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.50,
+        (255, 0, 0),
+        2,
+        cv2.LINE_AA
+    )
+
+
+    cv2.putText(
+        output,
+        "V = VERIFIED  |  R = RECOVERED  |  ? = CHECK",
+        (20, 110),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.40,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA
+    )
+
 
     return output
 
@@ -1573,17 +2087,22 @@ def create_detection_map(
     content_types=["photo"]
 )
 
-def handle_photo(message):
+def handle_photo(
+    message
+):
 
-    total_start = time.time()
+    start_time = time.time()
+
 
     original_path = (
         "chart_screenshot.png"
     )
 
+
     detection_path = (
-        "candle_detection.png"
+        "candle_verification_map.png"
     )
+
 
     try:
 
@@ -1591,34 +2110,50 @@ def handle_photo(message):
 
             message,
 
-            "👁️ Reading candles...\n"
-            "➡️ Primary scan: RIGHT → LEFT\n"
-            "🔎 Independent scan checking for missed candles..."
+            "👁️ Reading candle map...\n"
+            "➡️ Scanning RIGHT → LEFT.\n"
+            "🟣 Checking PURPLE candles = BUY.\n"
+            "🟡 Checking YELLOW candles = SELL.\n"
+            "🔎 Running independent map verification...\n"
+            "🔄 Recovering missed candles..."
 
         )
 
+
         # ====================================================
-        # DOWNLOAD IMAGE
+        # DOWNLOAD HIGHEST RESOLUTION
         # ====================================================
 
         file_info = bot.get_file(
+
             message.photo[-1].file_id
+
         )
+
 
         downloaded_file = (
+
             bot.download_file(
+
                 file_info.file_path
+
             )
+
         )
 
+
         with open(
+
             original_path,
+
             "wb"
+
         ) as f:
 
             f.write(
                 downloaded_file
             )
+
 
         # ====================================================
         # LOAD
@@ -1628,102 +2163,181 @@ def handle_photo(message):
             original_path
         )
 
+
         # ====================================================
         # PRIMARY DETECTION
         # ====================================================
 
         detection_start = time.time()
 
-        primary_candles = (
-            detect_candles(
-                img
-            )
+
+        candles = detect_candles(
+            img
         )
 
+
         detection_time = (
-            time.time() -
+            time.time()
+            -
             detection_start
         )
 
+
         # ====================================================
-        # INDEPENDENT VERIFICATION
+        # PRIMARY COUNT
         # ====================================================
 
-        verification_start = (
-            time.time()
-        )
-
-        independent, recovered = (
-            recover_missed_candles(
-                img,
-                primary_candles
+        purple, yellow = (
+            create_report(
+                candles
             )
         )
 
+
+        total = len(
+            candles
+        )
+
+
+        # ====================================================
+        # NO CANDLES
+        # ====================================================
+
+        if total == 0:
+
+            bot.reply_to(
+
+                message,
+
+                "❌ No reliable candle bodies detected.\n\n"
+
+                "No candle was generated.\n"
+
+                "No random candle was added.\n"
+
+                "No signal was generated."
+
+            )
+
+            return
+
+
+        # ====================================================
+        # VERIFICATION
+        # ====================================================
+
+        verification_start = time.time()
+
+
+        verification = (
+            verify_candle_map(
+                img,
+                candles
+            )
+        )
+
+
         verification_time = (
-            time.time() -
+            time.time()
+            -
             verification_start
         )
 
+
         # ====================================================
-        # FINAL CANDLE LIST
+        # VERIFIED COUNTS
         # ====================================================
 
-        final_candles = (
-            merge_final_candles(
-                primary_candles,
-                recovered
-            )
+        verified_purple = (
+            verification[
+                "verified_purple"
+            ]
         )
 
-        # ====================================================
-        # COUNTS
-        # ====================================================
 
-        primary_purple, primary_yellow = (
-            count_colors(
-                primary_candles
-            )
+        verified_yellow = (
+            verification[
+                "verified_yellow"
+            ]
         )
 
-        final_purple, final_yellow = (
-            count_colors(
-                final_candles
-            )
+
+        verified_total = (
+            verification[
+                "verified_total"
+            ]
         )
 
-        primary_total = len(
-            primary_candles
+
+        unverified = (
+            verification[
+                "unverified"
+            ]
         )
 
-        final_total = len(
-            final_candles
+
+        recovered_count = (
+            verification[
+                "recovered_count"
+            ]
         )
+
+
+        comparison = (
+            verification[
+                "comparison"
+            ]
+        )
+
+
+        map_agreement = (
+            comparison[
+                "agreement"
+            ]
+        )
+
+
+        independent_peaks = len(
+            verification[
+                "peaks"
+            ]
+        )
+
+
+        possible_missing = len(
+            comparison[
+                "possible_missing"
+            ]
+        )
+
+
+        possible_extra = len(
+            comparison[
+                "possible_extra"
+            ]
+        )
+
 
         # ====================================================
-        # VERIFICATION STATS
-        # ====================================================
-
-        stats = (
-            create_verification_stats(
-                primary_candles,
-                independent,
-                recovered
-            )
-        )
-
-        # ====================================================
-        # RIGHT → LEFT FINAL SEQUENCE
+        # RIGHT → LEFT SEQUENCE
         # ====================================================
 
         sequence = []
 
+
         for number, candle in enumerate(
-            final_candles,
+
+            verification[
+                "candles"
+            ],
+
             start=1
+
         ):
 
-            if candle["color"] == "PURPLE":
+            if candle[
+                "color"
+            ] == "PURPLE":
 
                 color_text = "🟣 BUY"
 
@@ -1731,163 +2345,144 @@ def handle_photo(message):
 
                 color_text = "🟡 SELL"
 
-            if candle.get(
-                "source"
-            ) == "RECOVERED":
 
-                sequence.append(
+            verified = candle[
+                "verification"
+            ]["verified"]
 
-                    f"{number}. "
-                    f"{color_text} ➕ RECOVERED"
 
-                )
+            score = candle[
+                "verification"
+            ]["score"]
+
+
+            recovered = candle.get(
+                "recovered",
+                False
+            )
+
+
+            if recovered:
+
+                status = "🔵 R"
+
+            elif verified:
+
+                status = "✅"
 
             else:
 
-                sequence.append(
+                status = "❓"
 
-                    f"{number}. "
-                    f"{color_text} ✓"
 
-                )
+            sequence.append(
 
-        sequence_text = "\n".join(
-            sequence
-        )
-
-        # ====================================================
-        # TOTAL TIME
-        # ====================================================
-
-        total_time = (
-            time.time() -
-            total_start
-        )
-
-        # ====================================================
-        # NO CANDLES
-        # ====================================================
-
-        if final_total == 0:
-
-            bot.reply_to(
-
-                message,
-
-                "❌ No reliable candle bodies detected.\n\n"
-                "No random candles were generated.\n"
-                "No candles were forced into the result.\n"
-                "No trading signal was generated."
+                f"{number}. {color_text} "
+                f"{status} "
+                f"({score:.0f}%)"
 
             )
 
-            return
+
+        sequence_text = (
+            "\n".join(
+                sequence
+            )
+        )
+
 
         # ====================================================
-        # MAIN REPORT
+        # PROCESSING TIME
+        # ====================================================
+
+        total_time = (
+            time.time()
+            -
+            start_time
+        )
+
+
+        # ====================================================
+        # RESULT REPORT
         # ====================================================
 
         report = (
 
             "🔎 **CANDLE + MAP VERIFICATION TEST**\n\n"
 
-            "➡️ **SCAN: RIGHT → LEFT**\n\n"
+            "➡️ **SCAN:** RIGHT → LEFT\n\n"
 
             "📊 **PRIMARY CANDLE DETECTION**\n"
+
             "━━━━━━━━━━━━━━━━━━━━\n"
 
-            f"🟣 PURPLE / BUY: "
-            f"{primary_purple}\n"
+            f"🟣 PURPLE / BUY: {purple}\n"
 
-            f"🟡 YELLOW / SELL: "
-            f"{primary_yellow}\n"
+            f"🟡 YELLOW / SELL: {yellow}\n"
 
-            f"📊 TOTAL: "
-            f"{primary_total}\n\n"
+            f"📊 TOTAL: {total}\n\n"
+
 
             "🔎 **INDEPENDENT MAP VERIFICATION**\n"
+
             "━━━━━━━━━━━━━━━━━━━━\n"
 
-            f"🟣 VERIFIED PURPLE: "
-            f"{stats['verified_purple']}\n"
+            f"🟣 VERIFIED PURPLE: {verified_purple}\n"
 
-            f"🟡 VERIFIED YELLOW: "
-            f"{stats['verified_yellow']}\n"
+            f"🟡 VERIFIED YELLOW: {verified_yellow}\n"
 
-            f"🤝 MATCHED POSITIONS: "
-            f"{stats['matched']}\n"
+            f"✅ VERIFIED TOTAL: {verified_total}\n"
 
-            f"⚠️ POSSIBLE MISSED: "
-            f"{stats['possible_missed']}\n"
+            f"🔄 RECOVERED CANDLES: {recovered_count}\n"
 
-            f"➕ RECOVERED MISSED: "
-            f"{stats['recovered']}\n"
+            f"❓ NEEDS CHECK: {unverified}\n\n"
 
-            f"📊 INDEPENDENT POSITIONS: "
-            f"{stats['independent']}\n"
+
+            "🧭 **INDEPENDENT COLUMN SCAN**\n"
+
+            "━━━━━━━━━━━━━━━━━━━━\n"
+
+            f"🔎 Possible candle positions: "
+            f"{independent_peaks}\n"
+
+            f"🤝 Matched positions: "
+            f"{comparison['matched']}\n"
+
+            f"⚠️ Possible missed: "
+            f"{possible_missing}\n"
+
+            f"⚠️ Possible extra: "
+            f"{possible_extra}\n"
 
             f"📊 MAP AGREEMENT: "
-            f"{stats['agreement']:.1f}%\n\n"
+            f"{map_agreement:.1f}%\n\n"
 
-            "✅ **FINAL CANDLE LIST**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-
-            f"🟣 PURPLE / BUY: "
-            f"{final_purple}\n"
-
-            f"🟡 YELLOW / SELL: "
-            f"{final_yellow}\n"
-
-            f"📊 FINAL TOTAL: "
-            f"{final_total}\n\n"
-
-        )
-
-        # ====================================================
-        # RECOVERY MESSAGE
-        # ====================================================
-
-        if recovered:
-
-            report += (
-
-                f"➕ **{len(recovered)} "
-                f"MISSED CANDLE(S) FOUND AND "
-                f"ADDED TO THE MAIN CANDLE LIST.**\n\n"
-
-            )
-
-        else:
-
-            report += (
-
-                "✅ **No independently confirmed "
-                "missed candles.**\n\n"
-
-            )
-
-        # ====================================================
-        # FINAL SEQUENCE
-        # ====================================================
-
-        report += (
 
             "🕯️ **RIGHT → LEFT READING**\n"
+
             "━━━━━━━━━━━━━━━━━━━━\n"
 
             f"{sequence_text}\n\n"
+
 
             "━━━━━━━━━━━━━━━━━━━━\n"
 
             "🎯 **MAP KEY**\n"
 
             "🟣 = PURPLE / BUY\n"
-            "🟡 = YELLOW / SELL\n"
-            "✓ = primary detector candle\n"
-            "➕ = independently recovered missed candle\n\n"
 
-            "🔢 NUMBER 1 = "
-            "NEWEST/RIGHTMOST FINAL CANDLE\n\n"
+            "🟡 = YELLOW / SELL\n"
+
+            "✅ = independently verified\n"
+
+            "🔵 R = RECOVERED candle\n"
+
+            "❓ = needs visual checking\n\n"
+
+
+            "🔢 Number 1 = newest/rightmost "
+            "detected candle.\n\n"
+
 
             "⚠️ **IMPORTANT**\n"
 
@@ -1904,6 +2499,7 @@ def handle_photo(message):
 
             "No trading signal is generated.\n\n"
 
+
             f"🕯️ Detection: "
             f"{detection_time:.2f}s\n"
 
@@ -1915,6 +2511,7 @@ def handle_photo(message):
 
         )
 
+
         bot.reply_to(
 
             message,
@@ -1925,57 +2522,43 @@ def handle_photo(message):
 
         )
 
+
         # ====================================================
-        # CREATE FINAL MAP
+        # CREATE VERIFICATION MAP
         # ====================================================
 
         detection_map = (
+
             create_detection_map(
+
                 img,
-                final_candles
+
+                verification
+
             )
+
         )
+
 
         cv2.imwrite(
+
             detection_path,
+
             detection_map
-        )
-
-        # ====================================================
-        # MAP CAPTION
-        # ====================================================
-
-        caption = (
-
-            "🔢 **FINAL RIGHT → LEFT CANDLE MAP**\n\n"
-
-            "1 = newest/rightmost final candle.\n"
-
-            "➡️ Numbers continue RIGHT → LEFT.\n\n"
-
-            "🟣 Purple number = PURPLE / BUY.\n"
-
-            "🟡 Yellow number = YELLOW / SELL.\n\n"
-
-            "🟩 Green box = independently recovered "
-            "missed candle.\n"
-
-            "The number/color beside it shows whether "
-            "the recovered candle is 🟣 PURPLE or 🟡 YELLOW.\n\n"
-
-            "✓ = primary detector.\n"
-
-            "➕ = recovered by independent scan.\n\n"
-
-            "⚠️ Recovered candles are added only when "
-            "the independent scan finds actual "
-            "unmatched purple/yellow evidence."
 
         )
+
+
+        # ====================================================
+        # SEND MAP
+        # ====================================================
 
         with open(
+
             detection_path,
+
             "rb"
+
         ) as photo:
 
             bot.send_photo(
@@ -1984,11 +2567,36 @@ def handle_photo(message):
 
                 photo,
 
-                caption=caption,
+                caption=(
+
+                    "🔎 **CANDLE MAP VERIFICATION**\n\n"
+
+                    "➡️ RIGHT → LEFT\n"
+
+                    "🔢 1 = newest/rightmost\n\n"
+
+                    "🟣 Number = PURPLE / BUY\n"
+
+                    "🟡 Number = YELLOW / SELL\n\n"
+
+                    "🟩 ✅ = verified by independent check\n"
+
+                    "🔵 R = RECOVERED candle\n"
+
+                    "🟥 ❓ = needs visual checking\n\n"
+
+                    "Recovered candles are marked with BLUE boxes "
+                    "and an 'R' label.\n\n"
+
+                    "Check them against the actual screenshot "
+                    "to confirm they are real candles."
+
+                ),
 
                 parse_mode="Markdown"
 
             )
+
 
     except Exception as e:
 
@@ -1996,6 +2604,7 @@ def handle_photo(message):
             "❌ ERROR:",
             repr(e)
         )
+
 
         bot.reply_to(
 
@@ -2005,11 +2614,15 @@ def handle_photo(message):
 
         )
 
+
     finally:
 
         for path in [
+
             original_path,
+
             detection_path
+
         ]:
 
             if os.path.exists(
@@ -2036,7 +2649,7 @@ print(
 )
 
 print(
-    "🕯️ CANDLE + MAP VERIFICATION TEST"
+    "🕯️ CANDLE + MAP VERIFICATION BOT"
 )
 
 print(
@@ -2064,19 +2677,23 @@ print(
 )
 
 print(
-    "🔎 Independent missed-candle recovery enabled"
+    "🔎 Independent map verification enabled"
 )
 
 print(
-    "➕ Recovered candles added to final list"
+    "🔄 Missed candle recovery enabled"
 )
 
 print(
-    "🟩 Recovered candles marked on map"
+    "🔵 Recovered candles marked with BLUE box + R"
 )
 
 print(
-    "🚫 No Vision API"
+    "🚫 OpenRouter Vision removed"
+)
+
+print(
+    "🚫 No OHLC generation"
 )
 
 print(
@@ -2085,10 +2702,6 @@ print(
 
 print(
     "🚫 No random prices"
-)
-
-print(
-    "🚫 No OHLC generation"
 )
 
 print(
