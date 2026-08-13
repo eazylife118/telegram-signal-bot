@@ -21,13 +21,13 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # SETTINGS
 # ============================================================
 
-# Right-side scanning area — UNCHANGED
+# Right-side scanning area — UNCHANGED (width is perfect)
 RIGHT_SIDE_START = 0.80
 
-# Top crop — CHANGED FROM 0.10 TO 0.06
-TOP_CROP = 0.06
+# Top crop — reduced more (shorter top)
+TOP_CROP = 0.20
 
-# Bottom crop — UNCHANGED
+# Bottom crop — UNCHANGED (bottom is perfect)
 BOTTOM_CROP = 0.28
 
 # Component filtering
@@ -1277,13 +1277,13 @@ def create_number_detection_map(
         (20, 100),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.42,
-        (200, 200, 200),
+        (255, 255, 255),
         1,
         cv2.LINE_AA
     )
 
     # ========================================================
-    # WRITE DETECTED NUMBERS INSIDE SCAN AREA
+    # WRITE DETECTED NUMBERS INSIDE THE SCAN AREA
     # ========================================================
 
     if results:
@@ -1554,9 +1554,9 @@ def handle_photo(
                     "🟨 Yellow = scan boundary\n"
                     "🟩 Green = EXACT SAME boundary\n\n"
                     "🔄 **CHANGES APPLIED:**\n"
-                    "• Top crop: 6%\n"
-                    "• Bottom crop: 28%\n"
-                    "• Width: UNCHANGED"
+                    "• Top crop: 0.20\n"
+                    "• Bottom crop: 0.28\n"
+                    "• Width: 0.80 → 100%"
                 )
 
             )
@@ -1621,9 +1621,9 @@ def start(
         "🟩 Green = exact same boundary\n\n"
 
         "🔄 **CHANGES APPLIED:**\n"
-        "• Top crop: 6%\n"
-        "• Bottom crop: 28%\n"
-        "• Width: UNCHANGED\n\n"
+        "• Top crop: 0.20\n"
+        "• Bottom crop: 0.28\n"
+        "• Width: 0.80 → 100%\n\n"
 
         "🚫 No Tesseract\n"
         "🚫 No Vision API\n"
@@ -1689,7 +1689,15 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ Width UNCHANGED"
+        "✅ Top crop: 0.20"
+    )
+
+    print(
+        "✅ Bottom crop: 0.28"
+    )
+
+    print(
+        "✅ Width: 0.80 → 100%"
     )
 
     print(
