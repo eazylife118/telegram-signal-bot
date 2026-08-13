@@ -24,11 +24,11 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # Right-side scanning area — UNCHANGED (width is perfect)
 RIGHT_SIDE_START = 0.80
 
-# Top crop — between 0.16 and 0.17
-TOP_CROP = 0.165
+# Top crop — 0.164
+TOP_CROP = 0.164
 
-# Bottom crop — UNCHANGED (bottom is perfect)
-BOTTOM_CROP = 0.28
+# Bottom crop — 0.27
+BOTTOM_CROP = 0.27
 
 # Component filtering
 MIN_COMPONENT_AREA = 3
@@ -1554,8 +1554,8 @@ def handle_photo(
                     "🟨 Yellow = scan boundary\n"
                     "🟩 Green = EXACT SAME boundary\n\n"
                     "🔄 **CHANGES APPLIED:**\n"
-                    "• Top crop: 0.165\n"
-                    "• Bottom crop: 0.28\n"
+                    "• Top crop: 0.164\n"
+                    "• Bottom crop: 0.27\n"
                     "• Width: 0.80 → 100%"
                 )
 
@@ -1621,8 +1621,8 @@ def start(
         "🟩 Green = exact same boundary\n\n"
 
         "🔄 **CHANGES APPLIED:**\n"
-        "• Top crop: 0.165\n"
-        "• Bottom crop: 0.28\n"
+        "• Top crop: 0.164\n"
+        "• Bottom crop: 0.27\n"
         "• Width: 0.80 → 100%\n\n"
 
         "🚫 No Tesseract\n"
@@ -1689,11 +1689,11 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ Top crop: 0.165"
+        "✅ Top crop: 0.164"
     )
 
     print(
-        "✅ Bottom crop: 0.28"
+        "✅ Bottom crop: 0.27"
     )
 
     print(
