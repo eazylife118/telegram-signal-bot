@@ -1,3 +1,4 @@
 pyTelegramBotAPI
 opencv-python-headless
 numpy
+pytesseract
