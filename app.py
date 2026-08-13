@@ -21,12 +21,14 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 # SETTINGS
 # ============================================================
 
-# Right-side scanning area
-RIGHT_SIDE_START = 0.62
+# Right-side scanning area — REDUCED WIDTH BY HALF (shifted right)
+RIGHT_SIDE_START = 0.80
 
-# Top and bottom crop
-TOP_CROP = 0.12
-BOTTOM_CROP = 0.14
+# Top crop — a little more
+TOP_CROP = 0.14
+
+# Bottom crop — more
+BOTTOM_CROP = 0.22
 
 # Component filtering
 MIN_COMPONENT_AREA = 3
@@ -1170,13 +1172,6 @@ def extract_numbers_from_image(
 # ============================================================
 # CREATE DEBUG MAP
 # ============================================================
-#
-# IMPORTANT:
-# The GREEN box is now EXACTLY the same size and position
-# as the YELLOW scan rectangle.
-#
-# Individual digit boxes are NOT drawn anymore.
-# ============================================================
 
 def create_number_detection_map(
     img,
@@ -1219,10 +1214,6 @@ def create_number_detection_map(
 
     # ========================================================
     # GREEN DETECTION RECTANGLE
-    #
-    # EXACT SAME COORDINATES
-    # EXACT SAME WIDTH
-    # EXACT SAME HEIGHT
     # ========================================================
 
     cv2.rectangle(
@@ -1310,7 +1301,6 @@ def create_number_detection_map(
                 f"({result['confidence'] * 100:.0f}%)"
             )
 
-            # Keep text inside the scan rectangle
             text_x = scan_x1 + 10
 
             if text_y >= scan_y2 - 5:
@@ -1563,9 +1553,11 @@ def handle_photo(
                     "🔎 NUMBER DETECTION MAP\n\n"
                     "🟨 Yellow = scan boundary\n"
                     "🟩 Green = EXACT SAME boundary\n\n"
-                    "The green box is now exactly "
-                    "the same height and width as "
-                    "the yellow scan area."
+                    "🔄 **CHANGES APPLIED:**\n"
+                    "• Top crop: slightly more\n"
+                    "• Bottom crop: more\n"
+                    "• Width: reduced by half\n"
+                    "• Shifted: from the left side"
                 )
 
             )
@@ -1629,6 +1621,12 @@ def start(
         "🟨 Yellow = scan boundary\n"
         "🟩 Green = exact same boundary\n\n"
 
+        "🔄 **CHANGES APPLIED:**\n"
+        "• Top crop: slightly more\n"
+        "• Bottom crop: more\n"
+        "• Width: reduced by half\n"
+        "• Shifted: from the left side\n\n"
+
         "🚫 No Tesseract\n"
         "🚫 No Vision API\n"
         "🚫 No fake numbers\n"
@@ -1690,6 +1688,10 @@ if __name__ == "__main__":
 
     print(
         "✅ Exact-size detection box"
+    )
+
+    print(
+        "🔄 Width reduced by half (from left)"
     )
 
     print(
