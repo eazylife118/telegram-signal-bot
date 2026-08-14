@@ -1782,7 +1782,7 @@ def create_candle_report(
         "purple": purple,
         "yellow": yellow,
         "total": total,
-        "sequence": sequence,
+        "sequence": sequence,  # ALL candles — no truncation
         "recovered": verification["recovered_count"],
         "verification": verification
     }
@@ -2884,24 +2884,60 @@ def extract_numbers_from_image(
 
 
 # ============================================================
-# CREATE NUMBER REPORT
+# CREATE NUMBER REPORT (ALL NUMBERS, NO TRUNCATION)
 # ============================================================
 
 def create_number_report(results):
 
     if not results:
-        return {"total": 0, "numbers": []}
+        return {"total": 0, "numbers": [], "labels": []}
 
     numbers = []
-    for r in results:
+    labels = []
+
+    # Sort by vertical position (top to bottom)
+    results_sorted = sorted(results, key=lambda r: r["y"])
+
+    # Detect price types based on position and value
+    all_values = [r["number"] for r in results_sorted]
+
+    for i, r in enumerate(results_sorted):
+        value = r["number"]
+        confidence = round(r["confidence"] * 100, 1)
+
+        # Determine label
+        label = "Price"
+
+        # Check if it's a decimal price (likely a price level)
+        if "." in value and len(value) > 3:
+            # Try to determine if it's high or low
+            try:
+                num_val = float(value)
+                all_num_vals = [float(v) for v in all_values if v.replace(".", "").isdigit()]
+                if len(all_num_vals) >= 2:
+                    if num_val == max(all_num_vals):
+                        label = "HIGH"
+                    elif num_val == min(all_num_vals):
+                        label = "LOW"
+                    elif i == 0:  # First in list
+                        label = "CURRENT"
+                    else:
+                        label = "PRICE"
+            except:
+                label = "PRICE"
+
         numbers.append({
-            "value": r["number"],
-            "confidence": round(r["confidence"] * 100, 1)
+            "value": value,
+            "confidence": confidence,
+            "label": label
         })
+
+        labels.append(label)
 
     return {
         "total": len(results),
-        "numbers": numbers
+        "numbers": numbers,
+        "labels": labels
     }
 
 
@@ -3001,7 +3037,7 @@ def create_unified_detection_map(img, verification, number_results):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_color, 2, cv2.LINE_AA)
 
     # ========================================================
-    # DRAW ALL NUMBERS
+    # DRAW ALL NUMBERS WITH LABELS
     # ========================================================
 
     for result in number_results:
@@ -3013,7 +3049,7 @@ def create_unified_detection_map(img, verification, number_results):
         cv2.rectangle(output, (x, y), (x2, y2), (255, 255, 0), 2)
 
         # Number label
-        label = f"${result['number']}"
+        label = f"{result['number']}"
         cv2.putText(output, label, (x, max(20, y - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                     (255, 255, 0), 1, cv2.LINE_AA)
 
@@ -3076,7 +3112,7 @@ def handle_photo(message):
         total_time = time.time() - start_time
 
         # ====================================================
-        # BUILD RESPONSE
+        # BUILD RESPONSE — ALL CANDLES AND ALL NUMBERS
         # ====================================================
 
         candle_report = combined["candles"]
@@ -3092,23 +3128,22 @@ def handle_photo(message):
         response += f"📊 TOTAL: {candle_report['total']}\n"
         response += f"🔄 RECOVERED: {candle_report['recovered']}\n\n"
 
+        # ALL candles — no truncation
         if candle_report["sequence"]:
             response += "**Candle sequence (newest first):**\n"
-            for seq in candle_report["sequence"][:15]:
+            for seq in candle_report["sequence"]:
                 response += f"  {seq}\n"
-            if len(candle_report["sequence"]) > 15:
-                response += f"  ... and {len(candle_report['sequence']) - 15} more\n"
 
         response += "\n━━━━━━━━━━━━━━━━━━━━\n"
         response += "🔢 **NUMBER / PRICE DETECTION**\n"
         response += "━━━━━━━━━━━━━━━━━━━━\n"
         response += f"📊 Numbers found: {number_report['total']}\n\n"
 
+        # ALL numbers — no truncation, with labels
         if number_report["numbers"]:
-            for num in number_report["numbers"][:15]:
-                response += f"• `{num['value']}` ({num['confidence']}%)\n"
-            if len(number_report["numbers"]) > 15:
-                response += f"  ... and {len(number_report['numbers']) - 15} more\n"
+            response += "**Prices detected (with labels):**\n"
+            for num in number_report["numbers"]:
+                response += f"• {num['label']}: `{num['value']}` ({num['confidence']}%)\n"
 
         response += "\n━━━━━━━━━━━━━━━━━━━━\n"
         response += "📐 **SCAN AREA**\n"
@@ -3169,7 +3204,7 @@ def start(message):
         f"➡️ {RIGHT_SIDE_START*100:.0f}% → 100%\n"
         f"📐 Top crop: {TOP_CROP*100:.1f}%\n"
         f"📐 Bottom crop: {BOTTOM_CROP*100:.1f}%\n\n"
-        "✅ Real data only",
+        "📝 Detailed report — all candles and all prices shown",
         parse_mode="Markdown"
     )
 
@@ -3186,7 +3221,7 @@ if __name__ == "__main__":
     print("✅ Candle detection (PURPLE / YELLOW)")
     print("✅ Number detection")
     print("✅ Unified scan area")
-    print("✅ Combined analysis")
+    print("✅ Detailed report — all candles and all prices")
     print("=" * 50)
 
     bot.infinity_polling(timeout=30, long_polling_timeout=30)
