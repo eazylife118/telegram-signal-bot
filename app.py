@@ -390,7 +390,7 @@ def create_candle_report(candles):
     yellow = sum(1 for c in candles if c["color"] == "YELLOW")
 
     sequence = []
-    for i, candle in enumerate(candles[:20], 1):
+    for i, candle in enumerate(candles, 1):
         color = "🟣" if candle["color"] == "PURPLE" else "🟡"
         verified = "✅" if candle["verification"]["verified"] else "❓"
         score = candle["verification"]["score"]
@@ -902,10 +902,10 @@ def create_unified_detection_map(img, candles, number_results):
     cv2.rectangle(output, (scan_x1, scan_y1), (scan_x2, scan_y2), (0, 255, 255), 2)
 
     # ========================================================
-    # DRAW CANDLES
+    # DRAW ALL CANDLES
     # ========================================================
 
-    for number, candle in enumerate(candles[:20], 1):
+    for number, candle in enumerate(candles, 1):
         x = int(candle["x"])
         y = int(candle["y"])
         x2 = int(candle["x"] + candle["w"])
@@ -930,10 +930,10 @@ def create_unified_detection_map(img, candles, number_results):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_color, 2, cv2.LINE_AA)
 
     # ========================================================
-    # DRAW NUMBERS
+    # DRAW ALL NUMBERS
     # ========================================================
 
-    for result in number_results[:20]:
+    for result in number_results:
         x = int(result["x"])
         y = int(result["y"])
         x2 = int(result["x"] + result["w"])
@@ -1004,118 +1004,4 @@ def handle_photo(message):
         analysis_time = time.time() - analysis_start
         total_time = time.time() - start_time
 
-        # ====================================================
-        # BUILD RESPONSE
-        # ====================================================
-
-        candle_report = combined["candles"]
-        number_report = combined["numbers"]
-
-        response = "📊 **SCREENSHOT ANALYSIS**\n\n"
-
-        response += "━━━━━━━━━━━━━━━━━━━━\n"
-        response += "🕯️ **CANDLE DETECTION**\n"
-        response += "━━━━━━━━━━━━━━━━━━━━\n"
-        response += f"🟣 PURPLE (BUY): {candle_report['purple']}\n"
-        response += f"🟡 YELLOW (SELL): {candle_report['yellow']}\n"
-        response += f"📊 TOTAL: {candle_report['total']}\n\n"
-
-        if candle_report["sequence"]:
-            response += "**Candle sequence (newest first):**\n"
-            for seq in candle_report["sequence"][:10]:
-                response += f"  {seq}\n"
-            if len(candle_report["sequence"]) > 10:
-                response += f"  ... and {len(candle_report['sequence']) - 10} more\n"
-
-        response += "\n━━━━━━━━━━━━━━━━━━━━\n"
-        response += "🔢 **NUMBER / PRICE DETECTION**\n"
-        response += "━━━━━━━━━━━━━━━━━━━━\n"
-        response += f"📊 Numbers found: {number_report['total']}\n\n"
-
-        if number_report["numbers"]:
-            for num in number_report["numbers"][:10]:
-                response += f"• `{num['value']}` ({num['confidence']}%)\n"
-            if len(number_report["numbers"]) > 10:
-                response += f"  ... and {len(number_report['numbers']) - 10} more\n"
-
-        response += "\n━━━━━━━━━━━━━━━━━━━━\n"
-        response += "📐 **SCAN AREA**\n"
-        response += f"➡️ {RIGHT_SIDE_START*100:.0f}% → 100%\n"
-        response += f"📐 Top crop: {TOP_CROP*100:.1f}%\n"
-        response += f"📐 Bottom crop: {BOTTOM_CROP*100:.1f}%\n"
-
-        response += f"\n⚡ Download: {download_time:.2f}s\n"
-        response += f"⚡ Analysis: {analysis_time:.2f}s\n"
-        response += f"⚡ Total: {total_time:.2f}s"
-
-        bot.reply_to(message, response, parse_mode="Markdown")
-
-        # ====================================================
-        # DETECTION MAP
-        # ====================================================
-
-        map_img = create_unified_detection_map(img, candles, numbers)
-
-        cv2.imwrite(map_path, map_img)
-
-        with open(map_path, "rb") as photo:
-            bot.send_photo(
-                message.chat.id,
-                photo,
-                caption="🔎 **DETECTION MAP**\n\n🟨 Yellow = scan area\n🟩 Green = verified candle\n🟥 Red = check\n🟦 Cyan = detected number"
-            )
-
-    except Exception as e:
-        print("❌ ERROR:", repr(e))
-        bot.reply_to(message, f"❌ Error: {str(e)}")
-
-    finally:
-        for path in [image_path, map_path]:
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
-
-
-# ============================================================
-# START COMMAND
-# ============================================================
-
-@bot.message_handler(commands=["start"])
-def start(message):
-
-    bot.reply_to(
-        message,
-        "📊 **UNIFIED SCREENSHOT ANALYZER**\n\n"
-        "Send a screenshot.\n\n"
-        "I will detect:\n"
-        "• 🟣 PURPLE candles (BUY)\n"
-        "• 🟡 YELLOW candles (SELL)\n"
-        "• 🔢 All visible numbers/prices\n\n"
-        "All detections use the same scan area:\n"
-        f"➡️ {RIGHT_SIDE_START*100:.0f}% → 100%\n"
-        f"📐 Top crop: {TOP_CROP*100:.1f}%\n"
-        f"📐 Bottom crop: {BOTTOM_CROP*100:.1f}%\n\n"
-        "✅ Real data only\n"
-        "✅ No generated data",
-        parse_mode="Markdown"
-    )
-
-
-# ============================================================
-# START BOT
-# ============================================================
-
-if __name__ == "__main__":
-
-    print("=" * 50)
-    print("📊 UNIFIED SCREENSHOT ANALYZER")
-    print("=" * 50)
-    print("✅ Candle detection (PURPLE / YELLOW)")
-    print("✅ Number detection")
-    print("✅ Unified scan area")
-    print("✅ Combined analysis")
-    print("=" * 50)
-
-    bot.infinity_polling(timeout=30, long_polling_timeout=30)
+        # ===================================================
