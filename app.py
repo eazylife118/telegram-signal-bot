@@ -4,6 +4,7 @@ import numpy as np
 import telebot
 import time
 
+
 # ============================================================
 # TELEGRAM
 # ============================================================
@@ -257,7 +258,7 @@ def get_color_masks(img):
 
 
 # ============================================================
-# FIND CANDIDATES
+# FIND CANDIDATES (CANDLES)
 # ============================================================
 
 def find_candidates(
@@ -1958,7 +1959,7 @@ def clean_mask(mask):
 
 
 # ============================================================
-# FIND CHARACTER COMPONENTS
+# FIND CHARACTER COMPONENTS (for numbers)
 # ============================================================
 
 def find_components(mask):
@@ -1966,4 +1967,1226 @@ def find_components(mask):
     contours, _ = cv2.findContours(
         mask,
         cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMP
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    components = []
+
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        area = w * h
+
+        if area < MIN_COMPONENT_AREA:
+            continue
+        if area > MAX_COMPONENT_AREA:
+            continue
+        if h < MIN_DIGIT_HEIGHT:
+            continue
+        if h > MAX_DIGIT_HEIGHT:
+            continue
+        if w < MIN_DIGIT_WIDTH:
+            continue
+        if w > MAX_DIGIT_WIDTH:
+            continue
+        if w > h * 3.5:
+            continue
+
+        region = mask[y:y+h, x:x+w]
+        pixels = int(np.sum(region > 0))
+        density = pixels / float(max(1, w * h))
+
+        if density < 0.04:
+            continue
+
+        components.append({
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "area": area,
+            "pixels": pixels,
+            "density": density
+        })
+
+    components.sort(key=lambda c: c["x"])
+    return components
+
+
+# ============================================================
+# MERGE CLOSE COMPONENTS (for numbers)
+# ============================================================
+
+def merge_close_components(
+    components
+):
+
+    if not components:
+        return []
+
+    result = []
+
+    used = set()
+
+    for i, current in enumerate(
+        components
+    ):
+
+        if i in used:
+            continue
+
+        group = [current]
+
+        used.add(i)
+
+        changed = True
+
+        while changed:
+
+            changed = False
+
+            for j, candidate in enumerate(
+                components
+            ):
+
+                if j in used:
+                    continue
+
+                for member in group:
+
+                    member_left = member["x"]
+
+                    member_right = (
+                        member["x"] +
+                        member["w"]
+                    )
+
+                    candidate_left = (
+                        candidate["x"]
+                    )
+
+                    candidate_right = (
+                        candidate["x"] +
+                        candidate["w"]
+                    )
+
+                    horizontal_gap = max(
+                        0,
+                        max(
+                            candidate_left -
+                            member_right,
+                            member_left -
+                            candidate_right
+                        )
+                    )
+
+                    height_ratio = (
+                        min(
+                            member["h"],
+                            candidate["h"]
+                        )
+                        /
+                        float(
+                            max(
+                                member["h"],
+                                candidate["h"]
+                            )
+                        )
+                    )
+
+                    if (
+                        horizontal_gap <= 3
+                        and
+                        height_ratio >= 0.45
+                    ):
+
+                        group.append(
+                            candidate
+                        )
+
+                        used.add(j)
+
+                        changed = True
+
+                        break
+
+                if changed:
+                    break
+
+        x1 = min(
+            c["x"]
+            for c in group
+        )
+
+        y1 = min(
+            c["y"]
+            for c in group
+        )
+
+        x2 = max(
+            c["x"] + c["w"]
+            for c in group
+        )
+
+        y2 = max(
+            c["y"] + c["h"]
+            for c in group
+        )
+
+        result.append({
+            "x": x1,
+            "y": y1,
+            "w": x2 - x1,
+            "h": y2 - y1
+        })
+
+    result.sort(
+        key=lambda c: c["x"]
+    )
+
+    return result
+
+
+# ============================================================
+# GROUP DIGITS INTO NUMBERS
+# ============================================================
+
+def group_into_numbers(
+    components
+):
+
+    if not components:
+        return []
+
+    groups = []
+
+    current = [
+        components[0]
+    ]
+
+    for component in components[1:]:
+
+        previous = current[-1]
+
+        gap = (
+            component["x"]
+            -
+            (
+                previous["x"] +
+                previous["w"]
+            )
+        )
+
+        average_height = (
+            previous["h"] +
+            component["h"]
+        ) / 2.0
+
+        allowed_gap = max(
+            4,
+            average_height *
+            GROUP_GAP_RATIO
+        )
+
+        if gap <= allowed_gap:
+
+            current.append(
+                component
+            )
+
+        else:
+
+            groups.append(
+                current
+            )
+
+            current = [
+                component
+            ]
+
+    if current:
+        groups.append(
+            current
+        )
+
+    return groups
+
+
+# ============================================================
+# NORMALIZE DIGIT
+# ============================================================
+
+def normalize_digit(
+    image
+):
+
+    if image is None:
+        return None
+
+    if image.size == 0:
+        return None
+
+    image = image.copy()
+
+    h, w = image.shape[:2]
+
+    target_h = 48
+
+    scale = target_h / float(
+        max(1, h)
+    )
+
+    target_w = max(
+        8,
+        int(w * scale)
+    )
+
+    resized = cv2.resize(
+        image,
+        (
+            target_w,
+            target_h
+        ),
+        interpolation=cv2.INTER_AREA
+    )
+
+    canvas = np.zeros(
+        (64, 48),
+        dtype=np.uint8
+    )
+
+    rh, rw = resized.shape[:2]
+
+    if rw > 46:
+
+        resized = cv2.resize(
+            resized,
+            (46, 60),
+            interpolation=cv2.INTER_AREA
+        )
+
+        rh, rw = resized.shape[:2]
+
+    x_offset = (
+        48 - rw
+    ) // 2
+
+    y_offset = (
+        64 - rh
+    ) // 2
+
+    canvas[
+        y_offset:y_offset+rh,
+        x_offset:x_offset+rw
+    ] = resized
+
+    _, canvas = cv2.threshold(
+        canvas,
+        100,
+        255,
+        cv2.THRESH_BINARY
+    )
+
+    return canvas
+
+
+# ============================================================
+# GENERATE DIGIT TEMPLATES
+# ============================================================
+
+def generate_digit_templates():
+
+    templates = {
+        str(i): []
+        for i in range(10)
+    }
+
+    fonts = [
+        cv2.FONT_HERSHEY_SIMPLEX,
+        cv2.FONT_HERSHEY_PLAIN,
+        cv2.FONT_HERSHEY_DUPLEX,
+        cv2.FONT_HERSHEY_COMPLEX,
+        cv2.FONT_HERSHEY_TRIPLEX
+    ]
+
+    font_scales = [
+        1.0,
+        1.2,
+        1.4,
+        1.6,
+        1.8
+    ]
+
+    thicknesses = [
+        1,
+        2,
+        3
+    ]
+
+    for digit in range(10):
+
+        text = str(digit)
+
+        for font in fonts:
+
+            for scale in font_scales:
+
+                for thickness in thicknesses:
+
+                    canvas = np.zeros(
+                        (80, 60),
+                        dtype=np.uint8
+                    )
+
+                    size, baseline = (
+                        cv2.getTextSize(
+                            text,
+                            font,
+                            scale,
+                            thickness
+                        )
+                    )
+
+                    tw, th = size
+
+                    x = max(
+                        1,
+                        (60 - tw) // 2
+                    )
+
+                    y = max(
+                        th + 1,
+                        (80 + th) // 2
+                    )
+
+                    cv2.putText(
+                        canvas,
+                        text,
+                        (x, y),
+                        font,
+                        scale,
+                        255,
+                        thickness,
+                        cv2.LINE_AA
+                    )
+
+                    normalized = (
+                        normalize_digit(
+                            canvas
+                        )
+                    )
+
+                    if normalized is not None:
+
+                        templates[
+                            text
+                        ].append(
+                            normalized
+                        )
+
+    return templates
+
+
+DIGIT_TEMPLATES = (
+    generate_digit_templates()
+)
+
+
+# ============================================================
+# IMAGE COMPARISON
+# ============================================================
+
+def compare_images(
+    image_a,
+    image_b
+):
+
+    if (
+        image_a is None
+        or
+        image_b is None
+    ):
+        return 0.0
+
+    a = (
+        image_a.astype(
+            np.float32
+        ) / 255.0
+    )
+
+    b = (
+        image_b.astype(
+            np.float32
+        ) / 255.0
+    )
+
+    mae = np.mean(
+        np.abs(a - b)
+    )
+
+    pixel_score = max(
+        0.0,
+        1.0 - mae
+    )
+
+    a_binary = (
+        a > 0.5
+    ).astype(
+        np.uint8
+    )
+
+    b_binary = (
+        b > 0.5
+    ).astype(
+        np.uint8
+    )
+
+    intersection = np.sum(
+        (
+            a_binary &
+            b_binary
+        ) > 0
+    )
+
+    union = np.sum(
+        (
+            a_binary |
+            b_binary
+        ) > 0
+    )
+
+    if union > 0:
+
+        iou = (
+            intersection /
+            float(union)
+        )
+
+    else:
+
+        iou = 0.0
+
+    score = (
+        pixel_score * 0.45
+        +
+        iou * 0.55
+    )
+
+    return float(score)
+
+
+# ============================================================
+# RECOGNIZE ONE DIGIT
+# ============================================================
+
+def recognize_digit(
+    digit_image
+):
+
+    normalized = normalize_digit(
+        digit_image
+    )
+
+    if normalized is None:
+        return None, 0.0
+
+    best_digit = None
+    best_score = 0.0
+
+    for digit, templates in (
+        DIGIT_TEMPLATES.items()
+    ):
+
+        for template in templates:
+
+            score = compare_images(
+                normalized,
+                template
+            )
+
+            if score > best_score:
+
+                best_score = score
+                best_digit = digit
+
+    if (
+        best_digit is None
+        or
+        best_score <
+        MIN_RECOGNITION_SCORE
+    ):
+
+        return None, best_score
+
+    return (
+        best_digit,
+        best_score
+    )
+
+
+# ============================================================
+# RECOGNIZE NUMBER GROUP
+# ============================================================
+
+def recognize_number_group(
+    group,
+    binary
+):
+
+    if not group:
+        return None, 0.0
+
+    recognized = []
+
+    scores = []
+
+    for component in group:
+
+        x = component["x"]
+        y = component["y"]
+        w = component["w"]
+        h = component["h"]
+
+        padding = 2
+
+        left = max(
+            0,
+            x - padding
+        )
+
+        top = max(
+            0,
+            y - padding
+        )
+
+        right = min(
+            binary.shape[1],
+            x + w + padding
+        )
+
+        bottom = min(
+            binary.shape[0],
+            y + h + padding
+        )
+
+        digit_roi = binary[
+            top:bottom,
+            left:right
+        ]
+
+        digit, score = (
+            recognize_digit(
+                digit_roi
+            )
+        )
+
+        if digit is None:
+
+            return None, 0.0
+
+        recognized.append(
+            digit
+        )
+
+        scores.append(
+            score
+        )
+
+    if not recognized:
+        return None, 0.0
+
+    number = "".join(
+        recognized
+    )
+
+    confidence = (
+        sum(scores) /
+        len(scores)
+    )
+
+    return number, confidence
+
+
+# ============================================================
+# ANALYZE THRESHOLD
+# ============================================================
+
+def analyze_threshold(
+    binary,
+    name
+):
+
+    cleaned = clean_mask(
+        binary
+    )
+
+    components = find_components(
+        cleaned
+    )
+
+    if not components:
+        return None
+
+    components = merge_close_components(
+        components
+    )
+
+    groups = group_into_numbers(
+        components
+    )
+
+    results = []
+
+    for group in groups:
+
+        if len(group) < MIN_NUMBER_DIGITS:
+            continue
+
+        number, confidence = (
+            recognize_number_group(
+                group,
+                cleaned
+            )
+        )
+
+        if number is None:
+            continue
+
+        if confidence < MIN_RECOGNITION_SCORE:
+            continue
+
+        x1 = min(
+            c["x"]
+            for c in group
+        )
+
+        y1 = min(
+            c["y"]
+            for c in group
+        )
+
+        x2 = max(
+            c["x"] + c["w"]
+            for c in group
+        )
+
+        y2 = max(
+            c["y"] + c["h"]
+            for c in group
+        )
+
+        results.append({
+
+            "number": number,
+
+            "confidence":
+                confidence,
+
+            "x": x1,
+
+            "y": y1,
+
+            "w": x2 - x1,
+
+            "h": y2 - y1,
+
+            "components":
+                len(group),
+
+            "method":
+                name
+        })
+
+    if not results:
+        return None
+
+    return results
+
+
+# ============================================================
+# REMOVE DUPLICATES
+# ============================================================
+
+def remove_duplicate_results(
+    results
+):
+
+    if not results:
+        return []
+
+    results.sort(
+        key=lambda r:
+        (
+            r["y"],
+            r["x"]
+        )
+    )
+
+    final = []
+
+    for result in results:
+
+        duplicate = False
+
+        for existing in final:
+
+            x_distance = abs(
+                result["x"] -
+                existing["x"]
+            )
+
+            y_distance = abs(
+                result["y"] -
+                existing["y"]
+            )
+
+            if (
+                x_distance < 15
+                and
+                y_distance < 15
+                and
+                result["number"] ==
+                existing["number"]
+            ):
+
+                duplicate = True
+
+                if (
+                    result["confidence"]
+                    >
+                    existing["confidence"]
+                ):
+
+                    existing.update(
+                        result
+                    )
+
+                break
+
+        if not duplicate:
+
+            final.append(
+                result
+            )
+
+    return final
+
+
+# ============================================================
+# MAIN EXTRACTION (for numbers)
+# ============================================================
+
+def extract_numbers_from_image(
+    image_path
+):
+
+    img = load_image(
+        image_path
+    )
+
+    roi, offset_x, offset_y = (
+        get_right_side_roi(
+            img
+        )
+    )
+
+    thresholds = create_thresholds(
+        roi
+    )
+
+    all_results = []
+
+    for name, mask in thresholds:
+
+        results = analyze_threshold(
+            mask,
+            name
+        )
+
+        if results:
+
+            for result in results:
+
+                result["x"] += (
+                    offset_x
+                )
+
+                result["y"] += (
+                    offset_y
+                )
+
+                all_results.append(
+                    result
+                )
+
+    all_results = (
+        remove_duplicate_results(
+            all_results
+        )
+    )
+
+    all_results.sort(
+        key=lambda r:
+        r["confidence"],
+        reverse=True
+    )
+
+    final_results = []
+
+    for result in all_results:
+
+        overlapping = False
+
+        for existing in final_results:
+
+            ax1 = result["x"]
+
+            ax2 = (
+                result["x"] +
+                result["w"]
+            )
+
+            bx1 = existing["x"]
+
+            bx2 = (
+                existing["x"] +
+                existing["w"]
+            )
+
+            horizontal_overlap = (
+                max(
+                    0,
+                    min(ax2, bx2) -
+                    max(ax1, bx1)
+                )
+            )
+
+            if horizontal_overlap > 0:
+
+                overlapping = True
+
+                break
+
+        if not overlapping:
+
+            final_results.append(
+                result
+            )
+
+    final_results.sort(
+        key=lambda r:
+        (
+            r["y"],
+            r["x"]
+        )
+    )
+
+    return img, final_results
+
+
+# ============================================================
+# CREATE NUMBER REPORT
+# ============================================================
+
+def create_number_report(results):
+
+    if not results:
+        return {"total": 0, "numbers": []}
+
+    numbers = []
+    for r in results:
+        numbers.append({
+            "value": r["number"],
+            "confidence": round(r["confidence"] * 100, 1)
+        })
+
+    return {
+        "total": len(results),
+        "numbers": numbers
+    }
+
+
+# ============================================================
+# ============================================================
+# SECTION 3: COMBINED ANALYSIS
+# ============================================================
+# ============================================================
+
+def analyze_screenshot(image_path):
+
+    img = load_image(image_path)
+
+    # ========================================================
+    # 1. CANDLE DETECTION
+    # ========================================================
+
+    candles = detect_candles(img)
+    verification = verify_candle_map(img, candles)
+    candle_report = create_candle_report(verification)
+
+    # ========================================================
+    # 2. NUMBER DETECTION
+    # ========================================================
+
+    _, number_results = extract_numbers_from_image(image_path)
+    number_report = create_number_report(number_results)
+
+    # ========================================================
+    # 3. COMBINED ANALYSIS
+    # ========================================================
+
+    combined_analysis = {
+        "candles": candle_report,
+        "numbers": number_report,
+        "scan_area": {
+            "right_start": RIGHT_SIDE_START,
+            "top_crop": TOP_CROP,
+            "bottom_crop": BOTTOM_CROP
+        }
+    }
+
+    return combined_analysis, img, verification, number_results
+
+
+# ============================================================
+# ============================================================
+# SECTION 4: UNIFIED DETECTION MAP
+# ============================================================
+# ============================================================
+
+def create_unified_detection_map(img, verification, number_results):
+
+    output = img.copy()
+    h, w = img.shape[:2]
+
+    # ========================================================
+    # SCAN AREA
+    # ========================================================
+
+    scan_x1 = int(w * RIGHT_SIDE_START)
+    scan_y1 = int(h * TOP_CROP)
+    scan_x2 = w
+    scan_y2 = int(h * (1 - BOTTOM_CROP))
+
+    # Yellow scan area
+    cv2.rectangle(output, (scan_x1, scan_y1), (scan_x2, scan_y2), (0, 255, 255), 2)
+
+    # ========================================================
+    # DRAW ALL CANDLES
+    # ========================================================
+
+    candles = verification["candles"]
+
+    for number, candle in enumerate(candles, 1):
+        x = int(candle["x"])
+        y = int(candle["y"])
+        x2 = int(candle["x"] + candle["w"])
+        y2 = int(candle["y"] + candle["h"])
+
+        verified = candle["verification"]["verified"]
+
+        if verified:
+            box_color = (0, 255, 0)
+        else:
+            box_color = (0, 0, 255)
+
+        cv2.rectangle(output, (x, y), (x2, y2), box_color, 2)
+
+        # Label
+        label = f"{number}"
+        cv2.putText(output, label, (x, max(25, y - 7)), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    (255, 0, 255) if candle["color"] == "PURPLE" else (0, 255, 255), 2, cv2.LINE_AA)
+
+        # Verification mark
+        cv2.putText(output, "V" if verified else "?", (x2 + 3, y + 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_color, 2, cv2.LINE_AA)
+
+    # ========================================================
+    # DRAW ALL NUMBERS
+    # ========================================================
+
+    for result in number_results:
+        x = int(result["x"])
+        y = int(result["y"])
+        x2 = int(result["x"] + result["w"])
+        y2 = int(result["y"] + result["h"])
+
+        cv2.rectangle(output, (x, y), (x2, y2), (255, 255, 0), 2)
+
+        # Number label
+        label = f"${result['number']}"
+        cv2.putText(output, label, (x, max(20, y - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (255, 255, 0), 1, cv2.LINE_AA)
+
+    # ========================================================
+    # LEGEND
+    # ========================================================
+
+    cv2.rectangle(output, (10, 10), (380, 145), (0, 0, 0), -1)
+
+    cv2.putText(output, "UNIFIED DETECTION MAP", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(output, "Yellow = scan area", (20, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(output, "Green = verified candle | Red = check", (20, 78), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+    cv2.putText(output, "Purple # = BUY | Yellow # = SELL", (20, 98), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 1, cv2.LINE_AA)
+    cv2.putText(output, "Cyan boxes = detected numbers", (20, 118), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
+    cv2.putText(output, f"Scan: {RIGHT_SIDE_START*100:.0f}% → 100%  |  Y: {scan_y1} → {scan_y2}", (20, 138),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 200), 1, cv2.LINE_AA)
+
+    return output
+
+
+# ============================================================
+# ============================================================
+# SECTION 5: TELEGRAM PHOTO HANDLER
+# ============================================================
+# ============================================================
+
+@bot.message_handler(content_types=["photo"])
+def handle_photo(message):
+
+    start_time = time.time()
+
+    image_path = "screenshot.png"
+    map_path = "detection_map.png"
+
+    try:
+
+        bot.reply_to(message, "🔍 Analyzing screenshot...")
+
+        # ====================================================
+        # DOWNLOAD
+        # ====================================================
+
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+
+        with open(image_path, "wb") as f:
+            f.write(downloaded_file)
+
+        download_time = time.time() - start_time
+
+        # ====================================================
+        # COMBINED ANALYSIS
+        # ====================================================
+
+        analysis_start = time.time()
+
+        combined, img, verification, numbers = analyze_screenshot(image_path)
+
+        analysis_time = time.time() - analysis_start
+        total_time = time.time() - start_time
+
+        # ====================================================
+        # BUILD RESPONSE
+        # ====================================================
+
+        candle_report = combined["candles"]
+        number_report = combined["numbers"]
+
+        response = "📊 **SCREENSHOT ANALYSIS**\n\n"
+
+        response += "━━━━━━━━━━━━━━━━━━━━\n"
+        response += "🕯️ **CANDLE DETECTION**\n"
+        response += "━━━━━━━━━━━━━━━━━━━━\n"
+        response += f"🟣 PURPLE (BUY): {candle_report['purple']}\n"
+        response += f"🟡 YELLOW (SELL): {candle_report['yellow']}\n"
+        response += f"📊 TOTAL: {candle_report['total']}\n"
+        response += f"🔄 RECOVERED: {candle_report['recovered']}\n\n"
+
+        if candle_report["sequence"]:
+            response += "**Candle sequence (newest first):**\n"
+            for seq in candle_report["sequence"][:15]:
+                response += f"  {seq}\n"
+            if len(candle_report["sequence"]) > 15:
+                response += f"  ... and {len(candle_report['sequence']) - 15} more\n"
+
+        response += "\n━━━━━━━━━━━━━━━━━━━━\n"
+        response += "🔢 **NUMBER / PRICE DETECTION**\n"
+        response += "━━━━━━━━━━━━━━━━━━━━\n"
+        response += f"📊 Numbers found: {number_report['total']}\n\n"
+
+        if number_report["numbers"]:
+            for num in number_report["numbers"][:15]:
+                response += f"• `{num['value']}` ({num['confidence']}%)\n"
+            if len(number_report["numbers"]) > 15:
+                response += f"  ... and {len(number_report['numbers']) - 15} more\n"
+
+        response += "\n━━━━━━━━━━━━━━━━━━━━\n"
+        response += "📐 **SCAN AREA**\n"
+        response += f"➡️ {RIGHT_SIDE_START*100:.0f}% → 100%\n"
+        response += f"📐 Top crop: {TOP_CROP*100:.1f}%\n"
+        response += f"📐 Bottom crop: {BOTTOM_CROP*100:.1f}%\n"
+
+        response += f"\n⚡ Download: {download_time:.2f}s\n"
+        response += f"⚡ Analysis: {analysis_time:.2f}s\n"
+        response += f"⚡ Total: {total_time:.2f}s"
+
+        bot.reply_to(message, response, parse_mode="Markdown")
+
+        # ====================================================
+        # DETECTION MAP
+        # ====================================================
+
+        map_img = create_unified_detection_map(img, verification, numbers)
+
+        cv2.imwrite(map_path, map_img)
+
+        with open(map_path, "rb") as photo:
+            bot.send_photo(
+                message.chat.id,
+                photo,
+                caption="🔎 **DETECTION MAP**\n\n🟨 Yellow = scan area\n🟩 Green = verified candle\n🟥 Red = check\n🟦 Cyan = detected number"
+            )
+
+    except Exception as e:
+        print("❌ ERROR:", repr(e))
+        bot.reply_to(message, f"❌ Error: {str(e)}")
+
+    finally:
+        for path in [image_path, map_path]:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+
+# ============================================================
+# START COMMAND
+# ============================================================
+
+@bot.message_handler(commands=["start"])
+def start(message):
+
+    bot.reply_to(
+        message,
+        "📊 **UNIFIED SCREENSHOT ANALYZER**\n\n"
+        "Send a screenshot.\n\n"
+        "I will detect:\n"
+        "• 🟣 PURPLE candles (BUY)\n"
+        "• 🟡 YELLOW candles (SELL)\n"
+        "• 🔢 All visible numbers/prices\n\n"
+        "All detections use the same scan area:\n"
+        f"➡️ {RIGHT_SIDE_START*100:.0f}% → 100%\n"
+        f"📐 Top crop: {TOP_CROP*100:.1f}%\n"
+        f"📐 Bottom crop: {BOTTOM_CROP*100:.1f}%\n\n"
+        "✅ Real data only",
+        parse_mode="Markdown"
+    )
+
+
+# ============================================================
+# START BOT
+# ============================================================
+
+if __name__ == "__main__":
+
+    print("=" * 50)
+    print("📊 UNIFIED SCREENSHOT ANALYZER")
+    print("=" * 50)
+    print("✅ Candle detection (PURPLE / YELLOW)")
+    print("✅ Number detection")
+    print("✅ Unified scan area")
+    print("✅ Combined analysis")
+    print("=" * 50)
+
+    bot.infinity_polling(timeout=30, long_polling_timeout=30)
