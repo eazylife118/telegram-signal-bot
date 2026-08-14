@@ -28,7 +28,7 @@ BOTTOM_CROP = 0.30
 
 # ============================================================
 # ============================================================
-# SECTION 1: CANDLE DETECTION (ORIGINAL — UNCHANGED)
+# SECTION 1: CANDLE DETECTION (USING UNIFIED SCAN AREA)
 # ============================================================
 # ============================================================
 
@@ -97,6 +97,23 @@ def load_image(path):
         )
 
     return img
+
+
+# ============================================================
+# GET YELLOW BOX ROI (Unified Scan Area)
+# ============================================================
+
+def get_yellow_box_roi(img):
+
+    h, w = img.shape[:2]
+
+    start_x = int(w * RIGHT_SIDE_START)
+    top_y = int(h * TOP_CROP)
+    bottom_y = int(h * (1 - BOTTOM_CROP))
+
+    roi = img[top_y:bottom_y, start_x:w]
+
+    return roi, start_x, top_y
 
 
 # ============================================================
@@ -766,23 +783,6 @@ MIN_NUMBER_DIGITS = 1
 
 
 # ============================================================
-# GET YELLOW BOX ROI
-# ============================================================
-
-def get_yellow_box_roi(img):
-
-    h, w = img.shape[:2]
-
-    start_x = int(w * RIGHT_SIDE_START)
-    top_y = int(h * TOP_CROP)
-    bottom_y = int(h * (1 - BOTTOM_CROP))
-
-    roi = img[top_y:bottom_y, start_x:w]
-
-    return roi, start_x, top_y
-
-
-# ============================================================
 # CREATE THRESHOLDS (for prices)
 # ============================================================
 
@@ -1312,7 +1312,61 @@ def create_price_report(results):
 
 # ============================================================
 # ============================================================
-# SECTION 3: COMBINED ANALYSIS
+# SECTION 3: MAIN CANDLE DETECTOR (USING UNIFIED SCAN AREA)
+# ============================================================
+# ============================================================
+
+def detect_candles(img):
+
+    h, w = img.shape[:2]
+
+    purple_mask, yellow_mask = get_color_masks(img)
+
+    # Main pass
+    purple = find_candidates(purple_mask, "PURPLE", w, right_side=False)
+    yellow = find_candidates(yellow_mask, "YELLOW", w, right_side=False)
+
+    purple = merge_candidates(purple)
+    yellow = merge_candidates(yellow)
+
+    candles = purple + yellow
+
+    # ========================================================
+    # RIGHT-SIDE PASS USING UNIFIED SCAN AREA (YELLOW BOX)
+    # ========================================================
+
+    roi, offset_x, offset_y = get_yellow_box_roi(img)
+
+    # Crop masks to the unified scan area
+    purple_roi = purple_mask[offset_y:int(h * (1 - BOTTOM_CROP)), offset_x:]
+    yellow_roi = yellow_mask[offset_y:int(h * (1 - BOTTOM_CROP)), offset_x:]
+
+    purple_right = find_candidates(purple_roi, "PURPLE", w, right_side=True)
+    yellow_right = find_candidates(yellow_roi, "YELLOW", w, right_side=True)
+
+    for candle in purple_right + yellow_right:
+        candle["x"] += offset_x
+        candle["center_x"] += offset_x
+
+    candles.extend(purple_right + yellow_right)
+    candles = remove_cross_color_duplicates(candles)
+
+    # Verification
+    final_candles = []
+    for candle in candles:
+        result = verify_single_candle(candle, purple_mask, yellow_mask)
+        verified_candle = candle.copy()
+        verified_candle["verification"] = result
+        final_candles.append(verified_candle)
+
+    final_candles.sort(key=lambda c: c["center_x"], reverse=True)
+
+    return final_candles
+
+
+# ============================================================
+# ============================================================
+# SECTION 4: COMBINED ANALYSIS
 # ============================================================
 # ============================================================
 
@@ -1353,56 +1407,9 @@ def analyze_screenshot(image_path):
 
 
 # ============================================================
-# DETECT CANDLES
 # ============================================================
-
-def detect_candles(img):
-
-    h, w = img.shape[:2]
-
-    purple_mask, yellow_mask = get_color_masks(img)
-
-    # Main pass
-    purple = find_candidates(purple_mask, "PURPLE", w, right_side=False)
-    yellow = find_candidates(yellow_mask, "YELLOW", w, right_side=False)
-
-    purple = merge_candidates(purple)
-    yellow = merge_candidates(yellow)
-
-    candles = purple + yellow
-
-    # Right-side pass (using unified scan area)
-    roi, offset_x, offset_y = get_yellow_box_roi(img)
-
-    # Crop masks to the unified scan area
-    purple_roi = purple_mask[offset_y:int(h * (1 - BOTTOM_CROP)), offset_x:]
-    yellow_roi = yellow_mask[offset_y:int(h * (1 - BOTTOM_CROP)), offset_x:]
-
-    purple_right = find_candidates(purple_roi, "PURPLE", w, right_side=True)
-    yellow_right = find_candidates(yellow_roi, "YELLOW", w, right_side=True)
-
-    for candle in purple_right + yellow_right:
-        candle["x"] += offset_x
-        candle["center_x"] += offset_x
-
-    candles.extend(purple_right + yellow_right)
-    candles = remove_cross_color_duplicates(candles)
-
-    # Verification
-    final_candles = []
-    for candle in candles:
-        result = verify_single_candle(candle, purple_mask, yellow_mask)
-        verified_candle = candle.copy()
-        verified_candle["verification"] = result
-        final_candles.append(verified_candle)
-
-    final_candles.sort(key=lambda c: c["center_x"], reverse=True)
-
-    return final_candles
-
-
+# SECTION 5: UNIFIED DETECTION MAP
 # ============================================================
-# CREATE UNIFIED DETECTION MAP
 # ============================================================
 
 def create_unified_detection_map(img, verification, price_results):
@@ -1487,7 +1494,9 @@ def create_unified_detection_map(img, verification, price_results):
 
 
 # ============================================================
-# TELEGRAM PHOTO HANDLER
+# ============================================================
+# SECTION 6: TELEGRAM PHOTO HANDLER
+# ============================================================
 # ============================================================
 
 @bot.message_handler(content_types=["photo"])
@@ -1632,7 +1641,7 @@ if __name__ == "__main__":
     print("=" * 50)
     print("✅ Candle detection (PURPLE / YELLOW)")
     print("✅ Price detection (yellow box)")
-    print("✅ Unified scan area")
+    print("✅ Unified scan area — same for both")
     print("✅ Detailed report — all candles and all prices")
     print("=" * 50)
 
