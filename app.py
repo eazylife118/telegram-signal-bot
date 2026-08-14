@@ -4,6 +4,27 @@ import numpy as np
 import telebot
 import time
 import requests
+import threading
+from flask import Flask
+
+
+# ============================================================
+# FLASK KEEP-ALIVE
+# ============================================================
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "✅ OTC Candle Signal Bot is running!"
+
+@app.route("/ping")
+def ping():
+    return "OK", 200
+
+def run_flask():
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 
 # ============================================================
@@ -87,7 +108,6 @@ ANALYSIS_LOOKBACK = 12
 RECENT_WEIGHT = 1.00
 OLD_WEIGHT = 0.45
 
-# CHANGED: Confidence threshold reduced from 65 to 30
 MIN_SIGNAL_CONFIDENCE = 30
 
 MIN_DIRECTION_SEPARATION = 8
@@ -2472,7 +2492,7 @@ def create_report(candles):
 
 
 # ============================================================
-# TELEGRAM PHOTO HANDLER — UPDATED
+# TELEGRAM PHOTO HANDLER — UPDATED (NO SCREENSHOT ATTACHMENT)
 # ============================================================
 
 @bot.message_handler(content_types=["photo"])
@@ -2486,10 +2506,12 @@ def handle_photo(message):
     try:
 
         # ====================================================
-        # SEND "Analyzing..." MESSAGE (NO SCREENSHOT ATTACHMENT)
+        # SEND "Analyzing..." AS A CLEAN, SEPARATE MESSAGE
         # ====================================================
 
-        bot.reply_to(message, "🔍 Analyzing screenshot...")
+        # FIX: Using send_message instead of reply_to
+        # This sends a NEW message with NO screenshot attachment
+        bot.send_message(message.chat.id, "🔍 Analyzing screenshot...")
 
         # ====================================================
         # DOWNLOAD
@@ -2516,7 +2538,7 @@ def handle_photo(message):
         total = len(candles)
 
         if total == 0:
-            bot.reply_to(message, "⚪ **NO SIGNAL — DON'T TRADE**")
+            bot.send_message(message.chat.id, "⚪ **NO SIGNAL — DON'T TRADE**", parse_mode="Markdown")
             return
 
         # ====================================================
@@ -2563,9 +2585,7 @@ def handle_photo(message):
                 f"• {reason}\n"
             )
 
-            bot.reply_to(message, response, parse_mode="Markdown")
-
-            # Send to channel
+            bot.send_message(message.chat.id, response, parse_mode="Markdown")
             send_to_channel(response)
 
         elif decision == "SELL":
@@ -2581,13 +2601,11 @@ def handle_photo(message):
                 f"• {reason}\n"
             )
 
-            bot.reply_to(message, response, parse_mode="Markdown")
-
-            # Send to channel
+            bot.send_message(message.chat.id, response, parse_mode="Markdown")
             send_to_channel(response)
 
         else:
-            bot.reply_to(message, "⚪ **NO SIGNAL — DON'T TRADE**")
+            bot.send_message(message.chat.id, "⚪ **NO SIGNAL — DON'T TRADE**", parse_mode="Markdown")
 
         # ====================================================
         # DETECTION MAP — RUNS IN BACKGROUND (NOT SENT)
@@ -2600,7 +2618,7 @@ def handle_photo(message):
 
     except Exception as e:
         print("❌ ERROR:", repr(e))
-        bot.reply_to(message, f"❌ Error: {str(e)}")
+        bot.send_message(message.chat.id, f"❌ Error: {str(e)}")
 
     finally:
         for path in [original_path, detection_path]:
@@ -2617,14 +2635,15 @@ def handle_photo(message):
 
 @bot.message_handler(commands=["start"])
 def start(message):
-    bot.reply_to(
-        message,
+    bot.send_message(
+        message.chat.id,
         "📊 **OTC CANDLE SIGNAL BOT**\n\n"
         "Send a screenshot.\n\n"
         "I will detect candles and generate signals.\n"
         "✅ Confidence threshold: 30%\n"
         "✅ Signals sent to your channel\n\n"
-        "⚡ **BUY/SELL/NO TRADE**"
+        "⚡ **BUY/SELL/NO TRADE**",
+        parse_mode="Markdown"
     )
 
 
@@ -2634,13 +2653,19 @@ def start(message):
 
 if __name__ == "__main__":
 
+    # Start Flask in background thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    print("✅ Flask server started on port 10000")
+
     print("=" * 50)
     print("📊 OTC CANDLE SIGNAL BOT")
     print("=" * 50)
     print("✅ Confidence threshold: 30%")
-    print("✅ Analyzing... message only")
+    print("✅ Analyzing... message only (NO screenshot attachment)")
     print("✅ No detection map sent")
     print("✅ Signals sent to channel")
+    print("✅ Flask keep-alive running")
     print("=" * 50)
 
     bot.infinity_polling(timeout=30, long_polling_timeout=30)
