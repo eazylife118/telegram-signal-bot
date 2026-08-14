@@ -5096,60 +5096,83 @@ def handle_photo(
 
         report = (
 
-    "🔎 **CANDLE + MAP VERIFICATION**\n\n"
+            "🔎 **CANDLE + MAP VERIFICATION**\n\n"
 
-    "➡️ **SCAN:** RIGHT → LEFT\n"
-    "🔢 **1 = newest/rightmost**\n\n"
+            "➡️ **SCAN:** RIGHT → LEFT\n"
+            "🔢 **1 = newest/rightmost**\n\n"
 
-    "📊 **PRIMARY DETECTION**\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
+            "📊 **PRIMARY DETECTION**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
 
-    f"🟣 PURPLE / BUY: {purple}\n"
-    f"🟡 YELLOW / SELL: {yellow}\n"
-    f"📊 TOTAL: {total}\n\n"
+            f"🟣 PURPLE / BUY: {purple}\n"
+            f"🟡 YELLOW / SELL: {yellow}\n"
+            f"📊 TOTAL: {total}\n\n"
 
-    "🔎 **INDEPENDENT VERIFICATION**\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
+            "🔎 **INDEPENDENT VERIFICATION**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
 
-    f"🟣 VERIFIED PURPLE: {verified_purple}\n"
-    f"🟡 VERIFIED YELLOW: {verified_yellow}\n"
-    f"✅ VERIFIED TOTAL: {verified_total}\n"
-    f"🔄 RECOVERED: {recovered_count}\n"
-    f"❓ NEEDS CHECK: {unverified}\n\n"
+            f"🟣 VERIFIED PURPLE: "
+            f"{verified_purple}\n"
 
-    "🧭 **MAP AGREEMENT**\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🟡 VERIFIED YELLOW: "
+            f"{verified_yellow}\n"
 
-    f"Independent positions: {independent_peaks}\n"
-    f"Matched positions: {comparison['matched']}\n"
-    f"Possible missed: {possible_missing}\n"
-    f"Possible extra: {possible_extra}\n"
-    f"Map agreement: {map_agreement:.1f}%\n\n"
+            f"✅ VERIFIED TOTAL: "
+            f"{verified_total}\n"
 
-    "🕯️ **RIGHT → LEFT CANDLES**\n"
-    "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔄 RECOVERED: "
+            f"{recovered_count}\n"
 
-    f"{sequence_text}\n\n"
+            f"❓ NEEDS CHECK: "
+            f"{unverified}\n\n"
 
-    "━━━━━━━━━━━━━━━━━━━━\n"
+            "🧭 **MAP AGREEMENT**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
 
-    # ✅ CORRECTED: Use + to concatenate the function result
-    + format_analysis_report(analysis)
+            f"Independent positions: "
+            f"{independent_peaks}\n"
 
-    + "\n\n━━━━━━━━━━━━━━━━━━━━\n"
+            f"Matched positions: "
+            f"{comparison['matched']}\n"
 
-    "⏱️ **PROCESSING**\n"
-    f"Detection: {detection_time:.2f}s\n"
-    f"Verification: {verification_time:.2f}s\n"
-    f"Analysis: {analysis_time:.2f}s\n"
-    f"Total: {total_time:.2f}s\n\n"
+            f"Possible missed: "
+            f"{possible_missing}\n"
 
-    "🚫 No random candles.\n"
-    "🚫 No random prices.\n"
-    "🚫 No generated OHLC.\n"
-    "🚫 No indicator calculations."
+            f"Possible extra: "
+            f"{possible_extra}\n"
 
-)
+            f"Map agreement: "
+            f"{map_agreement:.1f}%\n\n"
+
+            "🕯️ **RIGHT → LEFT CANDLES**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+
+            f"{sequence_text}\n\n"
+
+            "━━━━━━━━━━━━━━━━━━━━\n"
+
+            + format_analysis_report(analysis)  # ← FIXED: added +
+
+            + "\n\n━━━━━━━━━━━━━━━━━━━━\n"
+
+            "⏱️ **PROCESSING**\n"
+
+            f"Detection: "
+            f"{detection_time:.2f}s\n"
+
+            f"Verification: "
+            f"{verification_time:.2f}s\n"
+
+            f"Analysis: "
+            f"{analysis_time:.2f}s\n"
+
+            f"Total: "
+            f"{total_time:.2f}s\n\n"
+
+            "🚫 No random candles.\n"
+            "🚫 No random prices.\n"
+            "🚫 No generated OHLC.\n"
+            "🚫 No indicator calculations."
 
         )
 
