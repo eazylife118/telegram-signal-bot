@@ -1379,6 +1379,7 @@ def analyze_candles(img, candles, purple_mask, yellow_mask):
             else:
                 decision = "NO TRADE"
                 reason = "Protection gates blocked strong signal."
+            # ✅ FIX: Set confidence here too
             confidence = max(buy_score, sell_score)
             confidence = min(confidence, 64)
     else:
