@@ -864,7 +864,8 @@ def analyze_trend(candles):
     direction, direction_strength = analyze_recent_direction(candles)
     momentum = analyze_momentum(candles)
     combined = structure["score"] * 0.50 + direction * 0.25 + momentum * 0.25
-    strength = abs(combined) * 100    if combined > 0.18:
+    strength = abs(combined) * 100
+    if combined > 0.18:
         trend = "BULLISH"
     elif combined < -0.18:
         trend = "BEARISH"
