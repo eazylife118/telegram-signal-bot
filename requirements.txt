@@ -1,3 +1,6 @@
-Flask
+flask
+pyTelegramBotAPI
+opencv-python
+numpy
+Pillow
 requests
-websocket-client
