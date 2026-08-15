@@ -108,7 +108,7 @@ ANALYSIS_LOOKBACK = 12
 RECENT_WEIGHT = 1.00
 OLD_WEIGHT = 0.45
 
-MIN_SIGNAL_CONFIDENCE = 30
+MIN_SIGNAL_CONFIDENCE = 1
 
 MIN_DIRECTION_SEPARATION = 8
 
@@ -2353,7 +2353,7 @@ def analyze_candles(img, candles):
     separation = abs(buy_score - sell_score)
 
     # ============================================================
-    # FINAL DECISION — UPDATED THRESHOLD = 5
+    # FINAL DECISION — UPDATED THRESHOLD = 30
     # ============================================================
 
     if sideways:
