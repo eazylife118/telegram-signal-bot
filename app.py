@@ -6,7 +6,7 @@ import time
 import requests
 import threading
 from flask import Flask
-from datetime import datetime, timezone, timedelta
+
 
 # ============================================================
 # FLASK KEEP-ALIVE
@@ -26,6 +26,7 @@ def run_flask():
     port = int(os.getenv("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
+
 # ============================================================
 # TELEGRAM
 # ============================================================
@@ -39,6 +40,7 @@ CHAT_ID = "6280535707"
 CHANNEL_ID = "-1004324805205"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+
 
 # ============================================================
 # DETECTION SETTINGS
@@ -57,6 +59,7 @@ MERGE_DISTANCE_RATIO = 0.55
 
 MIN_COLOR_DENSITY = 0.25
 
+
 # ============================================================
 # STRICT PURPLE / YELLOW COLOR SETTINGS
 # ============================================================
@@ -67,11 +70,13 @@ PURPLE_HUE_HIGH = 165
 MIN_PURPLE_SATURATION = 100
 MIN_PURPLE_VALUE = 70
 
+
 YELLOW_HUE_LOW = 18
 YELLOW_HUE_HIGH = 40
 
 MIN_YELLOW_SATURATION = 100
 MIN_YELLOW_VALUE = 70
+
 
 # ============================================================
 # COLOR DOMINANCE
@@ -79,6 +84,7 @@ MIN_YELLOW_VALUE = 70
 
 PURPLE_DOMINANCE_RATIO = 1.20
 YELLOW_DOMINANCE_RATIO = 1.10
+
 
 # ============================================================
 # MAP VERIFICATION SETTINGS
@@ -90,6 +96,7 @@ VERIFY_HORIZONTAL_RADIUS = 0.70
 VERIFY_MIN_DISTANCE_RATIO = 0.55
 VERIFY_COLUMN_THRESHOLD = 3
 VERIFY_CONFIDENCE_THRESHOLD = 65
+
 
 # ============================================================
 # ANALYSIS SETTINGS — UPDATED
@@ -129,19 +136,25 @@ NO_TRADE_SIDEWAYS_STRENGTH = 30
 STRONG_SIGNAL_MIN_CONFIDENCE = 55
 STRONG_SIGNAL_MIN_CONFIRMATIONS = 3
 
+
 # ============================================================
 # TIMEZONE
 # ============================================================
 
+from datetime import datetime, timezone, timedelta
+
 LOCAL_TZ = timezone(timedelta(hours=1))
+
 
 def get_signal_time():
     now = datetime.now(LOCAL_TZ)
     signal_time = now.replace(second=0, microsecond=0)
     return signal_time.strftime("%H:%M")
 
+
 def get_entry_time(signal_time):
     return (datetime.strptime(signal_time, "%H:%M") + timedelta(minutes=1)).strftime("%H:%M")
+
 
 # ============================================================
 # SEND TO TELEGRAM CHANNEL
@@ -156,532 +169,1551 @@ def send_to_channel(message):
     except Exception as e:
         print("Channel send error:", e)
 
+
 # ============================================================
 # LOAD IMAGE
 # ============================================================
 
 def load_image(path):
+
     img = cv2.imread(path)
+
     if img is None:
-        raise ValueError("Could not read screenshot.")
+        raise ValueError(
+            "Could not read screenshot."
+        )
+
     h, w = img.shape[:2]
+
     if w < 1400:
+
         scale = 1400 / w
+
         img = cv2.resize(
             img,
-            (int(w * scale), int(h * scale)),
+            (
+                int(w * scale),
+                int(h * scale)
+            ),
             interpolation=cv2.INTER_CUBIC
         )
+
     return img
 
+
 # ============================================================
-# COLOR MASKS — OPTIMIZED TO RETURN ALL MASKS ONCE
+# COLOR MASKS
 # ============================================================
 
 def get_color_masks(img):
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    purple_lower = np.array([PURPLE_HUE_LOW, MIN_PURPLE_SATURATION, MIN_PURPLE_VALUE])
-    purple_upper = np.array([PURPLE_HUE_HIGH, 255, 255])
-    purple = cv2.inRange(hsv, purple_lower, purple_upper)
+    hsv = cv2.cvtColor(
+        img,
+        cv2.COLOR_BGR2HSV
+    )
 
-    yellow_lower = np.array([YELLOW_HUE_LOW, MIN_YELLOW_SATURATION, MIN_YELLOW_VALUE])
-    yellow_upper = np.array([YELLOW_HUE_HIGH, 255, 255])
-    yellow = cv2.inRange(hsv, yellow_lower, yellow_upper)
+    purple_lower = np.array([
+        PURPLE_HUE_LOW,
+        MIN_PURPLE_SATURATION,
+        MIN_PURPLE_VALUE
+    ])
+
+    purple_upper = np.array([
+        PURPLE_HUE_HIGH,
+        255,
+        255
+    ])
+
+    purple = cv2.inRange(
+        hsv,
+        purple_lower,
+        purple_upper
+    )
+
+    yellow_lower = np.array([
+        YELLOW_HUE_LOW,
+        MIN_YELLOW_SATURATION,
+        MIN_YELLOW_VALUE
+    ])
+
+    yellow_upper = np.array([
+        YELLOW_HUE_HIGH,
+        255,
+        255
+    ])
+
+    yellow = cv2.inRange(
+        hsv,
+        yellow_lower,
+        yellow_upper
+    )
 
     b, g, r = cv2.split(img)
 
     purple_dominance = (
-        (r.astype(np.int16) > g.astype(np.int16) * PURPLE_DOMINANCE_RATIO) &
-        (b.astype(np.int16) > g.astype(np.int16) * PURPLE_DOMINANCE_RATIO) &
-        (r.astype(np.int16) > 70) &
+
+        (r.astype(np.int16) >
+         g.astype(np.int16) *
+         PURPLE_DOMINANCE_RATIO)
+
+        &
+
+        (b.astype(np.int16) >
+         g.astype(np.int16) *
+         PURPLE_DOMINANCE_RATIO)
+
+        &
+
+        (r.astype(np.int16) > 70)
+
+        &
+
         (b.astype(np.int16) > 70)
+
     )
-    purple_dominance_mask = purple_dominance.astype(np.uint8) * 255
-    purple = cv2.bitwise_and(purple, purple_dominance_mask)
+
+    purple_dominance_mask = (
+        purple_dominance.astype(
+            np.uint8
+        ) * 255
+    )
+
+    purple = cv2.bitwise_and(
+        purple,
+        purple_dominance_mask
+    )
 
     yellow_dominance = (
-        (r.astype(np.int16) > b.astype(np.int16) * YELLOW_DOMINANCE_RATIO) &
-        (g.astype(np.int16) > b.astype(np.int16) * YELLOW_DOMINANCE_RATIO) &
-        (r.astype(np.int16) > 80) &
+
+        (r.astype(np.int16) >
+         b.astype(np.int16) *
+         YELLOW_DOMINANCE_RATIO)
+
+        &
+
+        (g.astype(np.int16) >
+         b.astype(np.int16) *
+         YELLOW_DOMINANCE_RATIO)
+
+        &
+
+        (r.astype(np.int16) > 80)
+
+        &
+
         (g.astype(np.int16) > 70)
+
     )
-    yellow_dominance_mask = yellow_dominance.astype(np.uint8) * 255
-    yellow = cv2.bitwise_and(yellow, yellow_dominance_mask)
+
+    yellow_dominance_mask = (
+        yellow_dominance.astype(
+            np.uint8
+        ) * 255
+    )
+
+    yellow = cv2.bitwise_and(
+        yellow,
+        yellow_dominance_mask
+    )
 
     return purple, yellow
+
 
 # ============================================================
 # FIND CANDIDATES
 # ============================================================
 
-def find_candidates(mask, color, image_width, right_side=False):
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, close_kernel)
+def find_candidates(
+    mask,
+    color,
+    image_width,
+    right_side=False
+):
 
-    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (2, 2)
+    )
+
+    cleaned = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_OPEN,
+        kernel
+    )
+
+    close_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (3, 3)
+    )
+
+    cleaned = cv2.morphologyEx(
+        cleaned,
+        cv2.MORPH_CLOSE,
+        close_kernel
+    )
+
+    contours, _ = cv2.findContours(
+        cleaned,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
     candidates = []
-    max_width = max(10, int(image_width * MAX_CANDLE_WIDTH_RATIO))
+
+    max_width = max(
+        10,
+        int(
+            image_width *
+            MAX_CANDLE_WIDTH_RATIO
+        )
+    )
 
     if right_side:
+
         min_area = RIGHT_MIN_BODY_AREA
         min_height = RIGHT_MIN_BODY_HEIGHT
+
     else:
+
         min_area = MIN_BODY_AREA
         min_height = MIN_BODY_HEIGHT
 
     for contour in contours:
-        area = cv2.contourArea(contour)
+
+        area = cv2.contourArea(
+            contour
+        )
+
         if area < min_area:
             continue
-        x, y, w, h = cv2.boundingRect(contour)
-        if w < MIN_CANDLE_WIDTH or h < min_height or w > max_width or w > h * 6:
+
+        x, y, w, h = cv2.boundingRect(
+            contour
+        )
+
+        if w < MIN_CANDLE_WIDTH:
             continue
 
-        region = cleaned[y:y+h, x:x+w]
-        colored_pixels = int(np.sum(region > 0))
+        if h < min_height:
+            continue
+
+        if w > max_width:
+            continue
+
+        if w > h * 6:
+            continue
+
+        region = cleaned[
+            y:y+h,
+            x:x+w
+        ]
+
+        colored_pixels = int(
+            np.sum(
+                region > 0
+            )
+        )
+
         if colored_pixels < 5:
             continue
 
-        density = colored_pixels / float(max(1, w * h))
+        density = (
+            colored_pixels /
+            float(
+                max(
+                    1,
+                    w * h
+                )
+            )
+        )
+
         if density < MIN_COLOR_DENSITY:
             continue
 
+        center_x = (
+            x +
+            w / 2
+        )
+
         candidates.append({
-            "x": x, "y": y, "w": w, "h": h,
-            "area": float(area), "pixels": colored_pixels,
-            "density": density, "center_x": x + w / 2,
+
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "area": float(area),
+            "pixels": colored_pixels,
+            "density": density,
+            "center_x": center_x,
             "color": color
+
         })
 
     return candidates
+
 
 # ============================================================
 # MERGE SAME-COLOR PIECES
 # ============================================================
 
-def merge_candidates(candidates):
+def merge_candidates(
+    candidates
+):
+
     if not candidates:
         return []
-    candidates = sorted(candidates, key=lambda c: c["center_x"])
+
+    candidates = sorted(
+        candidates,
+        key=lambda c:
+        c["center_x"]
+    )
+
     merged = []
 
     for candidate in candidates:
-        merged_into_existing = False
-        for existing in merged:
-            distance = abs(candidate["center_x"] - existing["center_x"])
-            allowed = max(candidate["w"], existing["w"], 2) * MERGE_DISTANCE_RATIO
-            candidate_top, candidate_bottom = candidate["y"], candidate["y"] + candidate["h"]
-            existing_top, existing_bottom = existing["y"], existing["y"] + existing["h"]
-            vertical_overlap = not (candidate_bottom < existing_top or candidate_top > existing_bottom)
 
-            if distance <= allowed and vertical_overlap:
-                left = min(existing["x"], candidate["x"])
-                right = max(existing["x"] + existing["w"], candidate["x"] + candidate["w"])
-                top = min(existing["y"], candidate["y"])
-                bottom = max(existing["y"] + existing["h"], candidate["y"] + candidate["h"])
+        merged_into_existing = False
+
+        for existing in merged:
+
+            distance = abs(
+                candidate["center_x"]
+                -
+                existing["center_x"]
+            )
+
+            allowed = max(
+                candidate["w"],
+                existing["w"],
+                2
+            ) * MERGE_DISTANCE_RATIO
+
+            candidate_top = candidate["y"]
+
+            candidate_bottom = (
+                candidate["y"] +
+                candidate["h"]
+            )
+
+            existing_top = existing["y"]
+
+            existing_bottom = (
+                existing["y"] +
+                existing["h"]
+            )
+
+            vertical_overlap = not (
+
+                candidate_bottom <
+                existing_top
+
+                or
+
+                candidate_top >
+                existing_bottom
+
+            )
+
+            if (
+                distance <= allowed
+                and
+                vertical_overlap
+            ):
+
+                left = min(
+                    existing["x"],
+                    candidate["x"]
+                )
+
+                right = max(
+
+                    existing["x"] +
+                    existing["w"],
+
+                    candidate["x"] +
+                    candidate["w"]
+
+                )
+
+                top = min(
+                    existing["y"],
+                    candidate["y"]
+                )
+
+                bottom = max(
+
+                    existing["y"] +
+                    existing["h"],
+
+                    candidate["y"] +
+                    candidate["h"]
+
+                )
+
                 existing["x"] = left
                 existing["y"] = top
-                existing["w"] = right - left
-                existing["h"] = bottom - top
-                existing["center_x"] = left + existing["w"] / 2
-                existing["area"] += candidate["area"]
-                existing["pixels"] += candidate["pixels"]
+
+                existing["w"] = (
+                    right -
+                    left
+                )
+
+                existing["h"] = (
+                    bottom -
+                    top
+                )
+
+                existing["center_x"] = (
+                    left +
+                    existing["w"] / 2
+                )
+
+                existing["area"] += (
+                    candidate["area"]
+                )
+
+                existing["pixels"] += (
+                    candidate["pixels"]
+                )
+
                 merged_into_existing = True
+
                 break
 
         if not merged_into_existing:
-            merged.append(candidate.copy())
+
+            merged.append(
+                candidate.copy()
+            )
 
     return merged
+
 
 # ============================================================
 # REMOVE CROSS-COLOR DUPLICATES
 # ============================================================
 
-def remove_cross_color_duplicates(candles):
-    candles = sorted(candles, key=lambda c: c["center_x"])
+def remove_cross_color_duplicates(
+    candles
+):
+
+    candles = sorted(
+        candles,
+        key=lambda c:
+        c["center_x"]
+    )
+
     result = []
 
     for candle in candles:
+
         duplicate_index = None
-        for i, existing in enumerate(result):
-            distance = abs(candle["center_x"] - existing["center_x"])
-            threshold = max(candle["w"], existing["w"], 2) * 0.65
+
+        for i, existing in enumerate(
+            result
+        ):
+
+            distance = abs(
+
+                candle["center_x"]
+                -
+                existing["center_x"]
+
+            )
+
+            threshold = max(
+
+                candle["w"],
+                existing["w"],
+                2
+
+            ) * 0.65
+
             if distance <= threshold:
+
                 duplicate_index = i
                 break
 
         if duplicate_index is None:
-            result.append(candle)
+
+            result.append(
+                candle
+            )
+
         else:
-            existing = result[duplicate_index]
-            if candle["pixels"] > existing["pixels"]:
-                result[duplicate_index] = candle
+
+            existing = result[
+                duplicate_index
+            ]
+
+            if (
+                candle["pixels"]
+                >
+                existing["pixels"]
+            ):
+
+                result[
+                    duplicate_index
+                ] = candle
 
     return result
+
 
 # ============================================================
 # RIGHT SIDE DETECTION
 # ============================================================
 
-def detect_right_side(chart, purple_mask, yellow_mask):
+def detect_right_side(
+    chart,
+    purple_mask,
+    yellow_mask
+):
+
     h, w = chart.shape[:2]
-    right_start = int(w * 0.72)
-    purple_right = purple_mask[:, right_start:]
-    yellow_right = yellow_mask[:, right_start:]
 
-    purple = find_candidates(purple_right, "PURPLE", w, right_side=True)
-    yellow = find_candidates(yellow_right, "YELLOW", w, right_side=True)
+    right_start = int(
+        w * 0.72
+    )
 
-    for candle in (purple + yellow):
-        candle["x"] += right_start
-        candle["center_x"] += right_start
+    purple_right = purple_mask[
+        :,
+        right_start:
+    ]
 
-    return purple + yellow
+    yellow_right = yellow_mask[
+        :,
+        right_start:
+    ]
+
+    purple = find_candidates(
+        purple_right,
+        "PURPLE",
+        w,
+        right_side=True
+    )
+
+    yellow = find_candidates(
+        yellow_right,
+        "YELLOW",
+        w,
+        right_side=True
+    )
+
+    for candle in (
+        purple +
+        yellow
+    ):
+
+        candle["x"] += (
+            right_start
+        )
+
+        candle["center_x"] += (
+            right_start
+        )
+
+    return (
+        purple +
+        yellow
+    )
+
 
 # ============================================================
-# MAIN CANDLE DETECTOR — OPTIMIZED (RECEIVES PRE-COMPUTED MASKS)
+# MAIN CANDLE DETECTOR
 # ============================================================
 
-def detect_candles(img, purple_mask, yellow_mask):
+def detect_candles(
+    img
+):
+
     h, w = img.shape[:2]
 
-    purple = find_candidates(purple_mask, "PURPLE", w, right_side=False)
-    yellow = find_candidates(yellow_mask, "YELLOW", w, right_side=False)
+    purple_mask, yellow_mask = (
+        get_color_masks(img)
+    )
 
-    purple = merge_candidates(purple)
-    yellow = merge_candidates(yellow)
+    purple = find_candidates(
+        purple_mask,
+        "PURPLE",
+        w,
+        right_side=False
+    )
 
-    candles = purple + yellow
-    right_candidates = detect_right_side(img, purple_mask, yellow_mask)
-    candles.extend(right_candidates)
+    yellow = find_candidates(
+        yellow_mask,
+        "YELLOW",
+        w,
+        right_side=False
+    )
 
-    candles = remove_cross_color_duplicates(candles)
-    candles.sort(key=lambda c: c["center_x"], reverse=True)
+    purple = merge_candidates(
+        purple
+    )
+
+    yellow = merge_candidates(
+        yellow
+    )
+
+    candles = (
+        purple +
+        yellow
+    )
+
+    right_candidates = (
+        detect_right_side(
+            img,
+            purple_mask,
+            yellow_mask
+        )
+    )
+
+    candles.extend(
+        right_candidates
+    )
+
+    candles = (
+        remove_cross_color_duplicates(
+            candles
+        )
+    )
+
+    candles.sort(
+        key=lambda c:
+        c["center_x"],
+        reverse=True
+    )
 
     return candles
 
+
 # ============================================================
-# INDEPENDENT MAP VERIFICATION — OPTIMIZED (RECEIVES PRE-COMPUTED MASKS)
+# INDEPENDENT MAP VERIFICATION
 # ============================================================
 
-def verify_single_candle(candle, purple_mask, yellow_mask):
-    x = int(candle["center_x"])
-    y = int(candle["y"])
-    w = max(2, int(candle["w"]))
-    h = max(2, int(candle["h"]))
+def verify_single_candle(
+    candle,
+    purple_mask,
+    yellow_mask
+):
 
-    radius = max(2, int(w * VERIFY_HORIZONTAL_RADIUS))
-    left = max(0, x - radius)
-    right = min(purple_mask.shape[1], x + radius + 1)
-    top = max(0, y - max(2, int(h * 0.25)))
-    bottom = min(purple_mask.shape[0], y + h + max(2, int(h * 0.25)))
+    x = int(
+        candle["center_x"]
+    )
 
-    purple_region = purple_mask[top:bottom, left:right]
-    yellow_region = yellow_mask[top:bottom, left:right]
+    y = int(
+        candle["y"]
+    )
 
-    purple_pixels = int(np.sum(purple_region > 0))
-    yellow_pixels = int(np.sum(yellow_region > 0))
-    total_pixels = max(1, purple_region.shape[0] * purple_region.shape[1])
+    w = max(
+        2,
+        int(candle["w"])
+    )
+
+    h = max(
+        2,
+        int(candle["h"])
+    )
+
+    radius = max(
+        2,
+        int(
+            w *
+            VERIFY_HORIZONTAL_RADIUS
+        )
+    )
+
+    left = max(
+        0,
+        x - radius
+    )
+
+    right = min(
+        purple_mask.shape[1],
+        x + radius + 1
+    )
+
+    top = max(
+        0,
+        y - max(2, int(h * 0.25))
+    )
+
+    bottom = min(
+        purple_mask.shape[0],
+        y + h + max(2, int(h * 0.25))
+    )
+
+    purple_region = purple_mask[
+        top:bottom,
+        left:right
+    ]
+
+    yellow_region = yellow_mask[
+        top:bottom,
+        left:right
+    ]
+
+    purple_pixels = int(
+        np.sum(
+            purple_region > 0
+        )
+    )
+
+    yellow_pixels = int(
+        np.sum(
+            yellow_region > 0
+        )
+    )
+
+    total_pixels = max(
+        1,
+        purple_region.shape[0] *
+        purple_region.shape[1]
+    )
 
     if candle["color"] == "PURPLE":
-        own_pixels, other_pixels = purple_pixels, yellow_pixels
-    else:
-        own_pixels, other_pixels = yellow_pixels, purple_pixels
 
-    own_density = own_pixels / total_pixels
+        own_pixels = purple_pixels
+        other_pixels = yellow_pixels
 
-    if own_pixels >= VERIFY_MIN_PIXELS and own_pixels >= (other_pixels * 1.15):
-        color_agrees = True
     else:
+
+        own_pixels = yellow_pixels
+        other_pixels = purple_pixels
+
+    own_density = (
+        own_pixels /
+        total_pixels
+    )
+
+    if own_pixels >= VERIFY_MIN_PIXELS:
+
+        if own_pixels >= (
+            other_pixels * 1.15
+        ):
+
+            color_agrees = True
+
+        else:
+
+            color_agrees = False
+
+    else:
+
         color_agrees = False
 
-    body_evidence = min(100, (own_pixels / float(max(VERIFY_MIN_PIXELS, 1))) * 100)
-    density_evidence = min(100, (own_density / VERIFY_MIN_DENSITY) * 100)
-    score = body_evidence * 0.50 + density_evidence * 0.25 + (100 if color_agrees else 0) * 0.25
-    score = max(0, min(100, score))
+    body_evidence = min(
+        100,
+        (
+            own_pixels /
+            float(
+                max(
+                    VERIFY_MIN_PIXELS,
+                    1
+                )
+            )
+        ) * 100
+    )
 
-    verified = color_agrees and score >= VERIFY_CONFIDENCE_THRESHOLD
+    density_evidence = min(
+        100,
+        (
+            own_density /
+            VERIFY_MIN_DENSITY
+        ) * 100
+    )
+
+    score = (
+        body_evidence * 0.50
+        +
+        density_evidence * 0.25
+        +
+        (100 if color_agrees else 0) * 0.25
+    )
+
+    score = max(
+        0,
+        min(
+            100,
+            score
+        )
+    )
+
+    verified = (
+        color_agrees
+        and
+        score >= VERIFY_CONFIDENCE_THRESHOLD
+    )
 
     return {
+
         "verified": verified,
         "score": score,
         "own_pixels": own_pixels,
         "other_pixels": other_pixels,
         "own_density": own_density,
         "color_agrees": color_agrees
+
     }
+
 
 # ============================================================
 # INDEPENDENT COLUMN PEAK SCANNER
 # ============================================================
 
-def build_verification_peaks(img, purple_mask, yellow_mask, primary_candles):
+def build_verification_peaks(
+    img,
+    purple_mask,
+    yellow_mask,
+    primary_candles
+):
+
     h, w = img.shape[:2]
-    combined = cv2.bitwise_or(purple_mask, yellow_mask)
-    top_limit, bottom_limit = int(h * 0.18), int(h * 0.82)
-    chart_mask = combined[top_limit:bottom_limit, :]
-    column_strength = np.sum(chart_mask > 0, axis=0)
+
+    combined = cv2.bitwise_or(
+        purple_mask,
+        yellow_mask
+    )
+
+    top_limit = int(
+        h * 0.18
+    )
+
+    bottom_limit = int(
+        h * 0.82
+    )
+
+    chart_mask = combined[
+        top_limit:bottom_limit,
+        :
+    ]
+
+    column_strength = np.sum(
+        chart_mask > 0,
+        axis=0
+    )
 
     kernel_size = 3
-    kernel = np.ones(kernel_size, dtype=np.float32) / kernel_size
-    smoothed = np.convolve(column_strength.astype(np.float32), kernel, mode="same")
 
-    primary_x = sorted([c["center_x"] for c in primary_candles])
+    kernel = np.ones(
+        kernel_size,
+        dtype=np.float32
+    ) / kernel_size
+
+    smoothed = np.convolve(
+        column_strength.astype(
+            np.float32
+        ),
+        kernel,
+        mode="same"
+    )
+
+    primary_x = sorted([
+        c["center_x"]
+        for c in primary_candles
+    ])
+
     spacings = []
-    for i in range(1, len(primary_x)):
-        distance = primary_x[i] - primary_x[i - 1]
+
+    for i in range(
+        1,
+        len(primary_x)
+    ):
+
+        distance = (
+            primary_x[i]
+            -
+            primary_x[i - 1]
+        )
+
         if distance >= 3:
-            spacings.append(distance)
+
+            spacings.append(
+                distance
+            )
 
     if spacings:
-        median_spacing = float(np.median(spacings))
+
+        median_spacing = float(
+            np.median(
+                spacings
+            )
+        )
+
     else:
-        median_spacing = max(8, w * 0.018)
 
-    minimum_distance = max(4, int(median_spacing * VERIFY_MIN_DISTANCE_RATIO))
+        median_spacing = max(
+            8,
+            w * 0.018
+        )
+
+    minimum_distance = max(
+        4,
+        int(
+            median_spacing *
+            VERIFY_MIN_DISTANCE_RATIO
+        )
+    )
+
     possible_peaks = []
-    threshold = max(VERIFY_COLUMN_THRESHOLD, int(median_spacing * 0.15))
 
-    for x in range(2, w - 2):
+    threshold = max(
+        VERIFY_COLUMN_THRESHOLD,
+        int(
+            median_spacing * 0.15
+        )
+    )
+
+    for x in range(
+        2,
+        w - 2
+    ):
+
         value = smoothed[x]
+
         if value < threshold:
             continue
-        if value >= smoothed[x - 1] and value >= smoothed[x + 1]:
-            possible_peaks.append((x, value))
 
-    possible_peaks.sort(key=lambda item: item[1], reverse=True)
+        if (
+            value >= smoothed[x - 1]
+            and
+            value >= smoothed[x + 1]
+        ):
+
+            possible_peaks.append(
+                (
+                    x,
+                    value
+                )
+            )
+
+    possible_peaks.sort(
+        key=lambda item:
+        item[1],
+        reverse=True
+    )
+
     selected = []
 
     for x, strength in possible_peaks:
+
         too_close = False
+
         for selected_x, _ in selected:
-            if abs(x - selected_x) < minimum_distance:
+
+            if abs(
+                x -
+                selected_x
+            ) < minimum_distance:
+
                 too_close = True
                 break
-        if not too_close:
-            selected.append((x, strength))
 
-    selected.sort(key=lambda item: item[0])
+        if not too_close:
+
+            selected.append(
+                (
+                    x,
+                    strength
+                )
+            )
+
+    selected.sort(
+        key=lambda item:
+        item[0]
+    )
+
     return selected
+
 
 # ============================================================
 # MATCH VERIFICATION PEAKS TO CANDLES
 # ============================================================
 
-def compare_map_with_independent_scan(candles, peaks):
-    if not candles:
-        return {"matched": 0, "possible_missing": [], "possible_extra": [], "agreement": 0.0}
+def compare_map_with_independent_scan(
+    candles,
+    peaks
+):
 
-    candle_x = [c["center_x"] for c in candles]
+    if not candles:
+
+        return {
+
+            "matched": 0,
+            "possible_missing": [],
+            "possible_extra": [],
+            "agreement": 0.0
+
+        }
+
+    candle_x = [
+        c["center_x"]
+        for c in candles
+    ]
 
     if len(candle_x) >= 2:
-        sorted_x = sorted(candle_x)
+
+        sorted_x = sorted(
+            candle_x
+        )
+
         spacings = [
-            sorted_x[i] - sorted_x[i - 1]
-            for i in range(1, len(sorted_x))
-            if (sorted_x[i] - sorted_x[i - 1]) > 2
+
+            sorted_x[i] -
+            sorted_x[i - 1]
+
+            for i in range(
+                1,
+                len(sorted_x)
+            )
+
+            if (
+                sorted_x[i] -
+                sorted_x[i - 1]
+            ) > 2
+
         ]
+
         if spacings:
-            tolerance = max(5, float(np.median(spacings)) * 0.55)
+
+            tolerance = max(
+                5,
+                float(
+                    np.median(
+                        spacings
+                    )
+                ) * 0.55
+            )
+
         else:
+
             tolerance = 8
+
     else:
+
         tolerance = 8
 
     matched = 0
+
     matched_candles = set()
+
     matched_peaks = set()
 
-    for peak_index, (peak_x, strength) in enumerate(peaks):
+    for peak_index, (
+        peak_x,
+        strength
+    ) in enumerate(peaks):
+
         best_index = None
         best_distance = None
-        for candle_index, cx in enumerate(candle_x):
+
+        for candle_index, cx in enumerate(
+            candle_x
+        ):
+
             if candle_index in matched_candles:
                 continue
-            distance = abs(peak_x - cx)
+
+            distance = abs(
+                peak_x -
+                cx
+            )
+
             if distance <= tolerance:
-                if best_distance is None or distance < best_distance:
+
+                if (
+                    best_distance is None
+                    or
+                    distance < best_distance
+                ):
+
                     best_distance = distance
                     best_index = candle_index
 
         if best_index is not None:
+
             matched += 1
-            matched_candles.add(best_index)
-            matched_peaks.add(peak_index)
+
+            matched_candles.add(
+                best_index
+            )
+
+            matched_peaks.add(
+                peak_index
+            )
 
     possible_missing = []
-    for peak_index, (peak_x, strength) in enumerate(peaks):
+
+    for peak_index, (
+        peak_x,
+        strength
+    ) in enumerate(peaks):
+
         if peak_index not in matched_peaks:
-            possible_missing.append(peak_x)
+
+            possible_missing.append(
+                peak_x
+            )
 
     possible_extra = []
-    for candle_index, cx in enumerate(candle_x):
-        if candle_index not in matched_candles:
-            possible_extra.append(cx)
 
-    agreement = (matched / max(len(candles), len(peaks), 1)) * 100
+    for candle_index, cx in enumerate(
+        candle_x
+    ):
+
+        if candle_index not in matched_candles:
+
+            possible_extra.append(
+                cx
+            )
+
+    denominator = max(
+        len(candles),
+        len(peaks),
+        1
+    )
+
+    agreement = (
+        matched /
+        denominator
+    ) * 100
 
     return {
+
         "matched": matched,
         "possible_missing": possible_missing,
         "possible_extra": possible_extra,
         "agreement": agreement
+
     }
 
+
 # ============================================================
-# RECOVER MISSED CANDLES — OPTIMIZED (RECEIVES PRE-COMPUTED MASKS)
+# RECOVER MISSED CANDLES
 # ============================================================
 
-def recover_missed_candles(img, candles, peaks, comparison, purple_mask, yellow_mask):
+def recover_missed_candles(
+    img,
+    candles,
+    peaks,
+    comparison
+):
+
     if not peaks:
         return candles, 0
 
-    missed_x = comparison.get("possible_missing", [])
+    missed_x = comparison.get(
+        "possible_missing",
+        []
+    )
+
     if not missed_x:
         return candles, 0
 
+    purple_mask, yellow_mask = get_color_masks(
+        img
+    )
+
     h, w = img.shape[:2]
+
     recovered = []
     recovered_count = 0
 
     for peak_x in missed_x:
+
         already_exists = False
+
         for candle in candles:
-            if abs(candle["center_x"] - peak_x) < 10:
+
+            if abs(
+                candle["center_x"] -
+                peak_x
+            ) < 10:
+
                 already_exists = True
                 break
+
         if already_exists:
             continue
 
         search_radius = 8
-        left = max(0, int(peak_x - search_radius))
-        right = min(w, int(peak_x + search_radius + 1))
-        top, bottom = int(h * 0.18), int(h * 0.82)
 
-        purple_region = purple_mask[top:bottom, left:right]
-        yellow_region = yellow_mask[top:bottom, left:right]
+        left = max(
+            0,
+            int(
+                peak_x -
+                search_radius
+            )
+        )
 
-        purple_pixels = int(np.sum(purple_region > 0))
-        yellow_pixels = int(np.sum(yellow_region > 0))
+        right = min(
+            w,
+            int(
+                peak_x +
+                search_radius +
+                1
+            )
+        )
 
-        if purple_pixels > yellow_pixels and purple_pixels >= 5:
-            color, color_pixels = "PURPLE", purple_pixels
-        elif yellow_pixels > purple_pixels and yellow_pixels >= 5:
-            color, color_pixels = "YELLOW", yellow_pixels
+        top = int(
+            h * 0.18
+        )
+
+        bottom = int(
+            h * 0.82
+        )
+
+        purple_region = purple_mask[
+            top:bottom,
+            left:right
+        ]
+
+        yellow_region = yellow_mask[
+            top:bottom,
+            left:right
+        ]
+
+        purple_pixels = int(
+            np.sum(
+                purple_region > 0
+            )
+        )
+
+        yellow_pixels = int(
+            np.sum(
+                yellow_region > 0
+            )
+        )
+
+        if (
+            purple_pixels >
+            yellow_pixels
+            and
+            purple_pixels >= 5
+        ):
+
+            color = "PURPLE"
+            color_pixels = purple_pixels
+
+        elif (
+            yellow_pixels >
+            purple_pixels
+            and
+            yellow_pixels >= 5
+        ):
+
+            color = "YELLOW"
+            color_pixels = yellow_pixels
+
         else:
+
             continue
 
-        mask = purple_mask if color == "PURPLE" else yellow_mask
-        col_x_start = max(0, int(peak_x - 3))
-        col_x_end = min(w, int(peak_x + 4))
-        col_mask = mask[top:bottom, col_x_start:col_x_end]
-        ys, xs = np.where(col_mask > 0)
+        if color == "PURPLE":
+
+            mask = purple_mask
+
+        else:
+
+            mask = yellow_mask
+
+        col_x_start = max(
+            0,
+            int(
+                peak_x - 3
+            )
+        )
+
+        col_x_end = min(
+            w,
+            int(
+                peak_x + 4
+            )
+        )
+
+        col_mask = mask[
+            top:bottom,
+            col_x_start:col_x_end
+        ]
+
+        ys, xs = np.where(
+            col_mask > 0
+        )
 
         if len(ys) > 0:
-            candle_top = top + int(np.min(ys))
-            candle_bottom = top + int(np.max(ys))
-            candle_h = max(2, candle_bottom - candle_top + 1)
+
+            candle_top = (
+                top +
+                int(
+                    np.min(ys)
+                )
+            )
+
+            candle_bottom = (
+                top +
+                int(
+                    np.max(ys)
+                )
+            )
+
+            candle_h = max(
+                2,
+                candle_bottom -
+                candle_top +
+                1
+            )
+
             candle_y = candle_top
+
         else:
+
             candle_h = 20
-            candle_y = top + 50
+            candle_y = (
+                top +
+                50
+            )
 
         recovered_candle = {
-            "x": int(peak_x - 4),
-            "y": int(candle_y),
+
+            "x": int(
+                peak_x - 4
+            ),
+
+            "y": int(
+                candle_y
+            ),
+
             "w": 8,
-            "h": int(candle_h),
-            "center_x": float(peak_x),
+
+            "h": int(
+                candle_h
+            ),
+
+            "center_x": float(
+                peak_x
+            ),
+
             "color": color,
+
             "pixels": color_pixels,
+
             "recovered": True,
+
             "verification": {
+
                 "verified": True,
+
                 "score": 85,
-                "own_pixels": color_pixels,
-                "other_pixels": purple_pixels if color == "YELLOW" else yellow_pixels,
+
+                "own_pixels":
+                    color_pixels,
+
+                "other_pixels":
+                    (
+                        purple_pixels
+                        if
+                        color == "YELLOW"
+                        else
+                        yellow_pixels
+                    ),
+
                 "own_density": 0.15,
+
                 "color_agrees": True
+
             }
+
         }
 
-        recovered.append(recovered_candle)
+        recovered.append(
+            recovered_candle
+        )
+
         recovered_count += 1
 
-    all_candles = candles + recovered
-    all_candles.sort(key=lambda c: c["center_x"], reverse=True)
-    return all_candles, recovered_count
+    all_candles = (
+        candles +
+        recovered
+    )
+
+    all_candles.sort(
+        key=lambda c:
+        c["center_x"],
+        reverse=True
+    )
+
+    return (
+        all_candles,
+        recovered_count
+    )
+
 
 # ============================================================
-# FULL MAP VERIFICATION — OPTIMIZED (RECEIVES PRE-COMPUTED MASKS)
+# FULL MAP VERIFICATION
 # ============================================================
 
-def verify_candle_map(img, candles, purple_mask, yellow_mask):
+def verify_candle_map(
+    img,
+    candles
+):
+
+    purple_mask, yellow_mask = (
+        get_color_masks(img)
+    )
+
     results = []
-    for candle in candles:
-        result = verify_single_candle(candle, purple_mask, yellow_mask)
-        verified_candle = candle.copy()
-        verified_candle["verification"] = result
-        results.append(verified_candle)
 
-    peaks = build_verification_peaks(img, purple_mask, yellow_mask, candles)
-    comparison = compare_map_with_independent_scan(candles, peaks)
-    all_candles, recovered_count = recover_missed_candles(
-        img, results, peaks, comparison, purple_mask, yellow_mask
+    for candle in candles:
+
+        result = verify_single_candle(
+            candle,
+            purple_mask,
+            yellow_mask
+        )
+
+        verified_candle = candle.copy()
+
+        verified_candle[
+            "verification"
+        ] = result
+
+        results.append(
+            verified_candle
+        )
+
+    peaks = build_verification_peaks(
+        img,
+        purple_mask,
+        yellow_mask,
+        candles
+    )
+
+    comparison = (
+        compare_map_with_independent_scan(
+            candles,
+            peaks
+        )
+    )
+
+    all_candles, recovered_count = (
+        recover_missed_candles(
+            img,
+            results,
+            peaks,
+            comparison
+        )
     )
 
     final_candles = []
+
     for candle in all_candles:
-        if candle.get("recovered", False):
-            final_candles.append(candle)
-        elif "verification" not in candle:
-            result = verify_single_candle(candle, purple_mask, yellow_mask)
+
+        if candle.get(
+            "recovered",
+            False
+        ):
+
+            final_candles.append(
+                candle
+            )
+
+        elif (
+            "verification"
+            not in candle
+        ):
+
+            result = verify_single_candle(
+                candle,
+                purple_mask,
+                yellow_mask
+            )
+
             verified_candle = candle.copy()
-            verified_candle["verification"] = result
-            final_candles.append(verified_candle)
+
+            verified_candle[
+                "verification"
+            ] = result
+
+            final_candles.append(
+                verified_candle
+            )
+
         else:
-            final_candles.append(candle)
+
+            final_candles.append(
+                candle
+            )
 
     verified_purple = 0
     verified_yellow = 0
     unverified = 0
 
     for candle in final_candles:
-        if candle["verification"]["verified"]:
-            if candle["color"] == "PURPLE":
+
+        if candle[
+            "verification"
+        ]["verified"]:
+
+            if candle[
+                "color"
+            ] == "PURPLE":
+
                 verified_purple += 1
+
             else:
+
                 verified_yellow += 1
+
         else:
+
             unverified += 1
 
     return {
+
         "candles": final_candles,
-        "verified_purple": verified_purple,
-        "verified_yellow": verified_yellow,
-        "verified_total": verified_purple + verified_yellow,
-        "unverified": unverified,
-        "recovered_count": recovered_count,
-        "peaks": peaks,
-        "comparison": comparison
+
+        "verified_purple":
+            verified_purple,
+
+        "verified_yellow":
+            verified_yellow,
+
+        "verified_total":
+            verified_purple +
+            verified_yellow,
+
+        "unverified":
+            unverified,
+
+        "recovered_count":
+            recovered_count,
+
+        "peaks":
+            peaks,
+
+        "comparison":
+            comparison
+
     }
 
+
 # ============================================================
-# CANDLE-ONLY ANALYSIS ENGINE (30 LAYERS) — PRESERVED
+# CANDLE-ONLY ANALYSIS ENGINE (30 LAYERS)
 # ============================================================
 
 def candle_direction(candle):
-    return 1 if candle["color"] == "PURPLE" else -1
+    if candle["color"] == "PURPLE":
+        return 1
+    return -1
+
 
 def body_size(candle):
     return max(1.0, float(candle.get("h", 1)))
 
+
 def safe_ratio(a, b):
     return float(a) / max(float(b), 0.0001)
+
 
 def weighted_average(values):
     if not values:
@@ -690,7 +1722,9 @@ def weighted_average(values):
     values = np.asarray(values, dtype=float)
     return float(np.sum(values * weights) / np.sum(weights))
 
-def enrich_candle_geometry(img, candles, purple_mask, yellow_mask):
+
+def enrich_candle_geometry(img, candles):
+    purple_mask, yellow_mask = get_color_masks(img)
     h_img, w_img = img.shape[:2]
     enriched = []
 
@@ -703,7 +1737,11 @@ def enrich_candle_geometry(img, candles, purple_mask, yellow_mask):
         left = max(0, x - radius)
         right = min(w_img, x + radius + 1)
 
-        mask = purple_mask if candle["color"] == "PURPLE" else yellow_mask
+        if candle["color"] == "PURPLE":
+            mask = purple_mask
+        else:
+            mask = yellow_mask
+
         region = mask[:, left:right]
         ys, xs = np.where(region > 0)
 
@@ -729,6 +1767,7 @@ def enrich_candle_geometry(img, candles, purple_mask, yellow_mask):
 
     return enriched
 
+
 def analyze_recent_direction(candles):
     recent = candles[:min(5, len(candles))]
     if not recent:
@@ -737,12 +1776,14 @@ def analyze_recent_direction(candles):
     score = weighted_average(values)
     return score, abs(score) * 100
 
+
 def analyze_sequence(candles):
     recent = candles[:min(6, len(candles))]
     if len(recent) < 2:
         return {"score": 0, "buy_run": 0, "sell_run": 0, "alternating": False, "changes": 0}
     directions = [candle_direction(c) for c in recent]
-    buy_run, sell_run = 0, 0
+    buy_run = 0
+    sell_run = 0
     for d in directions:
         if d == 1:
             buy_run += 1
@@ -753,29 +1794,41 @@ def analyze_sequence(candles):
             sell_run += 1
         else:
             break
-    changes = sum(1 for i in range(1, len(directions)) if directions[i] != directions[i - 1])
-    alternating = changes >= len(directions) - 2
+    changes = 0
+    for i in range(1, len(directions)):
+        if directions[i] != directions[i - 1]:
+            changes += 1
+    alternating = (changes >= len(directions) - 2)
     score = weighted_average(directions)
     if alternating:
         score *= 0.45
     return {"score": score, "buy_run": buy_run, "sell_run": sell_run, "alternating": alternating, "changes": changes}
 
+
 def analyze_structure(candles):
     recent = candles[:min(8, len(candles))]
     if len(recent) < 4:
         return {"bullish": 0, "bearish": 0, "score": 0, "structure": "INSUFFICIENT"}
-    bullish, bearish = 0, 0
+    bullish = 0
+    bearish = 0
     for i in range(0, len(recent) - 1):
-        current, previous = recent[i], recent[i + 1]
-        current_high, previous_high = current["visual_top"], previous["visual_top"]
-        current_low, previous_low = current["visual_bottom"], previous["visual_bottom"]
-        if current_high < previous_high:
+        current = recent[i]
+        previous = recent[i + 1]
+        current_high = current["visual_top"]
+        previous_high = previous["visual_top"]
+        current_low = current["visual_bottom"]
+        previous_low = previous["visual_bottom"]
+        higher_high = current_high < previous_high
+        higher_low = current_low < previous_low
+        lower_high = current_high > previous_high
+        lower_low = current_low > previous_low
+        if higher_high:
             bullish += 1
-        if current_low < previous_low:
+        if higher_low:
             bullish += 1
-        if current_high > previous_high:
+        if lower_high:
             bearish += 1
-        if current_low > previous_low:
+        if lower_low:
             bearish += 1
     total = max(1, bullish + bearish)
     score = (bullish - bearish) / total
@@ -787,6 +1840,7 @@ def analyze_structure(candles):
         structure = "MIXED"
     return {"bullish": bullish, "bearish": bearish, "score": score, "structure": structure}
 
+
 def analyze_momentum(candles):
     recent = candles[:min(6, len(candles))]
     if len(recent) < 3:
@@ -795,7 +1849,8 @@ def analyze_momentum(candles):
     directions = [candle_direction(c) for c in recent]
     momentum_values = []
     for i in range(len(recent) - 1):
-        current_size, older_size = sizes[i], sizes[i + 1]
+        current_size = sizes[i]
+        older_size = sizes[i + 1]
         ratio = safe_ratio(current_size, older_size)
         direction = directions[i]
         if ratio > 1.0:
@@ -805,12 +1860,13 @@ def analyze_momentum(candles):
         momentum_values.append(value)
     return weighted_average(momentum_values)
 
+
 def detect_pullback(candles):
     if len(candles) < 5:
         return {"bullish": False, "bearish": False, "quality": 0}
     d = [candle_direction(c) for c in candles[:6]]
-    bullish_pullback = d[1] == -1 and d[2] == 1 and d[3] == 1
-    bearish_pullback = d[1] == 1 and d[2] == -1 and d[3] == -1
+    bullish_pullback = (d[1] == -1 and d[2] == 1 and d[3] == 1)
+    bearish_pullback = (d[1] == 1 and d[2] == -1 and d[3] == -1)
     quality = 0
     if bullish_pullback:
         quality = 0.75 if candles[1]["body_size"] < candles[2]["body_size"] else 0.50
@@ -818,17 +1874,19 @@ def detect_pullback(candles):
         quality = 0.75 if candles[1]["body_size"] < candles[2]["body_size"] else 0.50
     return {"bullish": bullish_pullback, "bearish": bearish_pullback, "quality": quality}
 
+
 def detect_reversal(candles):
     if len(candles) < 4:
         return {"bullish": False, "bearish": False, "depth": 0}
     d = [candle_direction(c) for c in candles[:6]]
-    bullish_confirmation = d[0] == 1 and d[1] == 1 and d[2] == -1 and d[3] == -1
-    bearish_confirmation = d[0] == -1 and d[1] == -1 and d[2] == 1 and d[3] == 1
+    bullish_confirmation = (d[0] == 1 and d[1] == 1 and d[2] == -1 and d[3] == -1)
+    bearish_confirmation = (d[0] == -1 and d[1] == -1 and d[2] == 1 and d[3] == 1)
     return {
         "bullish": bullish_confirmation,
         "bearish": bearish_confirmation,
         "depth": 2 if (bullish_confirmation or bearish_confirmation) else 0
     }
+
 
 def detect_breakout_retest(candles):
     if len(candles) < 7:
@@ -850,12 +1908,17 @@ def detect_breakout_retest(candles):
         quality = min(1.0, safe_ratio(newest["body_size"], avg_body) / BREAKOUT_BODY_MULTIPLIER)
     return {"bullish": bullish, "bearish": bearish, "quality": quality}
 
+
 def analyze_swing_rejection(candles):
     if not candles:
         return {"bullish": 0, "bearish": 0}
     newest = candles[0]
-    upper, lower = newest["upper_rejection_ratio"], newest["lower_rejection_ratio"]
-    return {"bullish": min(1.0, lower / 1.2), "bearish": min(1.0, upper / 1.2)}
+    upper = newest["upper_rejection_ratio"]
+    lower = newest["lower_rejection_ratio"]
+    bullish = min(1.0, lower / 1.2)
+    bearish = min(1.0, upper / 1.2)
+    return {"bullish": bullish, "bearish": bearish}
+
 
 def analyze_trend(candles):
     if len(candles) < 4:
@@ -873,6 +1936,7 @@ def analyze_trend(candles):
         trend = "SIDEWAYS"
     return {"trend": trend, "strength": strength, "score": combined}
 
+
 def analyze_candle_quality(candles):
     if not candles:
         return 0
@@ -888,6 +1952,7 @@ def analyze_candle_quality(candles):
     quality = body_strength - wick_penalty
     return max(0, min(1, quality))
 
+
 def analyze_recent_vs_old(candles):
     if len(candles) < 6:
         return 0
@@ -896,6 +1961,7 @@ def analyze_recent_vs_old(candles):
     recent_score = weighted_average([candle_direction(c) for c in recent])
     old_score = weighted_average([candle_direction(c) for c in older])
     return recent_score * 0.70 + old_score * 0.30
+
 
 def contradiction_check(candles):
     if len(candles) < 5:
@@ -911,6 +1977,7 @@ def contradiction_check(candles):
     else:
         label = "LOW"
     return {"severity": severity, "label": label, "direction": newest_score}
+
 
 def body_progression(candles):
     recent = candles[:min(5, len(candles))]
@@ -929,34 +1996,40 @@ def body_progression(candles):
         values.append(value)
     return weighted_average(values)
 
+
 def wick_rejection(candles):
     if not candles:
         return 0
     newest = candles[0]
-    upper, lower = newest["upper_rejection_ratio"], newest["lower_rejection_ratio"]
+    upper = newest["upper_rejection_ratio"]
+    lower = newest["lower_rejection_ratio"]
     body_ratio = newest["body_to_range"]
     bullish = min(1, lower / 1.0) - min(0.5, upper / 2)
     bearish = min(1, upper / 1.0) - min(0.5, lower / 2)
     continuation = candle_direction(newest) * body_ratio
     return bullish - bearish + continuation * 0.30
 
+
 def detect_engulfing(candles):
     if len(candles) < 2:
         return {"bullish": False, "bearish": False, "strength": 0}
-    current, previous = candles[0], candles[1]
+    current = candles[0]
+    previous = candles[1]
     bullish = current["color"] == "PURPLE" and previous["color"] == "YELLOW" and current["body_size"] >= previous["body_size"] * 1.15
     bearish = current["color"] == "YELLOW" and previous["color"] == "PURPLE" and current["body_size"] >= previous["body_size"] * 1.15
     strength = min(1.0, safe_ratio(current["body_size"], previous["body_size"]) / 2.0)
     return {"bullish": bullish, "bearish": bearish, "strength": strength}
 
+
 def detect_compression(candles):
     if len(candles) < 4:
         return {"compression": False, "score": 0}
     sizes = [c["body_size"] for c in candles[:4]]
-    shrinking = sizes[0] <= sizes[1] and sizes[1] <= sizes[2] and sizes[2] <= sizes[3]
+    shrinking = (sizes[0] <= sizes[1] and sizes[1] <= sizes[2] and sizes[2] <= sizes[3])
     average = np.mean(sizes[1:])
     compressed = shrinking and sizes[0] < average * COMPRESSION_RATIO
     return {"compression": compressed, "score": 1.0 if compressed else 0.0}
+
 
 def detect_expansion(candles):
     if len(candles) < 5:
@@ -972,10 +2045,13 @@ def detect_expansion(candles):
         "strength": strength
     }
 
+
 def three_candle_context(candles):
     if len(candles) < 3:
         return 0
-    a, b, c = candle_direction(candles[0]), candle_direction(candles[1]), candle_direction(candles[2])
+    a = candle_direction(candles[0])
+    b = candle_direction(candles[1])
+    c = candle_direction(candles[2])
     sizes = [candles[i]["body_size"] for i in range(3)]
     if a == b == c:
         progression = safe_ratio(sizes[0], max(sizes[1], 1))
@@ -984,6 +2060,7 @@ def three_candle_context(candles):
         return a * 0.75
     return a * 0.25
 
+
 def directional_persistence(candles):
     recent = candles[:min(8, len(candles))]
     if not recent:
@@ -991,6 +2068,7 @@ def directional_persistence(candles):
     values = [candle_direction(c) for c in recent]
     weights = np.linspace(1.0, 0.45, len(values))
     return float(np.sum(np.asarray(values) * weights) / np.sum(weights))
+
 
 def momentum_divergence(candles):
     if len(candles) < 5:
@@ -1005,6 +2083,7 @@ def momentum_divergence(candles):
         return -directions[0] * 0.75
     return 0
 
+
 def breakout_strength(candles):
     result = detect_breakout_retest(candles)
     if result["bullish"]:
@@ -1013,10 +2092,12 @@ def breakout_strength(candles):
         return -result["quality"]
     return 0
 
+
 def retest_quality(candles):
     if len(candles) < 6:
         return 0
-    newest, previous = candles[0], candles[1]
+    newest = candles[0]
+    previous = candles[1]
     older = candles[2:6]
     older_level_high = min(c["visual_top"] for c in older)
     older_level_low = max(c["visual_bottom"] for c in older)
@@ -1031,10 +2112,14 @@ def retest_quality(candles):
                  newest["body_size"] >= previous["body_size"])
         return -0.85 if clean else 0
 
+
 def reversal_confirmation_depth(candles):
     if len(candles) < 5:
         return 0
-    newest, previous, third, fourth = candles[0], candles[1], candles[2], candles[3]
+    newest = candles[0]
+    previous = candles[1]
+    third = candles[2]
+    fourth = candles[3]
     current_direction = candle_direction(newest)
     previous_direction = candle_direction(previous)
     third_direction = candle_direction(third)
@@ -1045,12 +2130,16 @@ def reversal_confirmation_depth(candles):
         return current_direction * 1.0
     return 0
 
+
 def recent_weighted_score(candles):
     if not candles:
         return 0
     values = [candle_direction(c) for c in candles[:min(10, len(candles))]]
-    weights = [max(OLD_WEIGHT, RECENT_WEIGHT - i * 0.07) for i in range(len(values))]
+    weights = []
+    for i in range(len(values)):
+        weights.append(max(OLD_WEIGHT, RECENT_WEIGHT - i * 0.07))
     return float(np.sum(np.asarray(values) * np.asarray(weights)) / np.sum(weights))
+
 
 def conflict_severity(buy_evidence, sell_evidence):
     total = buy_evidence + sell_evidence
@@ -1067,6 +2156,7 @@ def conflict_severity(buy_evidence, sell_evidence):
         label = "MINOR"
     return {"severity": conflict, "label": label}
 
+
 def pattern_context(candles, trend_result, pullback_result):
     engulfing = detect_engulfing(candles)
     context_score = 0
@@ -1078,6 +2168,7 @@ def pattern_context(candles, trend_result, pullback_result):
     if compression["compression"]:
         context_score *= 0.35
     return context_score
+
 
 def continuation_vs_reversal(candles, evidence):
     continuation = 0.0
@@ -1104,11 +2195,12 @@ def continuation_vs_reversal(candles, evidence):
         reversal += 10
     return continuation, reversal
 
+
 # ============================================================
 # MAIN 30-LAYER ANALYSIS — PRESERVED + STRONG SIGNAL PATH
 # ============================================================
 
-def analyze_candles(img, candles, purple_mask, yellow_mask):
+def analyze_candles(img, candles):
     if len(candles) < ANALYSIS_MIN_CANDLES:
         return {
             "decision": "NO TRADE",
@@ -1122,7 +2214,7 @@ def analyze_candles(img, candles, purple_mask, yellow_mask):
             "strong_signal": False
         }
 
-    candles = enrich_candle_geometry(img, candles, purple_mask, yellow_mask)
+    candles = enrich_candle_geometry(img, candles)
 
     # GROUP A: DIRECTION + MOMENTUM
     direction_score, direction_strength = analyze_recent_direction(candles)
@@ -1440,6 +2532,7 @@ def analyze_candles(img, candles, purple_mask, yellow_mask):
         "confirmation_details": confirmation_details
     }
 
+
 # ============================================================
 # CREATE DETECTION MAP (RUNS IN BACKGROUND, NOT SENT)
 # ============================================================
@@ -1491,6 +2584,7 @@ def create_detection_map(img, verification):
 
     return output
 
+
 # ============================================================
 # CREATE REPORT (PRIMARY DETECTION)
 # ============================================================
@@ -1500,38 +2594,48 @@ def create_report(candles):
     yellow = sum(1 for c in candles if c["color"] == "YELLOW")
     return purple, yellow
 
+
 # ============================================================
-# TELEGRAM PHOTO HANDLER — UPDATED (OPTIMIZED + STRONG SIGNAL)
+# TELEGRAM PHOTO HANDLER — UPDATED (STRONG SIGNAL + NO SCREENSHOT ATTACHMENT)
 # ============================================================
 
 @bot.message_handler(content_types=["photo"])
 def handle_photo(message):
+
     start_time = time.time()
 
     original_path = "chart_screenshot.png"
     detection_path = "candle_verification_map.png"
 
     try:
-        # Send "Analyzing..." as a clean message
+
+        # ====================================================
+        # SEND "Analyzing..." AS A CLEAN, SEPARATE MESSAGE
+        # ====================================================
+
         bot.send_message(message.chat.id, "🔍 Analyzing...")
 
-        # Download image
+        # ====================================================
+        # DOWNLOAD
+        # ====================================================
+
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
 
         with open(original_path, "wb") as f:
             f.write(downloaded_file)
 
-        # Load image
+        # ====================================================
+        # LOAD IMAGE
+        # ====================================================
+
         img = load_image(original_path)
 
-        # ============================================================
-        # OPTIMIZATION: COMPUTE COLOR MASKS ONCE AND REUSE
-        # ============================================================
-        purple_mask, yellow_mask = get_color_masks(img)
+        # ====================================================
+        # PRIMARY DETECTION
+        # ====================================================
 
-        # Primary detection (receives pre-computed masks)
-        candles = detect_candles(img, purple_mask, yellow_mask)
+        candles = detect_candles(img)
 
         total = len(candles)
 
@@ -1539,19 +2643,28 @@ def handle_photo(message):
             bot.send_message(message.chat.id, "⚪ **NO SIGNAL — DON'T TRADE**", parse_mode="Markdown")
             return
 
-        # Verification (receives pre-computed masks)
-        verification = verify_candle_map(img, candles, purple_mask, yellow_mask)
+        # ====================================================
+        # VERIFICATION
+        # ====================================================
+
+        verification = verify_candle_map(img, candles)
 
         verified_candles = verification["candles"]
 
-        # Only verified/recovered candles enter analysis
+        # ====================================================
+        # ONLY VERIFIED/RECOVERED CANDLES ENTER ANALYSIS
+        # ====================================================
+
         analysis_candles = []
         for candle in verified_candles:
             if candle["verification"]["verified"] or candle.get("recovered", False):
                 analysis_candles.append(candle)
 
-        # 30-LAYER ANALYSIS (receives pre-computed masks)
-        analysis = analyze_candles(img, analysis_candles, purple_mask, yellow_mask)
+        # ====================================================
+        # 30-LAYER ANALYSIS (WITH STRONG SIGNAL PATH)
+        # ====================================================
+
+        analysis = analyze_candles(img, analysis_candles)
 
         decision = analysis["decision"]
         confidence = analysis["confidence"]
@@ -1560,7 +2673,10 @@ def handle_photo(message):
         confirmations = analysis.get("confirmations", 0)
         confirmation_details = analysis.get("confirmation_details", [])
 
-        # Generate signal response
+        # ====================================================
+        # GENERATE SIGNAL RESPONSE
+        # ====================================================
+
         if decision == "BUY":
             signal_time = get_signal_time()
             entry_time = get_entry_time(signal_time)
@@ -1578,7 +2694,7 @@ def handle_photo(message):
             else:
                 response += "\n"
 
-            response += f"• {reason}"
+            response += f"• {reason}\n"
 
             bot.send_message(message.chat.id, response, parse_mode="Markdown")
             send_to_channel(response)
@@ -1600,7 +2716,7 @@ def handle_photo(message):
             else:
                 response += "\n"
 
-            response += f"• {reason}"
+            response += f"• {reason}\n"
 
             bot.send_message(message.chat.id, response, parse_mode="Markdown")
             send_to_channel(response)
@@ -1608,9 +2724,10 @@ def handle_photo(message):
         else:
             bot.send_message(message.chat.id, "⚪ **NO SIGNAL — DON'T TRADE**", parse_mode="Markdown")
 
-        # ============================================================
-        # DETECTION MAP — CREATED AFTER SIGNAL (NO DELAY TO USER)
-        # ============================================================
+        # ====================================================
+        # DETECTION MAP — RUNS IN BACKGROUND (NOT SENT)
+        # ====================================================
+
         detection_map = create_detection_map(img, verification)
         cv2.imwrite(detection_path, detection_map)
 
@@ -1627,6 +2744,7 @@ def handle_photo(message):
                     os.remove(path)
                 except Exception:
                     pass
+
 
 # ============================================================
 # START COMMAND
@@ -1646,22 +2764,23 @@ def start(message):
         parse_mode="Markdown"
     )
 
+
 # ============================================================
 # START BOT
 # ============================================================
 
 if __name__ == "__main__":
+
     # Start Flask in background thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     print("✅ Flask server started on port 10000")
 
     print("=" * 50)
-    print("📊 OTC CANDLE SIGNAL BOT (OPTIMIZED + STRONG SIGNAL)")
+    print("📊 OTC CANDLE SIGNAL BOT (WITH STRONG SIGNAL PATH)")
     print("=" * 50)
     print("✅ Confidence threshold: 30%")
     print("✅ Strong signal: 3+ confirmations at 55%+")
-    print("✅ Optimized: masks computed once")
     print("✅ Analyzing... message only (NO screenshot attachment)")
     print("✅ No detection map sent")
     print("✅ Signals sent to channel")
