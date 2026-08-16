@@ -129,6 +129,13 @@ BREAKOUT_BODY_MULTIPLIER = 1.25
 NO_TRADE_CONFLICT = 70
 NO_TRADE_SIDEWAYS_STRENGTH = 30
 
+# ============================================================
+# STRONG SIGNAL PATH SETTINGS (NEW)
+# ============================================================
+
+STRONG_SIGNAL_MIN_CONFIDENCE = 55
+STRONG_SIGNAL_MIN_CONFIRMATIONS = 3
+
 
 # ============================================================
 # TIMEZONE
@@ -2190,7 +2197,7 @@ def continuation_vs_reversal(candles, evidence):
 
 
 # ============================================================
-# MAIN 30-LAYER ANALYSIS
+# MAIN 30-LAYER ANALYSIS — PRESERVED + STRONG SIGNAL PATH
 # ============================================================
 
 def analyze_candles(img, candles):
@@ -2203,7 +2210,8 @@ def analyze_candles(img, candles):
             "sell_score": 0,
             "trend": "UNKNOWN",
             "trend_strength": 0,
-            "conflict": {"severity": 100, "label": "SEVERE"}
+            "conflict": {"severity": 100, "label": "SEVERE"},
+            "strong_signal": False
         }
 
     candles = enrich_candle_geometry(img, candles)
@@ -2292,7 +2300,6 @@ def analyze_candles(img, candles):
         engulf_score * 0.22 +
         (expansion["strength"] if expansion["bullish"] else -expansion["strength"] if expansion["bearish"] else 0) * 0.20 +
         three_candle * 0.18 +
-        0 +
         candle_quality * candle_direction(candles[0]) * 0.20
     )
 
@@ -2353,55 +2360,159 @@ def analyze_candles(img, candles):
     separation = abs(buy_score - sell_score)
 
     # ============================================================
-    # FINAL DECISION — UPDATED THRESHOLD = 30
+    # STRONG SIGNAL PATH — NEW (Runs alongside normal path)
     # ============================================================
 
-    if sideways:
-        decision = "NO TRADE"
-    elif conflict["severity"] >= NO_TRADE_CONFLICT:
-        decision = "NO TRADE"
-    elif contradiction["severity"] >= SEVERE_CONFLICT_THRESHOLD and separation < MIN_DIRECTION_SEPARATION:
-        decision = "NO TRADE"
-    elif buy_score >= MIN_SIGNAL_CONFIDENCE and buy_score > sell_score and separation >= MIN_DIRECTION_SEPARATION:
-        decision = "BUY"
-    elif sell_score >= MIN_SIGNAL_CONFIDENCE and sell_score > buy_score and separation >= MIN_DIRECTION_SEPARATION:
-        decision = "SELL"
+    # Count independent confirmations
+    confirmations = 0
+    confirmation_details = []
+
+    # 1. HH/HL or LH/LL structure
+    if structure_result["structure"] == "BULLISH HH/HL":
+        confirmations += 1
+        confirmation_details.append("HH/HL")
+    elif structure_result["structure"] == "BEARISH LH/LL":
+        confirmations += 1
+        confirmation_details.append("LH/LL")
+
+    # 2. Trend alignment
+    if trend_result["trend"] == "BULLISH" and trend_result["strength"] > 40:
+        confirmations += 1
+        confirmation_details.append("BULLISH TREND")
+    elif trend_result["trend"] == "BEARISH" and trend_result["strength"] > 40:
+        confirmations += 1
+        confirmation_details.append("BEARISH TREND")
+
+    # 3. Momentum
+    if momentum > 0.2:
+        confirmations += 1
+        confirmation_details.append("BULLISH MOMENTUM")
+    elif momentum < -0.2:
+        confirmations += 1
+        confirmation_details.append("BEARISH MOMENTUM")
+
+    # 4. Persistence
+    if persistence > 0.3:
+        confirmations += 1
+        confirmation_details.append("BULLISH PERSISTENCE")
+    elif persistence < -0.3:
+        confirmations += 1
+        confirmation_details.append("BEARISH PERSISTENCE")
+
+    # 5. Breakout/Retest
+    if breakout > 0.3:
+        confirmations += 1
+        confirmation_details.append("BULLISH BREAKOUT")
+    elif breakout < -0.3:
+        confirmations += 1
+        confirmation_details.append("BEARISH BREAKOUT")
+
+    # 6. Pullback
+    if pullback_result["bullish"] and pullback_result["quality"] > 0.5:
+        confirmations += 1
+        confirmation_details.append("BULLISH PULLBACK")
+    elif pullback_result["bearish"] and pullback_result["quality"] > 0.5:
+        confirmations += 1
+        confirmation_details.append("BEARISH PULLBACK")
+
+    # 7. Engulfing
+    if engulf["bullish"] and engulf["strength"] > 0.4:
+        confirmations += 1
+        confirmation_details.append("BULLISH ENGULFING")
+    elif engulf["bearish"] and engulf["strength"] > 0.4:
+        confirmations += 1
+        confirmation_details.append("BEARISH ENGULFING")
+
+    # 8. Expansion
+    if expansion["bullish"] and expansion["strength"] > 0.4:
+        confirmations += 1
+        confirmation_details.append("BULLISH EXPANSION")
+    elif expansion["bearish"] and expansion["strength"] > 0.4:
+        confirmations += 1
+        confirmation_details.append("BEARISH EXPANSION")
+
+    strong_decision = None
+    strong_confidence = 0
+    strong_reason = ""
+
+    # Determine if strong signal conditions are met
+    if confirmations >= STRONG_SIGNAL_MIN_CONFIRMATIONS:
+        if buy_score >= STRONG_SIGNAL_MIN_CONFIDENCE and buy_score > sell_score:
+            strong_decision = "BUY"
+            strong_confidence = buy_score
+            strong_reason = f"STRONG SIGNAL: {confirmations} confirmations ({', '.join(confirmation_details)})"
+        elif sell_score >= STRONG_SIGNAL_MIN_CONFIDENCE and sell_score > buy_score:
+            strong_decision = "SELL"
+            strong_confidence = sell_score
+            strong_reason = f"STRONG SIGNAL: {confirmations} confirmations ({', '.join(confirmation_details)})"
+
+    # ============================================================
+    # FINAL DECISION — WITH CONFIDENCE SET IN ALL PATHS
+    # ============================================================
+
+    # Initialize confidence with a default value
+    confidence = 0
+
+    # Check if strong signal should override
+    if strong_decision is not None:
+        # Still respect protection gates
+        if not sideways and conflict["severity"] < NO_TRADE_CONFLICT and contradiction["severity"] < SEVERE_CONFLICT_THRESHOLD:
+            decision = strong_decision
+            confidence = strong_confidence
+            reason = strong_reason
+        else:
+            # Fall back to normal decision if protections block
+            if sideways:
+                decision = "NO TRADE"
+                reason = "Visible structure is too sideways or weak for a directional decision."
+            elif conflict["severity"] >= NO_TRADE_CONFLICT:
+                decision = "NO TRADE"
+                reason = "BUY and SELL evidence conflict too severely."
+            elif contradiction["severity"] >= SEVERE_CONFLICT_THRESHOLD and separation < MIN_DIRECTION_SEPARATION:
+                decision = "NO TRADE"
+                reason = "Severe contradiction blocks signal."
+            else:
+                decision = "NO TRADE"
+                reason = "Protection gates blocked strong signal."
+            confidence = max(buy_score, sell_score)
+            confidence = min(confidence, 64)
     else:
-        decision = "NO TRADE"
-
-    # ============================================================
-    # CONFIDENCE
-    # ============================================================
-
-    if decision == "BUY":
-        confidence = buy_score
-    elif decision == "SELL":
-        confidence = sell_score
-    else:
-        confidence = max(buy_score, sell_score)
-        confidence = min(confidence, 64)
+        # Normal path
+        if sideways:
+            decision = "NO TRADE"
+            reason = "Visible structure is too sideways or weak for a directional decision."
+            confidence = max(buy_score, sell_score)
+            confidence = min(confidence, 64)
+        elif conflict["severity"] >= NO_TRADE_CONFLICT:
+            decision = "NO TRADE"
+            reason = "BUY and SELL evidence conflict too severely."
+            confidence = max(buy_score, sell_score)
+            confidence = min(confidence, 64)
+        elif contradiction["severity"] >= SEVERE_CONFLICT_THRESHOLD and separation < MIN_DIRECTION_SEPARATION:
+            decision = "NO TRADE"
+            reason = "Severe contradiction blocks signal."
+            confidence = max(buy_score, sell_score)
+            confidence = min(confidence, 64)
+        elif buy_score >= MIN_SIGNAL_CONFIDENCE and buy_score > sell_score and separation >= MIN_DIRECTION_SEPARATION:
+            decision = "BUY"
+            reason = "Bullish candle-structure evidence is stronger than bearish evidence."
+            confidence = buy_score
+        elif sell_score >= MIN_SIGNAL_CONFIDENCE and sell_score > buy_score and separation >= MIN_DIRECTION_SEPARATION:
+            decision = "SELL"
+            reason = "Bearish candle-structure evidence is stronger than bullish evidence."
+            confidence = sell_score
+        else:
+            decision = "NO TRADE"
+            if compression["compression"]:
+                reason = "Recent candles are compressed; directional confirmation is insufficient."
+            elif sequence["alternating"]:
+                reason = "Recent candle sequence is too alternating/choppy."
+            else:
+                reason = "Evidence does not separate BUY and SELL strongly enough."
+            confidence = max(buy_score, sell_score)
+            confidence = min(confidence, 64)
 
     confidence = max(0, min(100, confidence))
-
-    # ============================================================
-    # REASON
-    # ============================================================
-
-    if decision == "BUY":
-        reason = "Bullish candle-structure evidence is stronger than bearish evidence."
-    elif decision == "SELL":
-        reason = "Bearish candle-structure evidence is stronger than bullish evidence."
-    else:
-        if sideways:
-            reason = "Visible structure is too sideways or weak for a directional decision."
-        elif conflict["severity"] >= NO_TRADE_CONFLICT:
-            reason = "BUY and SELL evidence conflict too severely."
-        elif compression["compression"]:
-            reason = "Recent candles are compressed; directional confirmation is insufficient."
-        elif sequence["alternating"]:
-            reason = "Recent candle sequence is too alternating/choppy."
-        else:
-            reason = "Evidence does not separate BUY and SELL strongly enough."
 
     return {
         "decision": decision,
@@ -2425,7 +2536,10 @@ def analyze_candles(img, candles):
         "conflict": conflict,
         "continuation_score": continuation,
         "reversal_score": reversal,
-        "evidence": evidence
+        "evidence": evidence,
+        "strong_signal": strong_decision is not None,
+        "confirmations": confirmations,
+        "confirmation_details": confirmation_details
     }
 
 
@@ -2492,7 +2606,7 @@ def create_report(candles):
 
 
 # ============================================================
-# TELEGRAM PHOTO HANDLER — UPDATED (SIGNAL FIRST, BACKGROUND REST)
+# TELEGRAM PHOTO HANDLER — UPDATED (STRONG SIGNAL + NO SCREENSHOT ATTACHMENT)
 # ============================================================
 
 @bot.message_handler(content_types=["photo"])
@@ -2557,7 +2671,7 @@ def handle_photo(message):
                 analysis_candles.append(candle)
 
         # ====================================================
-        # 30-LAYER ANALYSIS
+        # 30-LAYER ANALYSIS (WITH STRONG SIGNAL PATH)
         # ====================================================
 
         analysis = analyze_candles(img, analysis_candles)
@@ -2565,9 +2679,12 @@ def handle_photo(message):
         decision = analysis["decision"]
         confidence = analysis["confidence"]
         reason = analysis["reason"]
+        is_strong = analysis.get("strong_signal", False)
+        confirmations = analysis.get("confirmations", 0)
+        confirmation_details = analysis.get("confirmation_details", [])
 
         # ====================================================
-        # ⚡ SIGNAL SENT FIRST — TOP PRIORITY ⚡
+        # GENERATE SIGNAL RESPONSE
         # ====================================================
 
         if decision == "BUY":
@@ -2579,9 +2696,15 @@ def handle_photo(message):
                 "🟢 **BUY**\n"
                 f"🕐 **Signal Time:** {signal_time} 🇳🇬\n"
                 f"🎯 **Entry Time:** {entry_time} 🇳🇬\n"
-                f"💪 **Strength:** {confidence:.0f}%\n\n"
-                f"• {reason}\n"
+                f"💪 **Strength:** {confidence:.0f}%\n"
             )
+
+            if is_strong:
+                response += f"✅ **STRONG SIGNAL:** {confirmations} confirmations ({', '.join(confirmation_details)})\n\n"
+            else:
+                response += "\n"
+
+            response += f"• {reason}\n"
 
             bot.send_message(message.chat.id, response, parse_mode="Markdown")
             send_to_channel(response)
@@ -2595,9 +2718,15 @@ def handle_photo(message):
                 "🔴 **SELL**\n"
                 f"🕐 **Signal Time:** {signal_time} 🇳🇬\n"
                 f"🎯 **Entry Time:** {entry_time} 🇳🇬\n"
-                f"💪 **Strength:** {confidence:.0f}%\n\n"
-                f"• {reason}\n"
+                f"💪 **Strength:** {confidence:.0f}%\n"
             )
+
+            if is_strong:
+                response += f"✅ **STRONG SIGNAL:** {confirmations} confirmations ({', '.join(confirmation_details)})\n\n"
+            else:
+                response += "\n"
+
+            response += f"• {reason}\n"
 
             bot.send_message(message.chat.id, response, parse_mode="Markdown")
             send_to_channel(response)
@@ -2606,35 +2735,19 @@ def handle_photo(message):
             bot.send_message(message.chat.id, "⚪ **NO SIGNAL — DON'T TRADE**", parse_mode="Markdown")
 
         # ====================================================
-        # 🔄 EVERYTHING BELOW RUNS IN BACKGROUND
+        # DETECTION MAP — RUNS IN BACKGROUND (NOT SENT)
         # ====================================================
 
-        def background_tasks():
-            """All non-essential tasks run here in the background."""
-            try:
-                detection_map = create_detection_map(img, verification)
-                cv2.imwrite(detection_path, detection_map)
+        detection_map = create_detection_map(img, verification)
+        cv2.imwrite(detection_path, detection_map)
 
-                print(f"✅ Processed in {time.time() - start_time:.2f}s | Decision: {decision} | Confidence: {confidence:.1f}%")
-
-            except Exception as e:
-                print("❌ Background error:", repr(e))
-
-            finally:
-                for path in [original_path, detection_path]:
-                    if os.path.exists(path):
-                        try:
-                            os.remove(path)
-                        except Exception:
-                            pass
-
-        background_thread = threading.Thread(target=background_tasks, daemon=True)
-        background_thread.start()
+        print(f"✅ Processed in {time.time() - start_time:.2f}s | Decision: {decision} | Confidence: {confidence:.1f}% | Strong: {is_strong}")
 
     except Exception as e:
         print("❌ ERROR:", repr(e))
         bot.send_message(message.chat.id, f"❌ Error: {str(e)}")
 
+    finally:
         for path in [original_path, detection_path]:
             if os.path.exists(path):
                 try:
@@ -2655,6 +2768,7 @@ def start(message):
         "Send a screenshot.\n\n"
         "I will detect candles and generate signals.\n"
         "✅ Confidence threshold: 30%\n"
+        "✅ Strong signal path: 3+ confirmations at 55%+\n"
         "✅ Signals sent to your channel\n\n"
         "⚡ **BUY/SELL/NO TRADE**",
         parse_mode="Markdown"
@@ -2673,9 +2787,10 @@ if __name__ == "__main__":
     print("✅ Flask server started on port 10000")
 
     print("=" * 50)
-    print("📊 OTC CANDLE SIGNAL BOT")
+    print("📊 OTC CANDLE SIGNAL BOT (WITH STRONG SIGNAL PATH)")
     print("=" * 50)
     print("✅ Confidence threshold: 30%")
+    print("✅ Strong signal: 3+ confirmations at 55%+")
     print("✅ Analyzing... message only (NO screenshot attachment)")
     print("✅ No detection map sent")
     print("✅ Signals sent to channel")
