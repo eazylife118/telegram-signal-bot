@@ -2982,7 +2982,7 @@ def handle_photo(message):
 
         bot.send_message(
             message.chat.id,
-            "🔍 Analyzing 3 candles..."
+            "🔍 Analyzing..."
         )
 
         # ----------------------------------------------------
