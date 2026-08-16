@@ -3092,7 +3092,7 @@ def create_report(candles):
     return purple, yellow
 
 # ============================================================
-# TELEGRAM PHOTO HANDLER — UPDATED (STRONG SIGNAL + NO SCREENSHOT ATTACHMENT)
+# TELEGRAM PHOTO HANDLER — CLEAN VERSION (NO 5-CANDLE DETAILS)
 # ============================================================
 
 @bot.message_handler(content_types=["photo"])
@@ -3168,31 +3168,9 @@ def handle_photo(message):
         is_strong = analysis.get("strong_signal", False)
         confirmations = analysis.get("confirmations", 0)
         confirmation_details = analysis.get("confirmation_details", [])
-        
-        # Get 5-candle analysis details for debug
-        five_candle_analysis = analysis.get("five_candle_analysis", {})
-        five_candle_result = analysis.get("five_candle_result", {})
-        supporting_context = analysis.get("supporting_context", {})
-        
-        # Build 5-candle info string
-        five_candle_info = ""
-        if five_candle_analysis:
-            color_seq = " → ".join(five_candle_analysis.get("color_sequence", []))
-            momentum = five_candle_analysis.get("momentum", "UNKNOWN")
-            direction = five_candle_analysis.get("direction_assessment", "UNKNOWN")
-            structure = five_candle_analysis.get("structure", "UNKNOWN")
-            five_candle_info = f"\n📊 5-Candle: {color_seq}\n📈 Momentum: {momentum}\n🎯 Direction: {direction}\n🏗️ Structure: {structure}"
-        
-        # Add supporting context info
-        support_info = ""
-        if supporting_context.get("available", False):
-            support_dir = supporting_context.get("direction", "NEUTRAL")
-            support_strength = supporting_context.get("strength", 0)
-            support_count = supporting_context.get("supporting_candles_count", 0)
-            support_info = f"\n🔍 Support (Candles 6-{support_count+5}): {support_dir} ({support_strength:.0f}%)"
 
         # ====================================================
-        # GENERATE SIGNAL RESPONSE
+        # GENERATE SIGNAL RESPONSE — CLEAN VERSION
         # ====================================================
 
         if decision == "BUY":
@@ -3213,8 +3191,6 @@ def handle_photo(message):
                 response += "\n"
 
             response += f"• {reason}\n"
-            response += five_candle_info
-            response += support_info
 
             bot.send_message(message.chat.id, response, parse_mode="Markdown")
             send_to_channel(response)
@@ -3237,8 +3213,6 @@ def handle_photo(message):
                 response += "\n"
 
             response += f"• {reason}\n"
-            response += five_candle_info
-            response += support_info
 
             bot.send_message(message.chat.id, response, parse_mode="Markdown")
             send_to_channel(response)
@@ -3280,8 +3254,6 @@ def start(message):
         "I will detect candles and generate signals.\n"
         "✅ Confidence threshold: 30%\n"
         "✅ Strong signal path: 3+ confirmations at 55%+\n"
-        "✅ 5-Candle Price-Action Analysis\n"
-        "✅ Supporting Context (Candles 6-12)\n"
         "✅ Signals sent to your channel\n\n"
         "⚡ **BUY/SELL/NO TRADE**",
         parse_mode="Markdown"
@@ -3299,12 +3271,12 @@ if __name__ == "__main__":
     print("✅ Flask server started on port 10000")
 
     print("=" * 50)
-    print("📊 OTC CANDLE SIGNAL BOT (WITH 5-CANDLE + SUPPORTING CONTEXT)")
+    print("📊 OTC CANDLE SIGNAL BOT")
     print("=" * 50)
     print("✅ Confidence threshold: 30%")
     print("✅ Strong signal: 3+ confirmations at 55%+")
-    print("✅ 5-Candle Price-Action Analysis")
-    print("✅ Supporting Context (Candles 6-12)")
+    print("✅ 5-Candle Price-Action Analysis (background)")
+    print("✅ Supporting Context (background)")
     print("✅ Analyzing... message only (NO screenshot attachment)")
     print("✅ No detection map sent")
     print("✅ Signals sent to channel")
