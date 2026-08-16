@@ -2447,8 +2447,11 @@ def analyze_candles(img, candles):
             strong_reason = f"STRONG SIGNAL: {confirmations} confirmations ({', '.join(confirmation_details)})"
 
     # ============================================================
-    # FINAL DECISION — Normal path + Strong signal override
+    # FINAL DECISION — WITH CONFIDENCE SET IN ALL PATHS
     # ============================================================
+
+    # Initialize confidence with a default value
+    confidence = 0
 
     # Check if strong signal should override
     if strong_decision is not None:
@@ -2471,7 +2474,6 @@ def analyze_candles(img, candles):
             else:
                 decision = "NO TRADE"
                 reason = "Protection gates blocked strong signal."
-            # ✅ FIX: Set confidence here too
             confidence = max(buy_score, sell_score)
             confidence = min(confidence, 64)
     else:
@@ -2479,18 +2481,26 @@ def analyze_candles(img, candles):
         if sideways:
             decision = "NO TRADE"
             reason = "Visible structure is too sideways or weak for a directional decision."
+            confidence = max(buy_score, sell_score)
+            confidence = min(confidence, 64)
         elif conflict["severity"] >= NO_TRADE_CONFLICT:
             decision = "NO TRADE"
             reason = "BUY and SELL evidence conflict too severely."
+            confidence = max(buy_score, sell_score)
+            confidence = min(confidence, 64)
         elif contradiction["severity"] >= SEVERE_CONFLICT_THRESHOLD and separation < MIN_DIRECTION_SEPARATION:
             decision = "NO TRADE"
             reason = "Severe contradiction blocks signal."
+            confidence = max(buy_score, sell_score)
+            confidence = min(confidence, 64)
         elif buy_score >= MIN_SIGNAL_CONFIDENCE and buy_score > sell_score and separation >= MIN_DIRECTION_SEPARATION:
             decision = "BUY"
             reason = "Bullish candle-structure evidence is stronger than bearish evidence."
+            confidence = buy_score
         elif sell_score >= MIN_SIGNAL_CONFIDENCE and sell_score > buy_score and separation >= MIN_DIRECTION_SEPARATION:
             decision = "SELL"
             reason = "Bearish candle-structure evidence is stronger than bullish evidence."
+            confidence = sell_score
         else:
             decision = "NO TRADE"
             if compression["compression"]:
