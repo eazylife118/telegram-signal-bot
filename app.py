@@ -28,7 +28,6 @@ def ping():
 
 def run_flask():
     port = int(os.getenv("PORT", 10000))
-
     app.run(
         host="0.0.0.0",
         port=port,
@@ -62,7 +61,6 @@ LOCAL_TZ = timezone(timedelta(hours=1))
 
 
 def get_signal_time():
-
     now = datetime.now(LOCAL_TZ)
 
     signal_time = now.replace(
@@ -74,7 +72,6 @@ def get_signal_time():
 
 
 def get_entry_time(signal_time):
-
     return (
         datetime.strptime(
             signal_time,
@@ -145,10 +142,6 @@ VERIFY_CONFIDENCE_THRESHOLD = 65
 
 REQUIRED_CANDLES = 3
 
-# Five candles are available only so #4 and #5
-# can act as long-candle safety guards.
-GUARD_CANDLES = 5
-
 MIN_SIGNAL_CONFIDENCE = 5
 
 MIN_DIRECTION_SEPARATION = 10
@@ -169,41 +162,68 @@ SUPPORT_RESISTANCE_TOLERANCE = 0.50
 
 
 # ============================================================
-# LONG-CANDLE SAFETY SETTINGS
+# LONG-CANDLE PROTECTION
 #
 # IMPORTANT:
-# This is based on vertical candle size.
-# It does NOT use candle width.
+# Width is NOT used to decide whether a candle is unusually
+# long.
 #
-# #1-#3 = priority candles
-# #4-#5 = safety guards only
-# ============================================================
-
-LONG_CANDLE_BODY_RATIO = 1.80
-
-LONG_CANDLE_RANGE_RATIO = 1.80
-
-LONG_CANDLE_MIN_COMPARISON = 3
-
-LONG_CANDLE_WICK_RATIO = 1.80
-
-
-# ============================================================
-# RESISTANCE / SUPPORT SAFETY SETTINGS
+# Candles #1, #2 and #3 remain the priority.
+# Candles #4 and #5 are guard candles only.
 #
-# These are price-action protections.
-# No indicators are used.
+# If an unusually long candle is found anywhere from #1 to #5,
+# the screenshot receives NO SIGNAL.
 # ============================================================
 
-RESISTANCE_ZONE_TOLERANCE = 0.30
+LONG_CANDLE_MIN_BODY_RATIO = 1.75
+LONG_CANDLE_MIN_RANGE_RATIO = 1.70
+LONG_CANDLE_MIN_ABSOLUTE_BODY_RATIO = 1.55
 
-SUPPORT_ZONE_TOLERANCE = 0.30
+LONG_CANDLE_LOOKBACK = 5
 
-MIN_ZONE_TESTS = 2
 
-RESISTANCE_WICK_RATIO = 0.80
+# ============================================================
+# RESISTANCE / SUPPORT PROTECTION
+#
+# This is based on the visible candle geometry, not candle
+# width.
+#
+# Resistance protection is mainly used against bullish signals
+# when the newest candle is pressing into / rejecting a visible
+# upper price area.
+#
+# Support protection is mainly used against bearish signals.
+# ============================================================
 
-SUPPORT_WICK_RATIO = 0.80
+LEVEL_CLUSTER_TOLERANCE = 0.30
+
+RESISTANCE_REJECTION_RATIO = 0.80
+SUPPORT_REJECTION_RATIO = 0.80
+
+LEVEL_TOUCH_TOLERANCE = 0.45
+
+LEVEL_BLOCK_SCORE = 0.70
+
+
+# ============================================================
+# SETUP GRADING
+#
+# The grade is NOT a fixed mapping such as:
+# A+ = always 3 entries.
+#
+# The grade and recommendation are calculated from the actual
+# evidence of the current screenshot.
+# ============================================================
+
+GRADE_A_PLUS_THRESHOLD = 0.72
+GRADE_A_THRESHOLD = 0.56
+GRADE_B_THRESHOLD = 0.40
+
+THREE_ENTRY_THRESHOLD = 0.78
+TWO_ENTRY_THRESHOLD = 0.57
+ONE_ENTRY_THRESHOLD = 0.25
+
+GRADE_CONFLICT_LIMIT = 35.0
 
 
 # ============================================================
@@ -767,16 +787,13 @@ def detect_right_side(
 
 
 # ============================================================
-# DETECT FIVE RIGHTMOST CANDLES
+# DETECT UP TO FIVE RIGHTMOST CANDLES
 #
-# IMPORTANT:
-# #1-#3 = actual strategy candles
-# #4-#5 = long-candle safety guards only
-#
-# No older candles are used.
+# Three are used for analysis.
+# Four and five are guard candles only.
 # ============================================================
 
-def detect_three_candles(img):
+def detect_five_candles(img):
 
     h, w = img.shape[:2]
 
@@ -829,25 +846,26 @@ def detect_three_candles(img):
         )
     )
 
-    # --------------------------------------------------------
-    # Newest/rightmost first
-    # --------------------------------------------------------
-
     candles.sort(
         key=lambda c:
         c["center_x"],
         reverse=True
     )
 
-    # --------------------------------------------------------
-    # Keep only the newest five.
-    # --------------------------------------------------------
+    return candles[:5]
 
-    five = candles[
-        :GUARD_CANDLES
-    ]
 
-    return five
+# ============================================================
+# THREE-CANDLE DETECTION
+# ============================================================
+
+def detect_three_candles(img):
+
+    candles = detect_five_candles(
+        img
+    )
+
+    return candles[:REQUIRED_CANDLES]
 
 
 # ============================================================
@@ -1027,7 +1045,7 @@ def verify_single_candle(
 # VERIFY SELECTED CANDLES
 # ============================================================
 
-def verify_selected_candles(
+def verify_candles(
     img,
     candles
 ):
@@ -1078,11 +1096,7 @@ def candle_direction(candle):
     return -1
 
 
-# ============================================================
-# ENRICH CANDLES
-# ============================================================
-
-def enrich_three_candles(
+def enrich_candles(
     img,
     candles
 ):
@@ -1236,76 +1250,47 @@ def enrich_three_candles(
 
 
 # ============================================================
-# LONG CANDLE DETECTOR
+# LONG CANDLE DETECTION
 #
-# This checks vertical size, NOT width.
+# Uses candle BODY / VISUAL RANGE, NOT WIDTH.
 #
-# #1-#3 are the priority.
-# #4-#5 are guards.
+# The current candle is compared against the other detected
+# candles in the five-candle guard window.
 # ============================================================
 
-def detect_long_candle(
+def detect_unusually_long_candle(
+    img,
     candles
 ):
 
-    if len(candles) < 3:
+    if not candles:
 
-        return (
-            True,
-            "Not enough candles for long-candle protection."
-        )
+        return None
 
-    checked = candles[
-        :GUARD_CANDLES
+    enriched = enrich_candles(
+        img,
+        candles
+    )
+
+    if len(enriched) <= 1:
+
+        return None
+
+    body_sizes = [
+        c["body_size"]
+        for c in enriched
     ]
 
-    body_sizes = []
-
-    visual_ranges = []
-
-    for candle in checked:
-
-        body_size = max(
-            1.0,
-            float(
-                candle.get(
-                    "body_size",
-                    candle.get("h", 1)
-                )
-            )
-        )
-
-        visual_range = max(
-            1.0,
-            float(
-                candle.get(
-                    "visual_range",
-                    candle.get("h", 1)
-                )
-            )
-        )
-
-        body_sizes.append(
-            body_size
-        )
-
-        visual_ranges.append(
-            visual_range
-        )
-
-    # --------------------------------------------------------
-    # Check every candle individually.
-    #
-    # Compare against the other candles rather than simply
-    # using the maximum/average, because one unusually large
-    # candle should not raise its own reference level.
-    # --------------------------------------------------------
+    range_sizes = [
+        c["visual_range"]
+        for c in enriched
+    ]
 
     for index, candle in enumerate(
-        checked
+        enriched
     ):
 
-        other_bodies = [
+        others = [
             body_sizes[i]
             for i in range(
                 len(body_sizes)
@@ -1314,82 +1299,258 @@ def detect_long_candle(
         ]
 
         other_ranges = [
-            visual_ranges[i]
+            range_sizes[i]
             for i in range(
-                len(visual_ranges)
+                len(range_sizes)
             )
             if i != index
         ]
 
-        if not other_bodies:
+        if not others:
             continue
 
-        body_reference = float(
-            np.median(
-                other_bodies
-            )
+        median_body = float(
+            np.median(others)
         )
 
-        range_reference = float(
-            np.median(
-                other_ranges
-            )
+        median_range = float(
+            np.median(other_ranges)
         )
-
-        current_body = body_sizes[
-            index
-        ]
-
-        current_range = visual_ranges[
-            index
-        ]
 
         body_ratio = safe_ratio(
-            current_body,
-            body_reference
+            candle["body_size"],
+            median_body
         )
 
         range_ratio = safe_ratio(
-            current_range,
-            range_reference
+            candle["visual_range"],
+            median_range
         )
 
-        # ----------------------------------------------------
-        # A candle is considered unusually long when its
-        # vertical body OR visual range is substantially larger
-        # than the normal candles around it.
-        #
-        # We deliberately do NOT use width.
-        # ----------------------------------------------------
+        absolute_body_ratio = safe_ratio(
+            candle["body_size"],
+            np.mean(body_sizes)
+        )
 
-        long_by_body = (
+        unusually_long = (
             body_ratio >=
-            LONG_CANDLE_BODY_RATIO
-        )
-
-        long_by_range = (
+            LONG_CANDLE_MIN_BODY_RATIO
+            and
             range_ratio >=
-            LONG_CANDLE_RANGE_RATIO
+            LONG_CANDLE_MIN_RANGE_RATIO
+        ) or (
+            body_ratio >=
+            LONG_CANDLE_MIN_ABSOLUTE_BODY_RATIO
+            and
+            range_ratio >=
+            LONG_CANDLE_MIN_ABSOLUTE_BODY_RATIO
         )
 
-        if (
-            long_by_body
-            or
-            long_by_range
-        ):
+        if unusually_long:
 
-            return (
-                True,
-                (
-                    f"Unusually long candle detected "
-                    f"at #{index + 1}."
-                )
-            )
+            return {
+                "index": index + 1,
+                "body_ratio": body_ratio,
+                "range_ratio": range_ratio,
+                "absolute_body_ratio":
+                    absolute_body_ratio
+            }
 
-    return (
-        False,
-        "No unusually long candle detected."
+    return None
+
+
+# ============================================================
+# RESISTANCE / SUPPORT ANALYSIS
+#
+# This uses ONLY the visible candle geometry.
+# ============================================================
+
+def analyze_visible_levels(
+    candles
+):
+
+    if len(candles) < 3:
+
+        return {
+            "resistance_score": 0,
+            "support_score": 0,
+            "resistance": False,
+            "support": False
+        }
+
+    c1 = candles[0]
+    c2 = candles[1]
+    c3 = candles[2]
+
+    tops = [
+        c1["visual_top"],
+        c2["visual_top"],
+        c3["visual_top"]
+    ]
+
+    bottoms = [
+        c1["visual_bottom"],
+        c2["visual_bottom"],
+        c3["visual_bottom"]
+    ]
+
+    ranges = [
+        c1["visual_range"],
+        c2["visual_range"],
+        c3["visual_range"]
+    ]
+
+    typical_range = max(
+        1.0,
+        float(
+            np.median(ranges)
+        )
     )
+
+    highest_top = min(
+        tops
+    )
+
+    lowest_bottom = max(
+        bottoms
+    )
+
+    top_touches = 0
+    bottom_touches = 0
+
+    top_tolerance = max(
+        3.0,
+        typical_range *
+        LEVEL_CLUSTER_TOLERANCE
+    )
+
+    bottom_tolerance = max(
+        3.0,
+        typical_range *
+        LEVEL_CLUSTER_TOLERANCE
+    )
+
+    for top in tops:
+
+        if abs(
+            top -
+            highest_top
+        ) <= top_tolerance:
+
+            top_touches += 1
+
+    for bottom in bottoms:
+
+        if abs(
+            bottom -
+            lowest_bottom
+        ) <= bottom_tolerance:
+
+            bottom_touches += 1
+
+    newest_upper_rejection = (
+        c1[
+            "upper_rejection_ratio"
+        ]
+    )
+
+    newest_lower_rejection = (
+        c1[
+            "lower_rejection_ratio"
+        ]
+    )
+
+    newest_range = max(
+        1.0,
+        c1["visual_range"]
+    )
+
+    newest_near_resistance = (
+        abs(
+            c1["visual_top"] -
+            highest_top
+        )
+        <=
+        newest_range *
+        LEVEL_TOUCH_TOLERANCE
+    )
+
+    newest_near_support = (
+        abs(
+            c1["visual_bottom"] -
+            lowest_bottom
+        )
+        <=
+        newest_range *
+        LEVEL_TOUCH_TOLERANCE
+    )
+
+    resistance_score = 0.0
+
+    if top_touches >= 2:
+        resistance_score += 0.35
+
+    if newest_near_resistance:
+        resistance_score += 0.20
+
+    if newest_upper_rejection >= (
+        RESISTANCE_REJECTION_RATIO
+    ):
+        resistance_score += 0.35
+
+    if (
+        c1["color"] == "YELLOW"
+        and
+        newest_near_resistance
+    ):
+        resistance_score += 0.15
+
+    support_score = 0.0
+
+    if bottom_touches >= 2:
+        support_score += 0.35
+
+    if newest_near_support:
+        support_score += 0.20
+
+    if newest_lower_rejection >= (
+        SUPPORT_REJECTION_RATIO
+    ):
+        support_score += 0.35
+
+    if (
+        c1["color"] == "PURPLE"
+        and
+        newest_near_support
+    ):
+        support_score += 0.15
+
+    resistance_score = min(
+        1.0,
+        resistance_score
+    )
+
+    support_score = min(
+        1.0,
+        support_score
+    )
+
+    return {
+
+        "resistance_score":
+            resistance_score,
+
+        "support_score":
+            support_score,
+
+        "resistance":
+            resistance_score >=
+            LEVEL_BLOCK_SCORE,
+
+        "support":
+            support_score >=
+            LEVEL_BLOCK_SCORE
+    }
 
 
 # ============================================================
@@ -1718,9 +1879,6 @@ def analyze_structure(candles):
     bullish_points = 0
     bearish_points = 0
 
-    # Smaller Y = higher price.
-    # Larger Y = lower price.
-
     if c1["visual_top"] < c2["visual_top"]:
         bullish_points += 1
 
@@ -1912,7 +2070,6 @@ def analyze_reversal(candles):
     )
 
     b1 = candles[0]["body_size"]
-    b2 = candles[1]["body_size"]
     b3 = candles[2]["body_size"]
 
     bullish_reversal = (
@@ -2128,286 +2285,68 @@ def analyze_failed_breakout(candles):
 
 
 # ============================================================
-# SUPPORT / RESISTANCE DANGER ZONE
-#
-# Uses ONLY the three priority candles.
-#
-# BUY near repeated resistance can be blocked.
-# SELL near repeated support can be blocked.
+# SUPPORT / RESISTANCE INTERACTION
 # ============================================================
 
 def analyze_support_resistance(candles):
 
     newest = candles[0]
     previous = candles[1]
-    third = candles[2]
 
-    newest_direction = candle_direction(
-        newest
+    tolerance = max(
+        5,
+        previous["visual_range"] *
+        SUPPORT_RESISTANCE_TOLERANCE
     )
-
-    # --------------------------------------------------------
-    # Visual highs and lows.
-    #
-    # Smaller Y = higher price.
-    # Larger Y = lower price.
-    # --------------------------------------------------------
-
-    highs = [
-        float(c["visual_top"])
-        for c in candles
-    ]
-
-    lows = [
-        float(c["visual_bottom"])
-        for c in candles
-    ]
-
-    newest_high = highs[0]
-    newest_low = lows[0]
-
-    # --------------------------------------------------------
-    # Average visual range.
-    # --------------------------------------------------------
-
-    average_range = float(
-        np.mean([
-            max(
-                1.0,
-                float(
-                    c["visual_range"]
-                )
-            )
-            for c in candles
-        ])
-    )
-
-    resistance_tolerance = max(
-        3.0,
-        average_range *
-        RESISTANCE_ZONE_TOLERANCE
-    )
-
-    support_tolerance = max(
-        3.0,
-        average_range *
-        SUPPORT_ZONE_TOLERANCE
-    )
-
-    # --------------------------------------------------------
-    # Resistance = highest-price area
-    # Smaller Y is higher.
-    # --------------------------------------------------------
-
-    resistance_level = min(
-        highs
-    )
-
-    resistance_tests = sum(
-        1
-        for high in highs
-        if abs(
-            high -
-            resistance_level
-        ) <=
-        resistance_tolerance
-    )
-
-    # --------------------------------------------------------
-    # Support = lowest-price area
-    # Larger Y is lower.
-    # --------------------------------------------------------
-
-    support_level = max(
-        lows
-    )
-
-    support_tests = sum(
-        1
-        for low in lows
-        if abs(
-            low -
-            support_level
-        ) <=
-        support_tolerance
-    )
-
-    # --------------------------------------------------------
-    # Latest candle rejection.
-    # --------------------------------------------------------
-
-    upper_rejection = (
-        newest[
-            "upper_rejection_ratio"
-        ]
-        >= RESISTANCE_WICK_RATIO
-    )
-
-    lower_rejection = (
-        newest[
-            "lower_rejection_ratio"
-        ]
-        >= SUPPORT_WICK_RATIO
-    )
-
-    # --------------------------------------------------------
-    # Is newest candle at resistance?
-    # --------------------------------------------------------
-
-    at_resistance = (
-        abs(
-            newest_high -
-            resistance_level
-        )
-        <=
-        resistance_tolerance
-    )
-
-    # --------------------------------------------------------
-    # Is newest candle at support?
-    # --------------------------------------------------------
-
-    at_support = (
-        abs(
-            newest_low -
-            support_level
-        )
-        <=
-        support_tolerance
-    )
-
-    # --------------------------------------------------------
-    # BUY RESISTANCE DANGER
-    #
-    # A BUY is blocked when:
-    #
-    # - price is at a repeated resistance area
-    # AND
-    # - there is rejection OR the candle is pushing into
-    #   the resistance area without clear clean separation.
-    # --------------------------------------------------------
-
-    bullish_resistance_danger = (
-        newest_direction == 1
-        and
-        at_resistance
-        and
-        resistance_tests >= MIN_ZONE_TESTS
-        and
-        (
-            upper_rejection
-            or
-            (
-                newest["visual_top"]
-                >=
-                resistance_level
-            )
-        )
-    )
-
-    # --------------------------------------------------------
-    # SELL SUPPORT DANGER
-    # --------------------------------------------------------
-
-    bearish_support_danger = (
-        newest_direction == -1
-        and
-        at_support
-        and
-        support_tests >= MIN_ZONE_TESTS
-        and
-        (
-            lower_rejection
-            or
-            (
-                newest["visual_bottom"]
-                <=
-                support_level
-            )
-        )
-    )
-
-    if bullish_resistance_danger:
-
-        return {
-            "score": -1.0,
-            "label":
-                "BUY BLOCKED — RESISTANCE ZONE",
-            "danger": True,
-            "resistance_tests":
-                resistance_tests,
-            "support_tests":
-                support_tests
-        }
-
-    if bearish_support_danger:
-
-        return {
-            "score": 1.0,
-            "label":
-                "SELL BLOCKED — SUPPORT ZONE",
-            "danger": True,
-            "resistance_tests":
-                resistance_tests,
-            "support_tests":
-                support_tests
-        }
-
-    # --------------------------------------------------------
-    # Normal support rejection.
-    # --------------------------------------------------------
 
     bullish_rejection = (
-        newest_direction == 1
+        newest["color"] == "PURPLE"
         and
-        lower_rejection
+        newest[
+            "lower_rejection_ratio"
+        ] >= WICK_REJECTION_RATIO
+        and
+        abs(
+            newest["visual_bottom"]
+            -
+            previous["visual_bottom"]
+        ) <= tolerance
     )
 
-    # --------------------------------------------------------
-    # Normal resistance rejection.
-    # --------------------------------------------------------
-
     bearish_rejection = (
-        newest_direction == -1
+        newest["color"] == "YELLOW"
         and
-        upper_rejection
+        newest[
+            "upper_rejection_ratio"
+        ] >= WICK_REJECTION_RATIO
+        and
+        abs(
+            newest["visual_top"]
+            -
+            previous["visual_top"]
+        ) <= tolerance
     )
 
     if bullish_rejection:
 
         return {
-            "score": 0.65,
+            "score": 0.80,
             "label":
-                "SUPPORT REJECTION",
-            "danger": False,
-            "resistance_tests":
-                resistance_tests,
-            "support_tests":
-                support_tests
+                "SUPPORT REJECTION"
         }
 
     if bearish_rejection:
 
         return {
-            "score": -0.65,
+            "score": -0.80,
             "label":
-                "RESISTANCE REJECTION",
-            "danger": False,
-            "resistance_tests":
-                resistance_tests,
-            "support_tests":
-                support_tests
+                "RESISTANCE REJECTION"
         }
 
     return {
         "score": 0,
         "label":
-            "NO CLEAR LEVEL INTERACTION",
-        "danger": False,
-        "resistance_tests":
-            resistance_tests,
-        "support_tests":
-            support_tests
+            "NO CLEAR LEVEL INTERACTION"
     }
 
 
@@ -2742,6 +2681,313 @@ def analyze_conflict(
 
 
 # ============================================================
+# SETUP GRADE + ENTRY RECOMMENDATION
+#
+# This is deliberately evidence-based.
+#
+# It does NOT force:
+# A+ = 3
+# A  = 2
+# B  = 1
+#
+# The actual evidence determines the recommendation.
+# ============================================================
+
+def grade_setup(
+    decision,
+    confidence,
+    separation,
+    conflict,
+    sequence,
+    structure,
+    momentum,
+    pullback,
+    reversal,
+    breakout,
+    failed_breakout,
+    support_resistance,
+    compression,
+    exhaustion,
+    choppiness,
+    control,
+    quality,
+    visible_levels
+):
+
+    if decision not in (
+        "BUY",
+        "SELL"
+    ):
+
+        return {
+            "grade": None,
+            "recommended_entries": 0,
+            "grade_score": 0
+        }
+
+    direction = (
+        1
+        if decision == "BUY"
+        else -1
+    )
+
+    directional_values = [
+
+        sequence["score"] * direction,
+
+        structure["score"] * direction,
+
+        momentum * direction,
+
+        pullback["score"] * direction,
+
+        reversal["score"] * direction,
+
+        breakout["score"] * direction,
+
+        failed_breakout["score"] * direction,
+
+        support_resistance["score"] * direction,
+
+        control * direction,
+
+        quality,
+
+    ]
+
+    positive_values = [
+        max(
+            0.0,
+            min(
+                1.0,
+                value
+            )
+        )
+        for value in directional_values
+    ]
+
+    evidence_quality = float(
+        np.mean(
+            positive_values
+        )
+    )
+
+    confidence_factor = max(
+        0.0,
+        min(
+            1.0,
+            confidence / 100.0
+        )
+    )
+
+    separation_factor = max(
+        0.0,
+        min(
+            1.0,
+            separation / 100.0
+        )
+    )
+
+    conflict_factor = max(
+        0.0,
+        min(
+            1.0,
+            1.0 -
+            (
+                conflict["severity"] /
+                100.0
+            )
+        )
+    )
+
+    sequence_bonus = (
+        0.10
+        if (
+            sequence["label"]
+            in (
+                "3-CANDLE BULLISH",
+                "3-CANDLE BEARISH"
+            )
+        )
+        else 0.0
+    )
+
+    structure_bonus = (
+        0.08
+        if (
+            (
+                decision == "BUY"
+                and
+                structure["label"]
+                == "BULLISH HH/HL"
+            )
+            or
+            (
+                decision == "SELL"
+                and
+                structure["label"]
+                == "BEARISH LH/LL"
+            )
+        )
+        else 0.0
+    )
+
+    continuation_bonus = (
+        0.08
+        if (
+            (
+                decision == "BUY"
+                and
+                pullback["label"]
+                in (
+                    "BULLISH CONTINUATION",
+                    "BULLISH PULLBACK RECOVERY"
+                )
+            )
+            or
+            (
+                decision == "SELL"
+                and
+                pullback["label"]
+                in (
+                    "BEARISH CONTINUATION",
+                    "BEARISH PULLBACK RECOVERY"
+                )
+            )
+        )
+        else 0.0
+    )
+
+    level_penalty = 0.0
+
+    if decision == "BUY":
+
+        level_penalty = (
+            visible_levels[
+                "resistance_score"
+            ] * 0.25
+        )
+
+    else:
+
+        level_penalty = (
+            visible_levels[
+                "support_score"
+            ] * 0.25
+        )
+
+    grade_score = (
+        evidence_quality * 0.32
+        +
+        confidence_factor * 0.22
+        +
+        separation_factor * 0.16
+        +
+        conflict_factor * 0.15
+        +
+        sequence_bonus
+        +
+        structure_bonus
+        +
+        continuation_bonus
+        -
+        level_penalty
+    )
+
+    grade_score = max(
+        0.0,
+        min(
+            1.0,
+            grade_score
+        )
+    )
+
+    # --------------------------------------------------------
+    # Grade
+    # --------------------------------------------------------
+
+    if (
+        grade_score >=
+        GRADE_A_PLUS_THRESHOLD
+    ):
+
+        grade = "A+"
+
+    elif (
+        grade_score >=
+        GRADE_A_THRESHOLD
+    ):
+
+        grade = "A"
+
+    elif (
+        grade_score >=
+        GRADE_B_THRESHOLD
+    ):
+
+        grade = "B"
+
+    else:
+
+        grade = "C"
+
+    # --------------------------------------------------------
+    # Recommendation
+    #
+    # 3 entries only when the actual setup is exceptionally
+    # strong.
+    # --------------------------------------------------------
+
+    if (
+        grade_score >=
+        THREE_ENTRY_THRESHOLD
+        and
+        conflict["severity"] <
+        GRADE_CONFLICT_LIMIT
+        and
+        separation >= 25
+        and
+        evidence_quality >= 0.65
+        and
+        quality >= 0.35
+    ):
+
+        recommended_entries = 3
+
+    elif (
+        grade_score >=
+        TWO_ENTRY_THRESHOLD
+        and
+        conflict["severity"] <
+        50
+        and
+        separation >= 15
+    ):
+
+        recommended_entries = 2
+
+    elif (
+        grade_score >=
+        ONE_ENTRY_THRESHOLD
+    ):
+
+        recommended_entries = 1
+
+    else:
+
+        recommended_entries = 1
+
+    return {
+        "grade":
+            grade,
+        "recommended_entries":
+            recommended_entries,
+        "grade_score":
+            grade_score
+    }
+
+
+# ============================================================
 # FINAL THREE-CANDLE ANALYSIS
 # ============================================================
 
@@ -2759,59 +3005,19 @@ def analyze_three_candles(
             "reason":
                 "Exactly three candles are required.",
             "buy_score": 0,
-            "sell_score": 0
+            "sell_score": 0,
+            "sequence":
+                {
+                    "score": 0,
+                    "label": "INSUFFICIENT",
+                    "changes": 0
+                }
         }
 
-    candles = enrich_three_candles(
+    candles = enrich_candles(
         img,
         candles
     )
-
-    # --------------------------------------------------------
-    # LONG-CANDLE SAFETY FILTER
-    #
-    # This is checked AGAIN after visual enrichment.
-    # The three priority candles must never be allowed
-    # through if one is unusually long.
-    #
-    # This second check uses only the three strategy candles.
-    # --------------------------------------------------------
-
-    long_candle, long_reason = (
-        detect_long_candle(
-            candles
-        )
-    )
-
-    if long_candle:
-
-        return {
-
-            "decision":
-                "NO TRADE",
-
-            "confidence":
-                0,
-
-            "reason":
-                long_reason,
-
-            "buy_score":
-                0,
-
-            "sell_score":
-                0,
-
-            "candles_used":
-                3,
-
-            "long_candle":
-                True
-        }
-
-    # --------------------------------------------------------
-    # ALL ANALYSIS IS DONE ONLY ON THESE THREE
-    # --------------------------------------------------------
 
     sequence = analyze_sequence(
         candles
@@ -2877,46 +3083,6 @@ def analyze_three_candles(
         )
     )
 
-    # --------------------------------------------------------
-    # HARD RESISTANCE / SUPPORT PROTECTION
-    #
-    # This happens before the evidence can override it.
-    # --------------------------------------------------------
-
-    if support_resistance.get(
-        "danger",
-        False
-    ):
-
-        return {
-
-            "decision":
-                "NO TRADE",
-
-            "confidence":
-                0,
-
-            "reason":
-                support_resistance[
-                    "label"
-                ],
-
-            "buy_score":
-                0,
-
-            "sell_score":
-                0,
-
-            "candles_used":
-                3,
-
-            "long_candle":
-                False,
-
-            "support_resistance":
-                support_resistance
-        }
-
     compression = (
         analyze_compression_expansion(
             candles
@@ -2943,6 +3109,12 @@ def analyze_three_candles(
 
     quality = (
         analyze_candle_quality(
+            candles
+        )
+    )
+
+    visible_levels = (
+        analyze_visible_levels(
             candles
         )
     )
@@ -2986,10 +3158,6 @@ def analyze_three_candles(
         ) * quality * 0.75
     ]
 
-    # --------------------------------------------------------
-    # TOTAL RAW EVIDENCE
-    # --------------------------------------------------------
-
     raw_score = sum(
         evidence
     )
@@ -2997,10 +3165,6 @@ def analyze_three_candles(
     raw_score /= len(
         evidence
     )
-
-    # --------------------------------------------------------
-    # EXTRA NEWEST-CANDLE WEIGHT
-    # --------------------------------------------------------
 
     newest_direction = (
         candle_direction(
@@ -3028,25 +3192,13 @@ def analyze_three_candles(
         )
     )
 
-    # --------------------------------------------------------
-    # CONFLICT
-    # --------------------------------------------------------
-
     conflict = analyze_conflict(
         evidence
     )
 
-    # --------------------------------------------------------
-    # CHOP PROTECTION
-    # --------------------------------------------------------
-
     if choppiness["choppy"]:
 
         raw_score *= 0.45
-
-    # --------------------------------------------------------
-    # COMPRESSION PROTECTION
-    # --------------------------------------------------------
 
     if (
         compression["state"]
@@ -3055,10 +3207,6 @@ def analyze_three_candles(
     ):
 
         raw_score *= 0.65
-
-    # --------------------------------------------------------
-    # EXHAUSTION PROTECTION
-    # --------------------------------------------------------
 
     if (
         exhaustion["score"] != 0
@@ -3074,10 +3222,6 @@ def analyze_three_candles(
 
         raw_score *= 0.55
 
-    # --------------------------------------------------------
-    # CONFLICT PROTECTION
-    # --------------------------------------------------------
-
     if (
         conflict["severity"]
         >= MAX_CONFLICT
@@ -3091,10 +3235,6 @@ def analyze_three_candles(
     ):
 
         raw_score *= 0.75
-
-    # --------------------------------------------------------
-    # BUY / SELL SCORES
-    # --------------------------------------------------------
 
     buy_score = 0.0
     sell_score = 0.0
@@ -3113,18 +3253,10 @@ def analyze_three_candles(
             100
         )
 
-    # --------------------------------------------------------
-    # DIRECTIONAL SEPARATION
-    # --------------------------------------------------------
-
     separation = abs(
         buy_score -
         sell_score
     )
-
-    # --------------------------------------------------------
-    # SIDEWAYS / UNCERTAIN PROTECTION
-    # --------------------------------------------------------
 
     sideways = (
         choppiness["choppy"]
@@ -3132,6 +3264,213 @@ def analyze_three_candles(
         abs(raw_score) <
         MIN_FINAL_EVIDENCE
     )
+
+    # --------------------------------------------------------
+    # RESISTANCE / SUPPORT BLOCK
+    #
+    # This is a protection, not a replacement for the main
+    # three-candle engine.
+    # --------------------------------------------------------
+
+    if (
+        raw_score > 0
+        and
+        visible_levels[
+            "resistance_score"
+        ] >= LEVEL_BLOCK_SCORE
+    ):
+
+        decision = "NO TRADE"
+
+        confidence = 0
+
+        reason = (
+            "BUY BLOCKED — RESISTANCE ZONE"
+        )
+
+        return {
+
+            "decision":
+                decision,
+
+            "confidence":
+                confidence,
+
+            "reason":
+                reason,
+
+            "buy_score":
+                buy_score,
+
+            "sell_score":
+                sell_score,
+
+            "separation":
+                separation,
+
+            "conflict":
+                conflict,
+
+            "sequence":
+                sequence,
+
+            "progression":
+                progression,
+
+            "momentum":
+                momentum,
+
+            "rejection":
+                rejection,
+
+            "engulfing":
+                engulfing,
+
+            "structure":
+                structure,
+
+            "pullback":
+                pullback,
+
+            "reversal":
+                reversal,
+
+            "breakout":
+                breakout,
+
+            "failed_breakout":
+                failed_breakout,
+
+            "support_resistance":
+                support_resistance,
+
+            "compression":
+                compression,
+
+            "exhaustion":
+                exhaustion,
+
+            "choppiness":
+                choppiness,
+
+            "control":
+                control,
+
+            "candle_quality":
+                quality,
+
+            "visible_levels":
+                visible_levels,
+
+            "setup_grade":
+                None,
+
+            "recommended_entries":
+                0,
+
+            "candles_used":
+                3
+        }
+
+    if (
+        raw_score < 0
+        and
+        visible_levels[
+            "support_score"
+        ] >= LEVEL_BLOCK_SCORE
+    ):
+
+        decision = "NO TRADE"
+
+        confidence = 0
+
+        reason = (
+            "SELL BLOCKED — SUPPORT ZONE"
+        )
+
+        return {
+
+            "decision":
+                decision,
+
+            "confidence":
+                confidence,
+
+            "reason":
+                reason,
+
+            "buy_score":
+                buy_score,
+
+            "sell_score":
+                sell_score,
+
+            "separation":
+                separation,
+
+            "conflict":
+                conflict,
+
+            "sequence":
+                sequence,
+
+            "progression":
+                progression,
+
+            "momentum":
+                momentum,
+
+            "rejection":
+                rejection,
+
+            "engulfing":
+                engulfing,
+
+            "structure":
+                structure,
+
+            "pullback":
+                pullback,
+
+            "reversal":
+                reversal,
+
+            "breakout":
+                breakout,
+
+            "failed_breakout":
+                failed_breakout,
+
+            "support_resistance":
+                support_resistance,
+
+            "compression":
+                compression,
+
+            "exhaustion":
+                exhaustion,
+
+            "choppiness":
+                choppiness,
+
+            "control":
+                control,
+
+            "candle_quality":
+                quality,
+
+            "visible_levels":
+                visible_levels,
+
+            "setup_grade":
+                None,
+
+            "recommended_entries":
+                0,
+
+            "candles_used":
+                3
+        }
 
     # --------------------------------------------------------
     # FINAL DECISION
@@ -3273,8 +3612,47 @@ def analyze_three_candles(
     )
 
     # --------------------------------------------------------
-    # RETURN COMPLETE ANALYSIS
+    # SETUP GRADE
     # --------------------------------------------------------
+
+    grade_info = grade_setup(
+
+        decision,
+
+        confidence,
+
+        separation,
+
+        conflict,
+
+        sequence,
+
+        structure,
+
+        momentum,
+
+        pullback,
+
+        reversal,
+
+        breakout,
+
+        failed_breakout,
+
+        support_resistance,
+
+        compression,
+
+        exhaustion,
+
+        choppiness,
+
+        control,
+
+        quality,
+
+        visible_levels
+    )
 
     return {
 
@@ -3347,16 +3725,29 @@ def analyze_three_candles(
         "candle_quality":
             quality,
 
-        "candles_used":
-            3,
+        "visible_levels":
+            visible_levels,
 
-        "long_candle":
-            False
+        "setup_grade":
+            grade_info["grade"],
+
+        "recommended_entries":
+            grade_info[
+                "recommended_entries"
+            ],
+
+        "grade_score":
+            grade_info[
+                "grade_score"
+            ],
+
+        "candles_used":
+            3
     }
 
 
 # ============================================================
-# CREATE DETECTION MAP
+# CREATE THREE-CANDLE DETECTION MAP
 # ============================================================
 
 def create_detection_map(
@@ -3387,15 +3778,9 @@ def create_detection_map(
             candle["h"]
         )
 
-        verification = candle.get(
-            "verification",
-            {}
-        )
-
-        verified = verification.get(
-            "verified",
-            False
-        )
+        verified = candle[
+            "verification"
+        ]["verified"]
 
         if verified:
 
@@ -3481,13 +3866,9 @@ def handle_photo(message):
 
     try:
 
-        # ----------------------------------------------------
-        # ANALYZING MESSAGE
-        # ----------------------------------------------------
-
         bot.send_message(
             message.chat.id,
-            "🔍 Analyzing 3 priority candles..."
+            "🔍 Analyzing 3 candles..."
         )
 
         # ----------------------------------------------------
@@ -3522,14 +3903,14 @@ def handle_photo(message):
         )
 
         # ----------------------------------------------------
-        # DETECT FIVE NEWEST CANDLES
+        # DETECT UP TO FIVE
         #
-        # #1-#3 = strategy
+        # #1-#3 = priority
         # #4-#5 = long-candle guards
         # ----------------------------------------------------
 
         five_candles = (
-            detect_three_candles(
+            detect_five_candles(
                 img
             )
         )
@@ -3539,12 +3920,12 @@ def handle_photo(message):
         )
 
         print(
-            f"Detected rightmost candles: "
+            f"Detected right-side candles: "
             f"{detected_count}"
         )
 
         # ----------------------------------------------------
-        # MUST HAVE AT LEAST THREE
+        # MUST HAVE THREE PRIORITY CANDLES
         # ----------------------------------------------------
 
         if detected_count < 3:
@@ -3562,84 +3943,67 @@ def handle_photo(message):
             return
 
         # ----------------------------------------------------
-        # VERIFY THE FIVE DETECTED CANDLES
-        #
-        # Verification is used for the long-candle guards
-        # and the three priority candles.
+        # VERIFY FIVE-CANDLE WINDOW
         # ----------------------------------------------------
 
         verified_five = (
-            verify_selected_candles(
+            verify_candles(
                 img,
                 five_candles
             )
         )
 
         # ----------------------------------------------------
-        # LONG-CANDLE SAFETY CHECK
+        # LONG CANDLE CHECK
         #
-        # This happens BEFORE the strategy.
-        #
-        # If #1, #2, #3, #4 or #5 is unusually long,
-        # there is NO SIGNAL.
+        # This is performed BEFORE the normal signal engine.
+        # If #1-#5 contains an unusually long candle, stop.
         # ----------------------------------------------------
 
-        long_candle, long_reason = (
-            detect_long_candle(
+        long_candle = (
+            detect_unusually_long_candle(
+                img,
                 verified_five
             )
         )
 
-        if long_candle:
+        if long_candle is not None:
+
+            candle_number = (
+                long_candle["index"]
+            )
 
             bot.send_message(
                 message.chat.id,
                 (
                     "⚪ **NO SIGNAL — DON'T TRADE**\n\n"
-                    f"🚫 {long_reason}\n\n"
-                    "Long candles are automatically "
-                    "excluded from signals."
+                    f"🚫 **Unusually long candle "
+                    f"detected at #{candle_number}.**"
                 ),
                 parse_mode="Markdown"
             )
 
-            # Create local map only.
-            detection_map = (
-                create_detection_map(
-                    img,
-                    verified_five
-                )
-            )
-
-            cv2.imwrite(
-                detection_path,
-                detection_map
-            )
-
             print(
-                "🚫 NO SIGNAL:",
-                long_reason
+                f"🚫 Long candle detected at "
+                f"#{candle_number}. "
+                f"Signal blocked."
             )
 
             return
 
         # ----------------------------------------------------
-        # ONLY THE THREE NEWEST CANDLES ENTER THE STRATEGY
+        # ONLY THE THREE PRIORITY CANDLES ENTER THE ENGINE
         # ----------------------------------------------------
 
-        priority_three = (
+        verified_three = (
             verified_five[:3]
         )
 
-        # ----------------------------------------------------
-        # ALL THREE PRIORITY CANDLES MUST BE VERIFIED
-        #
-        # Do not substitute #4 or #5.
-        # ----------------------------------------------------
-
         analysis_candles = []
 
-        for candle in priority_three:
+        for candle in (
+            verified_three
+        ):
 
             if candle[
                 "verification"
@@ -3649,6 +4013,10 @@ def handle_photo(message):
                     candle
                 )
 
+        # ----------------------------------------------------
+        # DO NOT SUBSTITUTE OLDER CANDLES
+        # ----------------------------------------------------
+
         if len(
             analysis_candles
         ) != 3:
@@ -3657,7 +4025,7 @@ def handle_photo(message):
                 message.chat.id,
                 (
                     "⚪ **NO SIGNAL — DON'T TRADE**\n\n"
-                    "The three priority candles "
+                    "The three selected candles "
                     "could not all be verified."
                 ),
                 parse_mode="Markdown"
@@ -3689,7 +4057,7 @@ def handle_photo(message):
         )
 
         # ----------------------------------------------------
-        # SIGNAL
+        # BUY
         # ----------------------------------------------------
 
         if decision == "BUY":
@@ -3704,11 +4072,23 @@ def handle_photo(message):
                 )
             )
 
+            grade = (
+                analysis[
+                    "setup_grade"
+                ]
+            )
+
+            recommended_entries = (
+                analysis[
+                    "recommended_entries"
+                ]
+            )
+
             response = (
 
                 "🚨 **SIGNAL ALERT**\n\n"
 
-                "🟢 **BUY**\n"
+                "🟢 **BUY**\n\n"
 
                 f"🕐 **Signal Time:** "
                 f"{signal_time} 🇳🇬\n"
@@ -3716,10 +4096,18 @@ def handle_photo(message):
                 f"🎯 **Entry Time:** "
                 f"{entry_time} 🇳🇬\n"
 
-                "⏱️ **Expiry:** 15 Seconds\n"
+                "⏱️ **Expiry:** 15 Seconds\n\n"
 
                 f"💪 **Strength:** "
-                f"{confidence:.0f}%\n\n"
+                f"{confidence:.0f}%\n"
+
+                f"🏆 **Setup Grade:** "
+                f"{grade}\n"
+
+                f"🎯 **Recommended:** "
+                f"{recommended_entries} "
+                f"entry"
+                f"{'s' if recommended_entries != 1 else ''}\n\n"
 
                 f"• {reason}"
             )
@@ -3733,6 +4121,10 @@ def handle_photo(message):
             send_to_channel(
                 response
             )
+
+        # ----------------------------------------------------
+        # SELL
+        # ----------------------------------------------------
 
         elif decision == "SELL":
 
@@ -3746,11 +4138,23 @@ def handle_photo(message):
                 )
             )
 
+            grade = (
+                analysis[
+                    "setup_grade"
+                ]
+            )
+
+            recommended_entries = (
+                analysis[
+                    "recommended_entries"
+                ]
+            )
+
             response = (
 
                 "🚨 **SIGNAL ALERT**\n\n"
 
-                "🔴 **SELL**\n"
+                "🔴 **SELL**\n\n"
 
                 f"🕐 **Signal Time:** "
                 f"{signal_time} 🇳🇬\n"
@@ -3758,10 +4162,18 @@ def handle_photo(message):
                 f"🎯 **Entry Time:** "
                 f"{entry_time} 🇳🇬\n"
 
-                "⏱️ **Expiry:** 15 Seconds\n"
+                "⏱️ **Expiry:** 15 Seconds\n\n"
 
                 f"💪 **Strength:** "
-                f"{confidence:.0f}%\n\n"
+                f"{confidence:.0f}%\n"
+
+                f"🏆 **Setup Grade:** "
+                f"{grade}\n"
+
+                f"🎯 **Recommended:** "
+                f"{recommended_entries} "
+                f"entry"
+                f"{'s' if recommended_entries != 1 else ''}\n\n"
 
                 f"• {reason}"
             )
@@ -3775,6 +4187,12 @@ def handle_photo(message):
             send_to_channel(
                 response
             )
+
+        # ----------------------------------------------------
+        # NO TRADE
+        #
+        # No grade or entry recommendation is added here.
+        # ----------------------------------------------------
 
         else:
 
@@ -3796,7 +4214,7 @@ def handle_photo(message):
         detection_map = (
             create_detection_map(
                 img,
-                verified_five
+                verified_three
             )
         )
 
@@ -3808,32 +4226,18 @@ def handle_photo(message):
         print(
             f"✅ Processed in "
             f"{time.time() - start_time:.2f}s"
-            f" | 3 strategy candles"
-            f" | 2 guard candles"
+            f" | 3 priority candles used"
             f" | Decision: {decision}"
             f" | Confidence: "
             f"{confidence:.1f}%"
         )
 
         print(
-            "Priority candle sequence:",
+            "Candle sequence:",
             [
                 c["color"]
                 for c in analysis_candles
             ]
-        )
-
-        print(
-            "Strategy candles used:",
-            3
-        )
-
-        print(
-            "Guard candles checked:",
-            max(
-                0,
-                len(verified_five) - 3
-            )
         )
 
         print(
@@ -3863,13 +4267,6 @@ def handle_photo(message):
         )
 
         print(
-            "Support/Resistance:",
-            analysis[
-                "support_resistance"
-            ]["label"]
-        )
-
-        print(
             "Conflict:",
             round(
                 analysis["conflict"]["severity"],
@@ -3877,10 +4274,36 @@ def handle_photo(message):
             )
         )
 
+        if decision in (
+            "BUY",
+            "SELL"
+        ):
+
+            print(
+                "Setup Grade:",
+                analysis[
+                    "setup_grade"
+                ]
+            )
+
+            print(
+                "Recommended entries:",
+                analysis[
+                    "recommended_entries"
+                ]
+            )
+
     except Exception as e:
 
+        # ----------------------------------------------------
+        # IMPORTANT:
+        # NEVER expose Python exception text to Telegram.
+        # The user gets a clean no-signal message instead.
+        # Technical details stay in the server log only.
+        # ----------------------------------------------------
+
         print(
-            "❌ ERROR:",
+            "❌ INTERNAL ERROR:",
             repr(e)
         )
 
@@ -3888,7 +4311,11 @@ def handle_photo(message):
 
             bot.send_message(
                 message.chat.id,
-                f"❌ Error: {str(e)}"
+                (
+                    "⚪ **NO SIGNAL — DON'T TRADE**\n\n"
+                    "• Analysis could not be completed."
+                ),
+                parse_mode="Markdown"
             )
 
         except Exception:
@@ -3932,16 +4359,26 @@ def start(message):
 
         "Send a screenshot.\n\n"
 
-        "The bot detects the newest "
-        "candles, with the newest 3 "
-        "used for the actual strategy.\n\n"
+        "The bot detects the rightmost "
+        "candles.\n\n"
 
-        "🟣 Purple / 🟡 Yellow detection\n"
-        "🔬 Deep 3-candle analysis\n"
-        "🚫 Long candles blocked\n"
-        "🚫 Resistance/support danger protected\n"
-        "⏱️ 15-second test\n"
-        "🚫 Older candles excluded\n\n"
+        "🕯️ The newest 3 candles are "
+        "the analysis priority.\n"
+
+        "🛡️ Candles #4 and #5 are "
+        "long-candle guard candles.\n"
+
+        "🚫 Long candles are blocked.\n"
+
+        "🚫 Dangerous visible levels are blocked.\n"
+
+        "🔬 Deep 3-candle price-action analysis\n"
+
+        "🏆 Setup grading\n"
+
+        "🎯 1 / 2 / 3 entry recommendation\n"
+
+        "⏱️ 15-second test\n\n"
 
         "⚡ **BUY / SELL / NO TRADE**",
 
@@ -3981,19 +4418,11 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ LONG CANDLES BLOCKED"
+        "✅ LONG CANDLE = NO SIGNAL"
     )
 
     print(
-        "✅ RESISTANCE ZONE PROTECTION"
-    )
-
-    print(
-        "✅ SUPPORT ZONE PROTECTION"
-    )
-
-    print(
-        "✅ OLDER CANDLES EXCLUDED"
+        "✅ RESISTANCE / SUPPORT PROTECTION"
     )
 
     print(
@@ -4001,7 +4430,15 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ DEEP 3-CANDLE ANALYSIS"
+        "✅ DEEP 3-CANDLE PRICE ACTION"
+    )
+
+    print(
+        "✅ SETUP GRADING"
+    )
+
+    print(
+        "✅ 1 / 2 / 3 ENTRY RECOMMENDATION"
     )
 
     print(
@@ -4013,7 +4450,11 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ SIGNALS SENT TO CHANNEL"
+        "✅ TELEGRAM SIGNALS"
+    )
+
+    print(
+        "✅ TECHNICAL ERRORS HIDDEN FROM USER"
     )
 
     print(
