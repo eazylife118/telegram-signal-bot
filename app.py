@@ -165,21 +165,12 @@ SUPPORT_RESISTANCE_TOLERANCE = 0.50
 
 def send_to_channel(message):
 
-    url = (
-        f"https://api.telegram.org/bot"
-        f"{TELEGRAM_TOKEN}/sendMessage"
-    )
-
     try:
 
-        requests.post(
-            url,
-            data={
-                "chat_id": CHANNEL_ID,
-                "text": message,
-                "parse_mode": "Markdown"
-            },
-            timeout=5
+        bot.send_message(
+            CHANNEL_ID,
+            message,
+            parse_mode="Markdown"
         )
 
         print("✅ Signal sent to channel")
@@ -188,52 +179,6 @@ def send_to_channel(message):
 
         print(
             "Channel send error:",
-            e
-        )
-
-
-# ============================================================
-# SEND PHOTO + CAPTION TO TELEGRAM CHANNEL
-# ============================================================
-
-def send_photo_to_channel(
-    image_path,
-    caption
-):
-
-    url = (
-        f"https://api.telegram.org/bot"
-        f"{TELEGRAM_TOKEN}/sendPhoto"
-    )
-
-    try:
-
-        with open(
-            image_path,
-            "rb"
-        ) as photo:
-
-            requests.post(
-                url,
-                data={
-                    "chat_id": CHANNEL_ID,
-                    "caption": caption,
-                    "parse_mode": "Markdown"
-                },
-                files={
-                    "photo": photo
-                },
-                timeout=15
-            )
-
-        print(
-            "✅ Screenshot + signal sent to channel"
-        )
-
-    except Exception as e:
-
-        print(
-            "Channel photo send error:",
             e
         )
 
@@ -2754,12 +2699,10 @@ def analyze_three_candles(
 
 
 # ============================================================
-#== CREATE THREE-CANDLE DETECTION MAP
-=
-
+# CREATE THREE-CANDLE DETECTION MAP
 # ============================================================
 
-def create_detection@_map(
+def create_detection_map(
     img,
     candles
 ):
@@ -2856,7 +2799,9 @@ def create_detection@_map(
 
 # ============================================================
 # TELEGRAM PHOTO HANDLER
-# =========================================================bot.message_handler(
+# ============================================================
+
+@bot.message_handler(
     content_types=["photo"]
 )
 def handle_photo(message):
@@ -3012,7 +2957,7 @@ def handle_photo(message):
         # BUY SIGNAL
         #
         # - Private chat gets the text signal
-        # - Channel gets the screenshot + caption
+        # - Channel gets the screenshot forwarded + text
         # ----------------------------------------------------
 
         if decision == "BUY":
@@ -3054,17 +2999,25 @@ def handle_photo(message):
                 parse_mode="Markdown"
             )
 
-            # Channel (photo + caption)
-            send_photo_to_channel(
-                original_path,
-                caption
-            )
+            # Channel (forward original screenshot)
+            try:
+                bot.forward_message(
+                    chat_id=CHANNEL_ID,
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id
+                )
+                print("✅ Screenshot forwarded to channel")
+            except Exception as e:
+                print("Screenshot forward error:", e)
+
+            # Channel (text signal)
+            send_to_channel(caption)
 
         # ----------------------------------------------------
         # SELL SIGNAL
         #
         # - Private chat gets the text signal
-        # - Channel gets the screenshot + caption
+        # - Channel gets the screenshot forwarded + text
         # ----------------------------------------------------
 
         elif decision == "SELL":
@@ -3106,11 +3059,19 @@ def handle_photo(message):
                 parse_mode="Markdown"
             )
 
-            # Channel (photo + caption)
-            send_photo_to_channel(
-                original_path,
-                caption
-            )
+            # Channel (forward original screenshot)
+            try:
+                bot.forward_message(
+                    chat_id=CHANNEL_ID,
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id
+                )
+                print("✅ Screenshot forwarded to channel")
+            except Exception as e:
+                print("Screenshot forward error:", e)
+
+            # Channel (text signal)
+            send_to_channel(caption)
 
         # ----------------------------------------------------
         # NO SIGNAL
