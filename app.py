@@ -160,38 +160,7 @@ SUPPORT_RESISTANCE_TOLERANCE = 0.50
 
 
 # ============================================================
-# PREDICTION SETTINGS
-#
-# All 3 candles are used together as the prediction reference.
-#
-# Entry 1 = first supported entry opportunity
-# Entry 2 = second supported entry opportunity
-# Entry 3 = third supported entry opportunity
-#
-# A long candle is NOT automatically blocked.
-# It receives special treatment and its influence is reduced.
-# The other candles must provide confirmation.
-# ============================================================
-
-PREDICTION_MIN_CONFIDENCE = 35
-
-LONG_CANDLE_RATIO = 1.70
-EXTREME_LONG_CANDLE_RATIO = 2.30
-
-ENTRY_1_THRESHOLD = 0.68
-ENTRY_2_THRESHOLD = 0.50
-ENTRY_3_THRESHOLD = 0.32
-
-LONG_CANDLE_WEIGHT_REDUCTION = 0.55
-EXTREME_LONG_CANDLE_WEIGHT_REDUCTION = 0.35
-
-LONG_CANDLE_CONFIRMATION_REQUIRED = 2
-
-PREDICTION_LOOKAHEAD_STEPS = 3
-
-
-# ============================================================
-# SEND TO TELEGRAM CHANNEL
+# SEND TEXT TO TELEGRAM CHANNEL
 # ============================================================
 
 def send_to_channel(message):
@@ -219,6 +188,52 @@ def send_to_channel(message):
 
         print(
             "Channel send error:",
+            e
+        )
+
+
+# ============================================================
+# SEND PHOTO + CAPTION TO TELEGRAM CHANNEL
+# ============================================================
+
+def send_photo_to_channel(
+    image_path,
+    caption
+):
+
+    url = (
+        f"https://api.telegram.org/bot"
+        f"{TELEGRAM_TOKEN}/sendPhoto"
+    )
+
+    try:
+
+        with open(
+            image_path,
+            "rb"
+        ) as photo:
+
+            requests.post(
+                url,
+                data={
+                    "chat_id": CHANNEL_ID,
+                    "caption": caption,
+                    "parse_mode": "Markdown"
+                },
+                files={
+                    "photo": photo
+                },
+                timeout=15
+            )
+
+        print(
+            "✅ Screenshot + signal sent to channel"
+        )
+
+    except Exception as e:
+
+        print(
+            "Channel photo send error:",
             e
         )
 
@@ -751,7 +766,7 @@ def detect_right_side(
 
 
 # ============================================================
-# DETECT THREE CANDLES
+# DETECT EXACTLY THREE NEWEST CANDLES
 # ============================================================
 
 def detect_three_candles(img):
@@ -813,11 +828,9 @@ def detect_three_candles(img):
         reverse=True
     )
 
-    three = candles[
+    return candles[
         :REQUIRED_CANDLES
     ]
-
-    return three
 
 
 # ============================================================
@@ -1099,8 +1112,11 @@ def enrich_three_candles(
         )
 
         if candle["color"] == "PURPLE":
+
             mask = purple_mask
+
         else:
+
             mask = yellow_mask
 
         region = mask[
@@ -1279,7 +1295,10 @@ def analyze_body_progression(candles):
         )
     )
 
-    if acceleration >= STRONG_BODY_RATIO:
+    if (
+        acceleration >=
+        STRONG_BODY_RATIO
+    ):
 
         return {
             "score":
@@ -1292,18 +1311,23 @@ def analyze_body_progression(candles):
                 "EXPANSION"
         }
 
-    if acceleration <= EXHAUSTION_BODY_RATIO:
+    if (
+        acceleration <=
+        EXHAUSTION_BODY_RATIO
+    ):
 
         return {
             "score":
-                -newest_direction * 0.70,
+                -newest_direction *
+                0.70,
             "state":
                 "DECELERATION"
         }
 
     return {
         "score":
-            newest_direction * 0.35,
+            newest_direction *
+            0.35,
         "state":
             "STABLE"
     }
@@ -1360,11 +1384,15 @@ def analyze_momentum(candles):
 
         if acceleration > 0.10:
 
-            momentum += newest * 0.25
+            momentum += (
+                newest * 0.25
+            )
 
         elif acceleration < -0.20:
 
-            momentum -= newest * 0.30
+            momentum -= (
+                newest * 0.30
+            )
 
     return max(
         -1.0,
@@ -1418,10 +1446,13 @@ def analyze_rejection(candles):
         bearish = 0
 
     return {
-        "bullish": bullish,
-        "bearish": bearish,
+        "bullish":
+            bullish,
+        "bearish":
+            bearish,
         "score":
-            bullish - bearish
+            bullish -
+            bearish
     }
 
 
@@ -1579,26 +1610,34 @@ def analyze_pullback(candles):
 
     bullish_continuation = (
         d1 == 1
-        and d2 == 1
-        and d3 == 1
+        and
+        d2 == 1
+        and
+        d3 == 1
     )
 
     bearish_continuation = (
         d1 == -1
-        and d2 == -1
-        and d3 == -1
+        and
+        d2 == -1
+        and
+        d3 == -1
     )
 
     bullish_pullback = (
         d3 == 1
-        and d2 == -1
-        and d1 == 1
+        and
+        d2 == -1
+        and
+        d1 == 1
     )
 
     bearish_pullback = (
         d3 == -1
-        and d2 == 1
-        and d1 == -1
+        and
+        d2 == 1
+        and
+        d1 == -1
     )
 
     if bullish_continuation:
@@ -1624,14 +1663,11 @@ def analyze_pullback(candles):
             max(b2, b3)
         )
 
-        score = (
-            0.75
-            if quality >= 0.90
-            else 0.50
-        )
-
         return {
-            "score": score,
+            "score":
+                0.75
+                if quality >= 0.90
+                else 0.50,
             "label":
                 "BULLISH PULLBACK RECOVERY"
         }
@@ -1643,22 +1679,18 @@ def analyze_pullback(candles):
             max(b2, b3)
         )
 
-        score = (
-            -0.75
-            if quality >= 0.90
-            else -0.50
-        )
-
         return {
-            "score": score,
+            "score":
+                -0.75
+                if quality >= 0.90
+                else -0.50,
             "label":
                 "BEARISH PULLBACK RECOVERY"
         }
 
     return {
         "score": 0,
-        "label":
-            "NO CLEAR CONTINUATION"
+        "label": "NO CLEAR CONTINUATION"
     }
 
 
@@ -1677,14 +1709,18 @@ def analyze_reversal(candles):
 
     bullish_reversal = (
         d3 == -1
-        and d2 == 1
-        and d1 == 1
+        and
+        d2 == 1
+        and
+        d1 == 1
     )
 
     bearish_reversal = (
         d3 == 1
-        and d2 == -1
-        and d1 == -1
+        and
+        d2 == -1
+        and
+        d1 == -1
     )
 
     if bullish_reversal:
@@ -1725,8 +1761,7 @@ def analyze_reversal(candles):
 
     return {
         "score": 0,
-        "label":
-            "NO CLEAR REVERSAL"
+        "label": "NO CLEAR REVERSAL"
     }
 
 
@@ -1810,8 +1845,7 @@ def analyze_breakout(candles):
 
     return {
         "score": 0,
-        "label":
-            "NO CONFIRMED BREAKOUT"
+        "label": "NO CONFIRMED BREAKOUT"
     }
 
 
@@ -1831,8 +1865,10 @@ def analyze_failed_breakout(candles):
 
     bullish_failure = (
         d3 == 1
-        and d2 == 1
-        and d1 == -1
+        and
+        d2 == 1
+        and
+        d1 == -1
         and
         newest[
             "upper_rejection_ratio"
@@ -1841,8 +1877,10 @@ def analyze_failed_breakout(candles):
 
     bearish_failure = (
         d3 == -1
-        and d2 == -1
-        and d1 == 1
+        and
+        d2 == -1
+        and
+        d1 == 1
         and
         newest[
             "lower_rejection_ratio"
@@ -1867,13 +1905,12 @@ def analyze_failed_breakout(candles):
 
     return {
         "score": 0,
-        "label":
-            "NO FAILED BREAKOUT"
+        "label": "NO FAILED BREAKOUT"
     }
 
 
 # ============================================================
-# SUPPORT / RESISTANCE
+# SUPPORT / RESISTANCE INTERACTION
 # ============================================================
 
 def analyze_support_resistance(candles):
@@ -1949,7 +1986,9 @@ def analyze_compression_expansion(candles):
     b3 = candles[2]["body_size"]
 
     newest_direction = (
-        candle_direction(candles[0])
+        candle_direction(
+            candles[0]
+        )
     )
 
     average = (
@@ -2007,8 +2046,7 @@ def analyze_exhaustion(candles):
 
         return {
             "score": 0,
-            "label":
-                "NO EXHAUSTION"
+            "label": "NO EXHAUSTION"
         }
 
     average_old = (
@@ -2047,8 +2085,7 @@ def analyze_exhaustion(candles):
 
     return {
         "score": 0,
-        "label":
-            "NO EXHAUSTION"
+        "label": "NO EXHAUSTION"
     }
 
 
@@ -2102,11 +2139,17 @@ def analyze_choppiness(candles):
 def analyze_control(candles):
 
     weighted = (
-        candle_direction(candles[0]) * 0.55
+        candle_direction(
+            candles[0]
+        ) * 0.55
         +
-        candle_direction(candles[1]) * 0.30
+        candle_direction(
+            candles[1]
+        ) * 0.30
         +
-        candle_direction(candles[2]) * 0.15
+        candle_direction(
+            candles[2]
+        ) * 0.15
     )
 
     sizes = [
@@ -2114,7 +2157,9 @@ def analyze_control(candles):
         for c in candles
     ]
 
-    average = np.mean(sizes)
+    average = np.mean(
+        sizes
+    )
 
     strength = min(
         1.0,
@@ -2170,386 +2215,6 @@ def analyze_candle_quality(candles):
             quality
         )
     )
-
-
-# ============================================================
-# LONG-CANDLE DETECTION
-#
-# IMPORTANT:
-# The long candle is NOT automatically a NO SIGNAL.
-#
-# It receives reduced predictive weight and must be supported
-# by the other two reference candles.
-# ============================================================
-
-def analyze_long_candle(candles):
-
-    sizes = [
-        c["body_size"]
-        for c in candles
-    ]
-
-    newest = candles[0]
-
-    older_average = (
-        sizes[1] +
-        sizes[2]
-    ) / 2.0
-
-    ratio = safe_ratio(
-        sizes[0],
-        older_average
-    )
-
-    newest_direction = (
-        candle_direction(newest)
-    )
-
-    if ratio >= EXTREME_LONG_CANDLE_RATIO:
-
-        return {
-            "is_long": True,
-            "is_extreme": True,
-            "ratio": ratio,
-            "direction": newest_direction,
-            "weight":
-                EXTREME_LONG_CANDLE_WEIGHT_REDUCTION,
-            "label":
-                "EXTREME LONG CANDLE"
-        }
-
-    if ratio >= LONG_CANDLE_RATIO:
-
-        return {
-            "is_long": True,
-            "is_extreme": False,
-            "ratio": ratio,
-            "direction": newest_direction,
-            "weight":
-                LONG_CANDLE_WEIGHT_REDUCTION,
-            "label":
-                "LONG CANDLE"
-        }
-
-    return {
-        "is_long": False,
-        "is_extreme": False,
-        "ratio": ratio,
-        "direction": newest_direction,
-        "weight": 1.0,
-        "label":
-            "NORMAL CANDLE"
-    }
-
-
-# ============================================================
-# THREE-CANDLE PREDICTION ENGINE
-#
-# ALL THREE CANDLES are used together.
-#
-# The prediction uses:
-# - all 3 candle directions
-# - 3-candle structure
-# - momentum
-# - pullback
-# - rejection
-# - buyer/seller control
-#
-# The long-candle special treatment remains active.
-#
-# The result is Entry 1, Entry 2, Entry 3, or no clear entry.
-# ============================================================
-
-def analyze_prediction(
-    candles,
-    analysis
-):
-
-    if len(candles) != 3:
-
-        return {
-            "expected_entry": None,
-            "prediction_confidence": 0,
-            "reference": "INSUFFICIENT DATA",
-            "direction": None,
-            "long_candle": False
-        }
-
-    c1 = candles[0]
-    c2 = candles[1]
-    c3 = candles[2]
-
-    d1 = candle_direction(c1)
-    d2 = candle_direction(c2)
-    d3 = candle_direction(c3)
-
-    long_info = analyze_long_candle(
-        candles
-    )
-
-    # --------------------------------------------------------
-    # ALL THREE CANDLES FORM THE BASE REFERENCE
-    # --------------------------------------------------------
-
-    reference_score = (
-        d1 * 0.45
-        +
-        d2 * 0.30
-        +
-        d3 * 0.25
-    )
-
-    structure_score = (
-        analysis["structure"]["score"]
-    )
-
-    momentum_score = (
-        analysis["momentum"]
-    )
-
-    pullback_score = (
-        analysis["pullback"]["score"]
-    )
-
-    rejection_score = (
-        analysis["rejection"]["score"]
-    )
-
-    control_score = (
-        analysis["control"]
-    )
-
-    # --------------------------------------------------------
-    # COMBINED THREE-CANDLE PRICE-ACTION REFERENCE
-    # --------------------------------------------------------
-
-    combined = (
-        reference_score * 0.25
-        +
-        structure_score * 0.20
-        +
-        momentum_score * 0.20
-        +
-        pullback_score * 0.15
-        +
-        rejection_score * 0.10
-        +
-        control_score * 0.10
-    )
-
-    # --------------------------------------------------------
-    # LONG-CANDLE SPECIAL TREATMENT
-    #
-    # The long candle cannot create the prediction alone.
-    # The other candles must support its direction.
-    # --------------------------------------------------------
-
-    if long_info["is_long"]:
-
-        combined *= long_info["weight"]
-
-        supporting = 0
-
-        if np.sign(d2) == np.sign(d1):
-            supporting += 1
-
-        if np.sign(d3) == np.sign(d1):
-            supporting += 1
-
-        if (
-            np.sign(structure_score)
-            == d1
-            and
-            abs(structure_score) >= 0.20
-        ):
-            supporting += 1
-
-        if (
-            np.sign(momentum_score)
-            == d1
-            and
-            abs(momentum_score) >= 0.25
-        ):
-            supporting += 1
-
-        if supporting < LONG_CANDLE_CONFIRMATION_REQUIRED:
-
-            combined *= 0.55
-
-    # --------------------------------------------------------
-    # REJECTION CAN DELAY THE ENTRY
-    # --------------------------------------------------------
-
-    if d1 == 1 and rejection_score < -0.45:
-
-        combined *= 0.70
-
-    elif d1 == -1 and rejection_score > 0.45:
-
-        combined *= 0.70
-
-    # --------------------------------------------------------
-    # NORMALIZE
-    # --------------------------------------------------------
-
-    combined = max(
-        -1.0,
-        min(
-            1.0,
-            combined
-        )
-    )
-
-    direction = (
-        "BUY"
-        if combined > 0
-        else
-        "SELL"
-        if combined < 0
-        else
-        None
-    )
-
-    prediction_strength = (
-        abs(combined)
-    )
-
-    # --------------------------------------------------------
-    # ENTRY PREDICTION FROM ALL THREE CANDLES
-    #
-    # Strong combined support -> Entry 1
-    # Moderate combined support -> Entry 2
-    # Weaker usable support -> Entry 3
-    # Below minimum -> no clear entry
-    # --------------------------------------------------------
-
-    if prediction_strength >= ENTRY_1_THRESHOLD:
-
-        expected_entry = 1
-
-    elif prediction_strength >= ENTRY_2_THRESHOLD:
-
-        expected_entry = 2
-
-    elif prediction_strength >= ENTRY_3_THRESHOLD:
-
-        expected_entry = 3
-
-    else:
-
-        expected_entry = None
-
-    prediction_confidence = (
-        prediction_strength * 100
-    )
-
-    # --------------------------------------------------------
-    # LONG-CANDLE SPECIAL ENTRY ADJUSTMENT
-    #
-    # If the long candle has insufficient confirmation,
-    # move the expected entry later instead of blocking it.
-    # --------------------------------------------------------
-
-    if (
-        long_info["is_long"]
-        and
-        expected_entry is not None
-    ):
-
-        supporting = 0
-
-        if d1 == d2:
-            supporting += 1
-
-        if d1 == d3:
-            supporting += 1
-
-        if (
-            np.sign(
-                analysis["structure"]["score"]
-            ) == d1
-            and
-            abs(
-                analysis["structure"]["score"]
-            ) >= 0.20
-        ):
-            supporting += 1
-
-        if (
-            np.sign(
-                analysis["momentum"]
-            ) == d1
-            and
-            abs(
-                analysis["momentum"]
-            ) >= 0.25
-        ):
-            supporting += 1
-
-        if supporting < LONG_CANDLE_CONFIRMATION_REQUIRED:
-
-            expected_entry = min(
-                3,
-                expected_entry + 1
-            )
-
-            prediction_confidence *= 0.85
-
-    # --------------------------------------------------------
-    # REFERENCE
-    # --------------------------------------------------------
-
-    if expected_entry is None:
-
-        reference = (
-            "WEAK 3-CANDLE REFERENCE"
-        )
-
-    elif long_info["is_long"]:
-
-        reference = (
-            f"{long_info['label']} — "
-            "confirmation-weighted reference"
-        )
-
-    else:
-
-        reference = (
-            "NORMAL 3-CANDLE REFERENCE"
-        )
-
-    return {
-
-        "expected_entry":
-            expected_entry,
-
-        "prediction_confidence":
-            max(
-                0,
-                min(
-                    100,
-                    prediction_confidence
-                )
-            ),
-
-        "reference":
-            reference,
-
-        "direction":
-            direction,
-
-        "long_candle":
-            long_info["is_long"],
-
-        "long_label":
-            long_info["label"],
-
-        "long_ratio":
-            long_info["ratio"],
-
-        "combined":
-            combined
-    }
 
 
 # ============================================================
@@ -2911,11 +2576,14 @@ def analyze_three_candles(
         )
 
     elif (
-        buy_score >= MIN_SIGNAL_CONFIDENCE
+        buy_score >=
+        MIN_SIGNAL_CONFIDENCE
         and
-        buy_score > sell_score
+        buy_score >
+        sell_score
         and
-        separation >= MIN_DIRECTION_SEPARATION
+        separation >=
+        MIN_DIRECTION_SEPARATION
     ):
 
         decision = "BUY"
@@ -2927,11 +2595,14 @@ def analyze_three_candles(
         )
 
     elif (
-        sell_score >= MIN_SIGNAL_CONFIDENCE
+        sell_score >=
+        MIN_SIGNAL_CONFIDENCE
         and
-        sell_score > buy_score
+        sell_score >
+        buy_score
         and
-        separation >= MIN_DIRECTION_SEPARATION
+        separation >=
+        MIN_DIRECTION_SEPARATION
     ):
 
         decision = "SELL"
@@ -3006,7 +2677,7 @@ def analyze_three_candles(
         )
     )
 
-    result = {
+    return {
 
         "decision":
             decision,
@@ -3081,25 +2752,14 @@ def analyze_three_candles(
             3
     }
 
-    # ========================================================
-    # THREE-CANDLE PREDICTION
-    # ========================================================
-
-    prediction = analyze_prediction(
-        candles,
-        result
-    )
-
-    result["prediction"] = prediction
-
-    return result
-
 
 # ============================================================
-# CREATE THREE-CANDLE DETECTION MAP
+#== CREATE THREE-CANDLE DETECTION MAP
+=
+
 # ============================================================
 
-def create_detection_map(
+def create_detection@_map(
     img,
     candles
 ):
@@ -3196,9 +2856,7 @@ def create_detection_map(
 
 # ============================================================
 # TELEGRAM PHOTO HANDLER
-# ============================================================
-
-@bot.message_handler(
+# =========================================================bot.message_handler(
     content_types=["photo"]
 )
 def handle_photo(message):
@@ -3215,10 +2873,18 @@ def handle_photo(message):
 
     try:
 
+        # ----------------------------------------------------
+        # ANALYZING MESSAGE
+        # ----------------------------------------------------
+
         bot.send_message(
             message.chat.id,
             "🔍 Analyzing 3 candles..."
         )
+
+        # ----------------------------------------------------
+        # DOWNLOAD SCREENSHOT
+        # ----------------------------------------------------
 
         file_info = bot.get_file(
             message.photo[-1].file_id
@@ -3239,9 +2905,17 @@ def handle_photo(message):
                 downloaded_file
             )
 
+        # ----------------------------------------------------
+        # LOAD IMAGE
+        # ----------------------------------------------------
+
         img = load_image(
             original_path
         )
+
+        # ----------------------------------------------------
+        # DETECT EXACTLY THREE
+        # ----------------------------------------------------
 
         three_candles = (
             detect_three_candles(
@@ -3271,6 +2945,10 @@ def handle_photo(message):
             )
 
             return
+
+        # ----------------------------------------------------
+        # VERIFY ONLY THE THREE
+        # ----------------------------------------------------
 
         verified_candles = (
             verify_three_candles(
@@ -3307,6 +2985,10 @@ def handle_photo(message):
 
             return
 
+        # ----------------------------------------------------
+        # THREE-CANDLE ENGINE
+        # ----------------------------------------------------
+
         analysis = (
             analyze_three_candles(
                 img,
@@ -3326,41 +3008,14 @@ def handle_photo(message):
             analysis["reason"]
         )
 
-        prediction = (
-            analysis["prediction"]
-        )
-
-        expected_entry = (
-            prediction["expected_entry"]
-        )
-
-        prediction_confidence = (
-            prediction[
-                "prediction_confidence"
-            ]
-        )
-
-        reference = (
-            prediction["reference"]
-        )
-
-        # ====================================================
-        # SIGNAL / PREDICTION ENTRY
+        # ----------------------------------------------------
+        # BUY SIGNAL
         #
-        # BUY/SELL + valid entry:
-        #       SEND SIGNAL
-        #
-        # BUY/SELL + NO entry:
-        #       SEND SPECIAL NO-TRADE MESSAGE
-        #
-        # Existing NO SIGNAL feedback remains unchanged.
-        # ====================================================
+        # - Private chat gets the text signal
+        # - Channel gets the screenshot + caption
+        # ----------------------------------------------------
 
-        if (
-            decision == "BUY"
-            and
-            expected_entry is not None
-        ):
+        if decision == "BUY":
 
             signal_time = (
                 get_signal_time()
@@ -3372,51 +3027,47 @@ def handle_photo(message):
                 )
             )
 
-            expected_text = (
-                f"Entry {expected_entry}"
-            )
-
-            response = (
+            caption = (
 
                 "🚨 **SIGNAL ALERT**\n\n"
 
                 "🟢 **BUY**\n\n"
 
-                f"🎯 **Expected Entry:** "
-                f"{expected_text}\n"
-
-                f"💪 **Strength:** "
-                f"{confidence:.0f}%\n"
-
-                f"📌 **Reference:** "
-                f"{reference}\n\n"
-
                 f"🕐 **Signal Time:** "
                 f"{signal_time} 🇳🇬\n"
 
                 f"🎯 **Entry Time:** "
                 f"{entry_time} 🇳🇬\n"
 
-                "⏱️ **Expiry:** 15 Seconds\n\n"
+                "⏱️ **Expiry:** 15 Seconds\n"
+
+                f"💪 **Strength:** "
+                f"{confidence:.0f}%\n\n"
 
                 f"• {reason}"
             )
 
+            # Private chat (text)
             bot.send_message(
                 message.chat.id,
-                response,
+                caption,
                 parse_mode="Markdown"
             )
 
-            send_to_channel(
-                response
+            # Channel (photo + caption)
+            send_photo_to_channel(
+                original_path,
+                caption
             )
 
-        elif (
-            decision == "SELL"
-            and
-            expected_entry is not None
-        ):
+        # ----------------------------------------------------
+        # SELL SIGNAL
+        #
+        # - Private chat gets the text signal
+        # - Channel gets the screenshot + caption
+        # ----------------------------------------------------
+
+        elif decision == "SELL":
 
             signal_time = (
                 get_signal_time()
@@ -3428,24 +3079,11 @@ def handle_photo(message):
                 )
             )
 
-            expected_text = (
-                f"Entry {expected_entry}"
-            )
-
-            response = (
+            caption = (
 
                 "🚨 **SIGNAL ALERT**\n\n"
 
                 "🔴 **SELL**\n\n"
-
-                f"🎯 **Expected Entry:** "
-                f"{expected_text}\n"
-
-                f"💪 **Strength:** "
-                f"{confidence:.0f}%\n"
-
-                f"📌 **Reference:** "
-                f"{reference}\n\n"
 
                 f"🕐 **Signal Time:** "
                 f"{signal_time} 🇳🇬\n"
@@ -3453,68 +3091,32 @@ def handle_photo(message):
                 f"🎯 **Entry Time:** "
                 f"{entry_time} 🇳🇬\n"
 
-                "⏱️ **Expiry:** 15 Seconds\n\n"
+                "⏱️ **Expiry:** 15 Seconds\n"
+
+                f"💪 **Strength:** "
+                f"{confidence:.0f}%\n\n"
 
                 f"• {reason}"
             )
 
+            # Private chat (text)
             bot.send_message(
                 message.chat.id,
-                response,
+                caption,
                 parse_mode="Markdown"
             )
 
-            send_to_channel(
-                response
+            # Channel (photo + caption)
+            send_photo_to_channel(
+                original_path,
+                caption
             )
 
-        # ====================================================
-        # PRICE-ACTION SIGNAL BUT NO PREDICTED ENTRY
+        # ----------------------------------------------------
+        # NO SIGNAL
         #
-        # THIS IS THE SPECIAL MESSAGE AGREED.
-        #
-        # Nothing else is added.
-        # ====================================================
-
-        elif (
-            decision == "BUY"
-            and
-            expected_entry is None
-        ):
-
-            bot.send_message(
-                message.chat.id,
-                (
-                    "⚪ **NO SIGNAL — DON’T TRADE**\n\n"
-                    f"3-candle confidence: "
-                    f"{confidence:.0f}%\n\n"
-                    "• BUY detected — no clear entry."
-                ),
-                parse_mode="Markdown"
-            )
-
-        elif (
-            decision == "SELL"
-            and
-            expected_entry is None
-        ):
-
-            bot.send_message(
-                message.chat.id,
-                (
-                    "⚪ **NO SIGNAL — DON’T TRADE**\n\n"
-                    f"3-candle confidence: "
-                    f"{confidence:.0f}%\n\n"
-                    "• SELL detected — no clear entry."
-                ),
-                parse_mode="Markdown"
-            )
-
-        # ====================================================
-        # EXISTING NO-SIGNAL FEEDBACK
-        #
-        # LEFT AS IT WAS.
-        # ====================================================
+        # Private chat only — NOT sent to channel.
+        # ----------------------------------------------------
 
         else:
 
@@ -3529,9 +3131,9 @@ def handle_photo(message):
                 parse_mode="Markdown"
             )
 
-        # ====================================================
-        # LOCAL DETECTION MAP
-        # ====================================================
+        # ----------------------------------------------------
+        # CREATE MAP IN BACKGROUND / LOCAL ONLY
+        # ----------------------------------------------------
 
         detection_map = (
             create_detection_map(
@@ -3596,24 +3198,6 @@ def handle_photo(message):
             )
         )
 
-        print(
-            "Expected Entry:",
-            expected_entry
-        )
-
-        print(
-            "Prediction Confidence:",
-            round(
-                prediction_confidence,
-                1
-            )
-        )
-
-        print(
-            "Prediction Reference:",
-            reference
-        )
-
     except Exception as e:
 
         print(
@@ -3672,11 +3256,11 @@ def start(message):
         "The bot will detect exactly "
         "the 3 rightmost candles and "
         "use ONLY those 3 candles "
-        "for analysis and prediction.\n\n"
+        "for analysis.\n\n"
 
         "🟣 Purple / 🟡 Yellow detection\n"
         "🔬 Deep 3-candle analysis\n"
-        "🔮 Expected-entry prediction\n"
+        "📸 Channel receives screenshot + signal\n"
         "⏱️ 15-second test\n"
         "🚫 Older candles excluded\n\n"
 
@@ -3726,23 +3310,15 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ 3-CANDLE PREDICTION"
-    )
-
-    print(
-        "✅ EXPECTED ENTRY SELECTION"
-    )
-
-    print(
-        "✅ LONG CANDLE SPECIAL TREATMENT"
-    )
-
-    print(
         "✅ 15-SECOND TEST"
     )
 
     print(
-        "✅ NO RANDOM DATA"
+        "✅ CHANNEL: SCREENSHOT + SIGNAL"
+    )
+
+    print(
+        "✅ NO SIGNAL: PRIVATE ONLY"
     )
 
     print(
