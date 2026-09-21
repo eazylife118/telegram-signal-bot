@@ -56,26 +56,16 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 
 # ============================================================
-# DERIV API
+# DERIV API (WEBSOCKET)
 # ============================================================
 
-DERIV_API_TOKEN = os.getenv(
-    "DERIV_API_TOKEN"
-)
+DERIV_API_TOKEN = os.getenv("DERIV_API_TOKEN")
+DERIV_APP_ID = os.getenv("DERIV_APP_ID")
+DERIV_STAKE = float(os.getenv("DERIV_STAKE", "1"))
+DERIV_DURATION = int(os.getenv("DERIV_DURATION", "15"))
 
-DERIV_APP_ID = os.getenv(
-    "DERIV_APP_ID"
-)
-
-DERIV_STAKE = float(
-    os.getenv(
-        "DERIV_STAKE",
-        "1"
-    )
-)
-
-DERIV_API_BASE = (
-    "https://api.derivws.com"
+DERIV_WS_URL = (
+    f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
 )
 
 DERIV_DEMO_ONLY = True
@@ -97,790 +87,308 @@ if DERIV_STAKE <= 0:
 
 
 # ============================================================
-# DERIV ACTIVE CURRENCY PAIRS
+# DERIV GLOBAL STATE
 # ============================================================
 
 DERIV_ALL_PAIRS = {}
+DERIV_LOGIN_ID = None
+DERIV_CURRENCY = "USD"
+DERIV_IS_DEMO = True
 
 
-def get_deriv_active_currency_pairs():
+# ============================================================
+# DERIV WEBSOCKET HELPERS
+# ============================================================
 
-    response = requests.get(
-        (
-            f"{DERIV_API_BASE}"
-            "/trading/v1/active_symbols"
-        ),
-        headers=deriv_headers(),
-        timeout=20
+def deriv_ws_connect():
+    ws = websocket.create_connection(
+        DERIV_WS_URL,
+        timeout=30
     )
+    return ws
 
-    response.raise_for_status()
 
-    data = response.json()
+def deriv_ws_send(ws, payload):
+    ws.send(json.dumps(payload))
 
-    if "errors" in data:
 
-        raise RuntimeError(
-            str(data["errors"])
-        )
+def deriv_ws_recv_until(ws, target_msg_types, timeout=30):
+    ws.settimeout(timeout)
+    while True:
+        raw = ws.recv()
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        if data.get("error"):
+            print("Deriv error:", data["error"])
+            return None
+        if data.get("msg_type") in target_msg_types:
+            return data
 
-    symbols = data.get(
-        "active_symbols",
-        data.get(
-            "data",
-            []
-        )
-    )
 
-    if isinstance(
-        symbols,
-        dict
-    ):
+def deriv_authorize(ws):
+    global DERIV_LOGIN_ID, DERIV_CURRENCY, DERIV_IS_DEMO
 
-        symbols = [
-            symbols
-        ]
+    deriv_ws_send(ws, {"authorize": DERIV_API_TOKEN})
+
+    data = deriv_ws_recv_until(ws, ["authorize"], timeout=20)
+
+    if not data:
+        raise RuntimeError("Deriv authorization failed.")
+
+    auth = data.get("authorize", {})
+
+    DERIV_LOGIN_ID = auth.get("loginid")
+    DERIV_CURRENCY = auth.get("currency", "USD")
+    DERIV_IS_DEMO = auth.get("is_virtual", 0) == 1
+
+    print("✅ Deriv authorized:", DERIV_LOGIN_ID)
+    print("💰 Currency:", DERIV_CURRENCY)
+    print("🧪 Demo:", DERIV_IS_DEMO)
+
+    return auth
+
+
+def deriv_get_all_forex_pairs(ws):
+    global DERIV_ALL_PAIRS
+
+    print("🔎 Fetching ALL Deriv forex pairs...")
+
+    deriv_ws_send(ws, {"active_symbols": "brief", "product_type": "basic"})
+
+    data = deriv_ws_recv_until(ws, ["active_symbols"], timeout=30)
+
+    if not data:
+        raise RuntimeError("Deriv returned no active symbols.")
+
+    symbols = data.get("active_symbols", [])
 
     pairs = {}
 
     for symbol in symbols:
+        market = symbol.get("market")
+        submarket = symbol.get("submarket")
+        symbol_type = symbol.get("symbol_type")
 
-        underlying_symbol = (
-            symbol.get(
-                "underlying_symbol"
-            )
-        )
-
-        pair_name = (
-            symbol.get(
-                "underlying_symbol_name"
-            )
-        )
-
-        symbol_type = (
-            symbol.get(
-                "underlying_symbol_type"
-            )
-        )
-
-        market = (
-            symbol.get(
-                "market"
-            )
-        )
-
-        if not underlying_symbol:
+        if market != "forex":
             continue
 
-        if (
-            symbol_type == "forex"
-            or
-            market == "forex"
-        ):
+        underlying = symbol.get("underlying_symbol")
+        display = symbol.get("display_name")
 
-            clean_pair = (
-                underlying_symbol
-                .replace(
-                    "frx",
-                    "",
-                    1
-                )
-                .upper()
-            )
+        if not underlying:
+            continue
 
-            pairs[clean_pair] = {
-                "underlying_symbol":
-                    underlying_symbol,
+        clean_pair = (
+            underlying
+            .replace("frx", "", 1)
+            .upper()
+        )
 
-                "underlying_symbol_name":
-                    pair_name
-                    or
-                    clean_pair,
+        pairs[clean_pair] = {
+            "underlying_symbol": underlying,
+            "display_name": display or clean_pair,
+            "market": market,
+            "submarket": submarket,
+            "symbol_type": symbol_type
+        }
 
-                "market":
-                    market,
+    DERIV_ALL_PAIRS = pairs
 
-                "underlying_symbol_type":
-                    symbol_type
-            }
+    print(f"✅ Loaded {len(pairs)} Deriv forex pairs.")
 
     return pairs
 
 
 def load_all_deriv_pairs():
-
-    global DERIV_ALL_PAIRS
-
-    print(
-        "🔎 Loading ALL Deriv forex pairs..."
-    )
-
-    DERIV_ALL_PAIRS = (
-        get_deriv_active_currency_pairs()
-    )
-
-    if not DERIV_ALL_PAIRS:
-
-        raise RuntimeError(
-            "Deriv returned no active forex pairs."
-        )
-
-    print(
-        f"✅ Loaded {len(DERIV_ALL_PAIRS)} Deriv forex pairs."
-    )
-
-    return DERIV_ALL_PAIRS
+    ws = deriv_ws_connect()
+    try:
+        deriv_authorize(ws)
+        deriv_get_all_forex_pairs(ws)
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
 
 
 # ============================================================
-# DERIV API HELPERS
+# SCAN ALL PAIRS → FIND BEST PAYOUT
 # ============================================================
 
-def deriv_headers():
-
-    return {
-        "Authorization":
-            f"Bearer {DERIV_API_TOKEN}",
-
-        "Deriv-App-ID":
-            DERIV_APP_ID,
-
-        "Content-Type":
-            "application/json"
-    }
-
-
-def get_deriv_demo_account():
-
-    response = requests.get(
-        (
-            f"{DERIV_API_BASE}"
-            "/trading/v1/options/accounts"
-        ),
-        headers=deriv_headers(),
-        timeout=20
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    if "errors" in data:
-
-        raise RuntimeError(
-            str(data["errors"])
-        )
-
-    accounts = data.get(
-        "data",
-        []
-    )
-
-    if isinstance(
-        accounts,
-        dict
-    ):
-
-        accounts = [
-            accounts
-        ]
-
-    for account in accounts:
-
-        if (
-            account.get(
-                "account_type"
-            )
-            ==
-            "demo"
-        ):
-
-            account_id = account.get(
-                "account_id"
-            )
-
-            if account_id:
-
-                return account_id
-
-    raise RuntimeError(
-        "No Deriv demo Options account was found."
-    )
-
-
-def get_deriv_websocket_url(
-    account_id
+def scan_all_pairs_best(
+    direction,
+    contract_duration=15
 ):
+    contract_type = "CALL" if direction == "BUY" else "PUT"
 
-    url = (
-        f"{DERIV_API_BASE}"
-        f"/trading/v1/options/accounts/"
-        f"{account_id}/otp"
-    )
+    print(f"🔍 Scanning ALL pairs for best payout — {contract_type} {contract_duration}s")
 
-    response = requests.post(
-        url,
-        headers=deriv_headers(),
-        timeout=20
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    if "errors" in data:
-
-        raise RuntimeError(
-            str(data["errors"])
-        )
-
-    ws_url = (
-        data
-        .get(
-            "data",
-            {}
-        )
-        .get(
-            "url"
-        )
-    )
-
-    if not ws_url:
-
-        raise RuntimeError(
-            "Deriv did not return a WebSocket URL."
-        )
-
-    if (
-        "ws/demo" not in ws_url
-    ):
-
-        raise RuntimeError(
-            "Safety check failed: "
-            "the returned Deriv WebSocket "
-            "is not the demo endpoint."
-        )
-
-    return ws_url
-
-
-def deriv_send_and_receive(
-    ws,
-    payload,
-    timeout=20
-):
-
-    ws.settimeout(
-        timeout
-    )
-
-    ws.send(
-        json.dumps(
-            payload
-        )
-    )
-
-    while True:
-
-        raw = ws.recv()
-
-        if not raw:
-
-            raise RuntimeError(
-                "Deriv WebSocket closed unexpectedly."
-            )
-
-        data = json.loads(
-            raw
-        )
-
-        if data.get(
-            "error"
-        ):
-
-            raise RuntimeError(
-                data[
-                    "error"
-                ].get(
-                    "message",
-                    str(
-                        data[
-                            "error"
-                        ]
-                    )
-                )
-            )
-
-        msg_type = data.get(
-            "msg_type"
-        )
-
-        if (
-            msg_type
-            in
-            (
-                "proposal",
-                "buy"
-            )
-        ):
-
-            return data
-
-
-# ============================================================
-# DERIV PROPOSAL SCANNER — FIND BEST PAIR
-# ============================================================
-
-def get_proposal_for_pair(
-    ws,
-    pair_info
-):
-
-    proposal_request = {
-
-        "proposal":
-            1,
-
-        "amount":
-            DERIV_STAKE,
-
-        "basis":
-            "stake",
-
-        "contract_type":
-            "CALL",
-
-        "currency":
-            "USD",
-
-        "duration":
-            15,
-
-        "duration_unit":
-            "s",
-
-        "underlying_symbol":
-            pair_info[
-                "underlying_symbol"
-            ]
-    }
+    ws = deriv_ws_connect()
 
     try:
+        deriv_authorize(ws)
 
-        ws.settimeout(
-            15
-        )
+        if not DERIV_ALL_PAIRS:
+            deriv_get_all_forex_pairs(ws)
 
-        ws.send(
-            json.dumps(
-                proposal_request
-            )
-        )
+        best = None
 
-        while True:
+        for idx, (clean_pair, info) in enumerate(DERIV_ALL_PAIRS.items(), start=1):
 
-            raw = ws.recv()
+            payload = {
+                "proposal": 1,
+                "amount": DERIV_STAKE,
+                "basis": "stake",
+                "contract_type": contract_type,
+                "currency": DERIV_CURRENCY,
+                "duration": contract_duration,
+                "duration_unit": "s",
+                "underlying_symbol": info["underlying_symbol"]
+            }
 
-            if not raw:
-                return None
+            deriv_ws_send(ws, payload)
 
-            data = json.loads(
-                raw
-            )
+            data = deriv_ws_recv_until(ws, ["proposal"], timeout=10)
 
-            if data.get(
-                "error"
-            ):
-                return None
-
-            if data.get(
-                "msg_type"
-            ) == "proposal":
-
-                proposal = data.get(
-                    "proposal",
-                    {}
-                )
-
-                payout = proposal.get(
-                    "payout"
-                )
-
-                ask_price = proposal.get(
-                    "ask_price"
-                )
-
-                if (
-                    payout
-                    and
-                    ask_price
-                    and
-                    ask_price > 0
-                ):
-
-                    profit_ratio = (
-                        (payout - ask_price)
-                        /
-                        ask_price
-                    )
-
-                    return {
-
-                        "pair":
-                            pair_info[
-                                "underlying_symbol_name"
-                            ],
-
-                        "symbol":
-                            pair_info[
-                                "underlying_symbol"
-                            ],
-
-                        "proposal_id":
-                            proposal.get(
-                                "id"
-                            ),
-
-                        "ask_price":
-                            ask_price,
-
-                        "payout":
-                            payout,
-
-                        "profit_ratio":
-                            profit_ratio,
-
-                        "contract_type":
-                            "CALL"
-                    }
-
-    except Exception:
-
-        return None
-
-
-def scan_best_pair(
-    account_id,
-    ws_url
-):
-
-    print(
-        "🔍 Scanning ALL Deriv pairs for best payout..."
-    )
-
-    best = None
-
-    pairs_to_scan = list(
-        DERIV_ALL_PAIRS.values()
-    )
-
-    print(
-        f"📊 Total pairs to scan: {len(pairs_to_scan)}"
-    )
-
-    ws = websocket.create_connection(
-        ws_url,
-        timeout=20
-    )
-
-    try:
-
-        for index, pair_info in enumerate(
-            pairs_to_scan,
-            start=1
-        ):
-
-            try:
-
-                result = get_proposal_for_pair(
-                    ws,
-                    pair_info
-                )
-
-                if not result:
-                    continue
-
-                if (
-                    best is None
-                    or
-                    result["profit_ratio"]
-                    >
-                    best["profit_ratio"]
-                ):
-
-                    best = result
-
-                    print(
-                        f"🏆 New best: "
-                        f"{result['pair']} "
-                        f"({result['profit_ratio']*100:.2f}% payout)"
-                    )
-
-            except Exception as e:
-
+            if not data:
                 continue
 
-    finally:
+            proposal = data.get("proposal", {})
+            payout = proposal.get("payout")
+            ask_price = proposal.get("ask_price")
 
+            if not payout or not ask_price or ask_price <= 0:
+                continue
+
+            profit_ratio = (payout - ask_price) / ask_price
+
+            if best is None or profit_ratio > best["profit_ratio"]:
+                best = {
+                    "pair": info["display_name"],
+                    "symbol": info["underlying_symbol"],
+                    "proposal_id": proposal.get("id"),
+                    "ask_price": ask_price,
+                    "payout": payout,
+                    "profit_ratio": profit_ratio,
+                    "contract_type": contract_type
+                }
+
+                print(
+                    f"🏆 New best: {info['display_name']} "
+                    f"({profit_ratio * 100:.2f}%)"
+                )
+
+        if not best:
+            raise RuntimeError("No valid Deriv proposal found.")
+
+        print(
+            f"✅ BEST PAIR: {best['pair']} — "
+            f"{best['profit_ratio'] * 100:.2f}% payout"
+        )
+
+        return best
+
+    finally:
         try:
             ws.close()
         except Exception:
             pass
 
-    if not best:
-
-        raise RuntimeError(
-            "No valid Deriv proposal found across all pairs."
-        )
-
-    print(
-        f"✅ BEST PAIR FOUND: "
-        f"{best['pair']} — "
-        f"{best['profit_ratio']*100:.2f}% payout"
-    )
-
-    return best
-
 
 # ============================================================
-# DERIV DEMO TRADE (BEST PAIR)
+# EXECUTE TRADE (BEST PAIR)
 # ============================================================
 
-def execute_deriv_demo_trade(
-    direction
-):
+def execute_deriv_demo_trade(direction):
 
     if not DERIV_DEMO_ONLY:
-
-        raise RuntimeError(
-            "Safety check failed: "
-            "DERIV_DEMO_ONLY must remain True."
-        )
+        raise RuntimeError("Safety: DERIV_DEMO_ONLY must be True.")
 
     if not DERIV_ALL_PAIRS:
-
         load_all_deriv_pairs()
 
-    account_id = (
-        get_deriv_demo_account()
-    )
+    best = scan_all_pairs_best(direction, contract_duration=15)
 
-    print(
-        "Deriv demo account:",
-        account_id
-    )
-
-    ws_url = (
-        get_deriv_websocket_url(
-            account_id
-        )
-    )
-
-    best = scan_best_pair(
-        account_id,
-        ws_url
-    )
-
-    contract_type = (
-        "CALL"
-        if direction == "BUY"
-        else "PUT"
-    )
-
-    ws = websocket.create_connection(
-        ws_url,
-        timeout=20
-    )
+    ws = deriv_ws_connect()
 
     try:
+        deriv_authorize(ws)
 
-        proposal_request = {
+        # Fresh proposal for the chosen pair
+        deriv_ws_send(ws, {
+            "proposal": 1,
+            "amount": DERIV_STAKE,
+            "basis": "stake",
+            "contract_type": best["contract_type"],
+            "currency": DERIV_CURRENCY,
+            "duration": 15,
+            "duration_unit": "s",
+            "underlying_symbol": best["symbol"]
+        })
 
-            "proposal":
-                1,
+        proposal_data = deriv_ws_recv_until(ws, ["proposal"], timeout=15)
 
-            "amount":
-                DERIV_STAKE,
+        if not proposal_data:
+            raise RuntimeError("No fresh proposal received.")
 
-            "basis":
-                "stake",
-
-            "contract_type":
-                contract_type,
-
-            "currency":
-                "USD",
-
-            "duration":
-                15,
-
-            "duration_unit":
-                "s",
-
-            "underlying_symbol":
-                best["symbol"]
-        }
-
-        proposal_response = (
-            deriv_send_and_receive(
-                ws,
-                proposal_request
-            )
-        )
-
-        proposal = (
-            proposal_response
-            .get(
-                "proposal",
-                {}
-            )
-        )
-
-        proposal_id = (
-            proposal.get(
-                "id"
-            )
-        )
-
-        ask_price = (
-            proposal.get(
-                "ask_price"
-            )
-        )
+        proposal = proposal_data.get("proposal", {})
+        proposal_id = proposal.get("id")
+        ask_price = proposal.get("ask_price")
 
         if not proposal_id:
+            raise RuntimeError("No proposal id.")
 
-            raise RuntimeError(
-                "Deriv did not return a proposal ID."
-            )
+        deriv_ws_send(ws, {
+            "buy": proposal_id,
+            "price": float(ask_price)
+        })
 
-        buy_request = {
+        buy_data = deriv_ws_recv_until(ws, ["buy"], timeout=15)
 
-            "buy":
-                proposal_id,
+        if not buy_data:
+            raise RuntimeError("Buy failed.")
 
-            "price":
-                float(
-                    ask_price
-                )
-        }
-
-        buy_response = (
-            deriv_send_and_receive(
-                ws,
-                buy_request
-            )
-        )
-
-        buy_data = (
-            buy_response
-            .get(
-                "buy",
-                {}
-            )
-        )
-
-        contract_id = (
-            buy_data.get(
-                "contract_id"
-            )
-        )
+        buy = buy_data.get("buy", {})
+        contract_id = buy.get("contract_id")
 
         if not contract_id:
+            raise RuntimeError("No contract id.")
 
-            raise RuntimeError(
-                "Deriv did not return a contract ID."
-            )
-
-        print(
-            "✅ DERIV DEMO TRADE EXECUTED (BEST PAIR)"
-        )
-
-        print(
-            "Direction:",
-            direction
-        )
-
-        print(
-            "Contract:",
-            contract_type
-        )
-
-        print(
-            "Best Pair:",
-            best["pair"]
-        )
-
-        print(
-            "Symbol:",
-            best["symbol"]
-        )
-
-        print(
-            f"Payout Ratio: "
-            f"{best['profit_ratio']*100:.2f}%"
-        )
-
-        print(
-            "Stake:",
-            DERIV_STAKE
-        )
-
-        print(
-            "Contract ID:",
-            contract_id
-        )
+        print("✅ DERIV DEMO TRADE EXECUTED")
+        print("Direction:", direction)
+        print("Best Pair:", best["pair"])
+        print("Contract:", best["contract_type"])
+        print(f"Payout: {best['profit_ratio'] * 100:.2f}%")
+        print("Contract ID:", contract_id)
 
         return {
-
-            "success":
-                True,
-
-            "direction":
-                direction,
-
-            "contract_type":
-                contract_type,
-
-            "pair":
-                best["pair"],
-
-            "symbol":
-                best["symbol"],
-
-            "payout_ratio":
-                best["profit_ratio"],
-
-            "stake":
-                DERIV_STAKE,
-
-            "contract_id":
-                contract_id
+            "success": True,
+            "direction": direction,
+            "contract_type": best["contract_type"],
+            "pair": best["pair"],
+            "symbol": best["symbol"],
+            "payout_ratio": best["profit_ratio"],
+            "stake": DERIV_STAKE,
+            "contract_id": contract_id
         }
 
     finally:
-
         try:
             ws.close()
         except Exception:
             pass
 
 
-def execute_deriv_trade_at_entry(
-    direction,
-    entry_time
-):
+def execute_deriv_trade_at_entry(direction, entry_time):
 
     try:
+        now = datetime.now(LOCAL_TZ)
 
-        now = datetime.now(
-            LOCAL_TZ
-        )
-
-        target = datetime.strptime(
-            entry_time,
-            "%H:%M"
-        ).replace(
+        target = datetime.strptime(entry_time, "%H:%M").replace(
             year=now.year,
             month=now.month,
             day=now.day,
@@ -888,93 +396,39 @@ def execute_deriv_trade_at_entry(
         )
 
         if target <= now:
+            target += timedelta(days=1)
 
-            target += timedelta(
-                days=1
-            )
+        wait = (target - now).total_seconds()
 
-        wait_seconds = (
-            target - now
-        ).total_seconds()
+        if wait > 0:
+            print(f"⏳ Waiting {wait:.1f}s for entry {entry_time}")
+            time.sleep(wait)
 
-        if wait_seconds > 0:
+        print(f"🤖 Executing Deriv DEMO {direction} at {entry_time}")
 
-            print(
-                f"⏳ Waiting {wait_seconds:.1f}s "
-                f"for Deriv entry time {entry_time}"
-            )
-
-            time.sleep(
-                wait_seconds
-            )
-
-        print(
-            f"🤖 Executing Deriv DEMO "
-            f"{direction} at {entry_time}"
-        )
-
-        result = (
-            execute_deriv_demo_trade(
-                direction
-            )
-        )
-
-        print(
-            "✅ Deriv demo trade result:",
-            result
-        )
+        result = execute_deriv_demo_trade(direction)
+        print("✅ Result:", result)
 
     except Exception as e:
-
-        print(
-            "❌ Deriv auto-trade error:",
-            repr(e)
-        )
+        print("❌ Deriv auto-trade error:", repr(e))
 
 
 # ============================================================
 # TIMEZONE
 # ============================================================
 
-LOCAL_TZ = timezone(
-    timedelta(
-        hours=1
-    )
-)
+LOCAL_TZ = timezone(timedelta(hours=1))
 
 
 def get_signal_time():
-
-    now = datetime.now(
-        LOCAL_TZ
-    )
-
-    signal_time = now.replace(
-        second=0,
-        microsecond=0
-    )
-
-    return signal_time.strftime(
-        "%H:%M"
-    )
+    now = datetime.now(LOCAL_TZ)
+    return now.replace(second=0, microsecond=0).strftime("%H:%M")
 
 
-def get_entry_time(
-    signal_time
-):
-
+def get_entry_time(signal_time):
     return (
-        datetime.strptime(
-            signal_time,
-            "%H:%M"
-        )
-        +
-        timedelta(
-            minutes=1
-        )
-    ).strftime(
-        "%H:%M"
-    )
+        datetime.strptime(signal_time, "%H:%M") + timedelta(minutes=1)
+    ).strftime("%H:%M")
 
 
 # ============================================================
@@ -984,144 +438,70 @@ def get_entry_time(
 MIN_BODY_AREA = 10
 MIN_BODY_HEIGHT = 2
 MIN_CANDLE_WIDTH = 2
-
 RIGHT_MIN_BODY_AREA = 6
 RIGHT_MIN_BODY_HEIGHT = 2
-
 MAX_CANDLE_WIDTH_RATIO = 0.045
-
 MERGE_DISTANCE_RATIO = 0.55
-
 MIN_COLOR_DENSITY = 0.25
-
-
-# ============================================================
-# PURPLE / YELLOW COLOR SETTINGS
-# ============================================================
 
 PURPLE_HUE_LOW = 125
 PURPLE_HUE_HIGH = 165
-
 MIN_PURPLE_SATURATION = 100
 MIN_PURPLE_VALUE = 70
 
 YELLOW_HUE_LOW = 18
 YELLOW_HUE_HIGH = 40
-
 MIN_YELLOW_SATURATION = 100
 MIN_YELLOW_VALUE = 70
-
-
-# ============================================================
-# COLOR DOMINANCE
-# ============================================================
 
 PURPLE_DOMINANCE_RATIO = 1.20
 YELLOW_DOMINANCE_RATIO = 1.10
 
-
-# ============================================================
-# MAP VERIFICATION
-# ============================================================
-
 VERIFY_MIN_PIXELS = 8
 VERIFY_MIN_DENSITY = 0.08
 VERIFY_HORIZONTAL_RADIUS = 0.70
-VERIFY_MIN_DISTANCE_RATIO = 0.55
-VERIFY_COLUMN_THRESHOLD = 3
 VERIFY_CONFIDENCE_THRESHOLD = 65
 
-
-# ============================================================
-# THREE-CANDLE ENGINE SETTINGS
-# ============================================================
-
 REQUIRED_CANDLES = 3
-
 MIN_SIGNAL_CONFIDENCE = 20
-
 MIN_DIRECTION_SEPARATION = 10
-
 MAX_CONFLICT = 70
-
 MIN_FINAL_EVIDENCE = 0.20
-
 EXHAUSTION_BODY_RATIO = 0.55
-
 STRONG_BODY_RATIO = 1.20
-
 WICK_REJECTION_RATIO = 0.80
-
 BREAKOUT_RATIO = 1.10
-
 SUPPORT_RESISTANCE_TOLERANCE = 0.50
 
 
 # ============================================================
-# SEND TEXT TO TELEGRAM CHANNEL
+# TELEGRAM CHANNEL
 # ============================================================
 
-def send_to_channel(
-    message
-):
-
+def send_to_channel(message):
     try:
-
-        bot.send_message(
-            CHANNEL_ID,
-            message,
-            parse_mode="Markdown"
-        )
-
-        print(
-            "✅ Signal sent to channel"
-        )
-
+        bot.send_message(CHANNEL_ID, message, parse_mode="Markdown")
+        print("✅ Signal sent to channel")
     except Exception as e:
-
-        print(
-            "Channel send error:",
-            e
-        )
+        print("Channel send error:", e)
 
 
 # ============================================================
-# LOAD IMAGE
+# IMAGE LOAD
 # ============================================================
 
-def load_image(
-    path
-):
-
-    img = cv2.imread(
-        path
-    )
-
+def load_image(path):
+    img = cv2.imread(path)
     if img is None:
-
-        raise ValueError(
-            "Could not read screenshot."
-        )
-
+        raise ValueError("Could not read screenshot.")
     h, w = img.shape[:2]
-
     if w < 1400:
-
         scale = 1400 / w
-
         img = cv2.resize(
             img,
-            (
-                int(
-                    w * scale
-                ),
-                int(
-                    h * scale
-                )
-            ),
+            (int(w * scale), int(h * scale)),
             interpolation=cv2.INTER_CUBIC
         )
-
     return img
 
 
@@ -1129,2903 +509,763 @@ def load_image(
 # COLOR MASKS
 # ============================================================
 
-def get_color_masks(
-    img
-):
+def get_color_masks(img):
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    hsv = cv2.cvtColor(
-        img,
-        cv2.COLOR_BGR2HSV
-    )
+    purple_lower = np.array([PURPLE_HUE_LOW, MIN_PURPLE_SATURATION, MIN_PURPLE_VALUE])
+    purple_upper = np.array([PURPLE_HUE_HIGH, 255, 255])
+    purple = cv2.inRange(hsv, purple_lower, purple_upper)
 
-    purple_lower = np.array([
-        PURPLE_HUE_LOW,
-        MIN_PURPLE_SATURATION,
-        MIN_PURPLE_VALUE
-    ])
+    yellow_lower = np.array([YELLOW_HUE_LOW, MIN_YELLOW_SATURATION, MIN_YELLOW_VALUE])
+    yellow_upper = np.array([YELLOW_HUE_HIGH, 255, 255])
+    yellow = cv2.inRange(hsv, yellow_lower, yellow_upper)
 
-    purple_upper = np.array([
-        PURPLE_HUE_HIGH,
-        255,
-        255
-    ])
-
-    purple = cv2.inRange(
-        hsv,
-        purple_lower,
-        purple_upper
-    )
-
-    yellow_lower = np.array([
-        YELLOW_HUE_LOW,
-        MIN_YELLOW_SATURATION,
-        MIN_YELLOW_VALUE
-    ])
-
-    yellow_upper = np.array([
-        YELLOW_HUE_HIGH,
-        255,
-        255
-    ])
-
-    yellow = cv2.inRange(
-        hsv,
-        yellow_lower,
-        yellow_upper
-    )
-
-    b, g, r = cv2.split(
-        img
-    )
+    b, g, r = cv2.split(img)
 
     purple_dominance = (
-
-        (
-            r.astype(
-                np.int16
-            )
-            >
-            g.astype(
-                np.int16
-            )
-            *
-            PURPLE_DOMINANCE_RATIO
-        )
-
-        &
-
-        (
-            b.astype(
-                np.int16
-            )
-            >
-            g.astype(
-                np.int16
-            )
-            *
-            PURPLE_DOMINANCE_RATIO
-        )
-
-        &
-
-        (
-            r.astype(
-                np.int16
-            )
-            >
-            70
-        )
-
-        &
-
-        (
-            b.astype(
-                np.int16
-            )
-            >
-            70
-        )
+        (r.astype(np.int16) > g.astype(np.int16) * PURPLE_DOMINANCE_RATIO) &
+        (b.astype(np.int16) > g.astype(np.int16) * PURPLE_DOMINANCE_RATIO) &
+        (r.astype(np.int16) > 70) &
+        (b.astype(np.int16) > 70)
     )
-
-    purple_dominance_mask = (
-        purple_dominance.astype(
-            np.uint8
-        )
-        *
-        255
-    )
-
-    purple = cv2.bitwise_and(
-        purple,
-        purple_dominance_mask
-    )
+    purple = cv2.bitwise_and(purple, purple_dominance.astype(np.uint8) * 255)
 
     yellow_dominance = (
-
-        (
-            r.astype(
-                np.int16
-            )
-            >
-            b.astype(
-                np.int16
-            )
-            *
-            YELLOW_DOMINANCE_RATIO
-        )
-
-        &
-
-        (
-            g.astype(
-                np.int16
-            )
-            >
-            b.astype(
-                np.int16
-            )
-            *
-            YELLOW_DOMINANCE_RATIO
-        )
-
-        &
-
-        (
-            r.astype(
-                np.int16
-            )
-            >
-            80
-        )
-
-        &
-
-        (
-            g.astype(
-                np.int16
-            )
-            >
-            70
-        )
+        (r.astype(np.int16) > b.astype(np.int16) * YELLOW_DOMINANCE_RATIO) &
+        (g.astype(np.int16) > b.astype(np.int16) * YELLOW_DOMINANCE_RATIO) &
+        (r.astype(np.int16) > 80) &
+        (g.astype(np.int16) > 70)
     )
+    yellow = cv2.bitwise_and(yellow, yellow_dominance.astype(np.uint8) * 255)
 
-    yellow_dominance_mask = (
-        yellow_dominance.astype(
-            np.uint8
-        )
-        *
-        255
-    )
-
-    yellow = cv2.bitwise_and(
-        yellow,
-        yellow_dominance_mask
-    )
-
-    return (
-        purple,
-        yellow
-    )
+    return purple, yellow
 
 
 # ============================================================
-# FIND CANDLE CANDIDATES
+# CANDIDATE DETECTION
 # ============================================================
 
-def find_candidates(
-    mask,
-    color,
-    image_width,
-    right_side=False
-):
+def find_candidates(mask, color, image_width, right_side=False):
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, close_kernel)
 
-    kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT,
-        (2, 2)
-    )
+    contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    cleaned = cv2.morphologyEx(
-        mask,
-        cv2.MORPH_OPEN,
-        kernel
-    )
-
-    close_kernel = cv2.getStructuringElement(
-        cv2.MORPH_RECT,
-        (3, 3)
-    )
-
-    cleaned = cv2.morphologyEx(
-        cleaned,
-        cv2.MORPH_CLOSE,
-        close_kernel
-    )
-
-    contours, _ = cv2.findContours(
-        cleaned,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
-    )
-
-    candidates = []
-
-    max_width = max(
-        10,
-        int(
-            image_width *
-            MAX_CANDLE_WIDTH_RATIO
-        )
-    )
+    max_width = max(10, int(image_width * MAX_CANDLE_WIDTH_RATIO))
 
     if right_side:
-
         min_area = RIGHT_MIN_BODY_AREA
         min_height = RIGHT_MIN_BODY_HEIGHT
-
     else:
-
         min_area = MIN_BODY_AREA
         min_height = MIN_BODY_HEIGHT
 
+    candidates = []
+
     for contour in contours:
-
-        area = cv2.contourArea(
-            contour
-        )
-
+        area = cv2.contourArea(contour)
         if area < min_area:
             continue
 
-        x, y, w, h = cv2.boundingRect(
-            contour
-        )
-
-        if w < MIN_CANDLE_WIDTH:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w < MIN_CANDLE_WIDTH or h < min_height or w > max_width or w > h * 6:
             continue
 
-        if h < min_height:
+        region = cleaned[y:y + h, x:x + w]
+        colored = int(np.sum(region > 0))
+        if colored < 5:
             continue
 
-        if w > max_width:
-            continue
-
-        if w > h * 6:
-            continue
-
-        region = cleaned[
-            y:y + h,
-            x:x + w
-        ]
-
-        colored_pixels = int(
-            np.sum(
-                region > 0
-            )
-        )
-
-        if colored_pixels < 5:
-            continue
-
-        density = (
-            colored_pixels /
-            float(
-                max(
-                    1,
-                    w * h
-                )
-            )
-        )
-
+        density = colored / float(max(1, w * h))
         if density < MIN_COLOR_DENSITY:
             continue
 
-        center_x = (
-            x +
-            w / 2
-        )
-
         candidates.append({
-
-            "x": x,
-            "y": y,
-            "w": w,
-            "h": h,
+            "x": x, "y": y, "w": w, "h": h,
             "area": float(area),
-            "pixels": colored_pixels,
+            "pixels": colored,
             "density": density,
-            "center_x": center_x,
+            "center_x": x + w / 2,
             "color": color
         })
 
     return candidates
 
 
-# ============================================================
-# MERGE SAME-COLOR PIECES
-# ============================================================
-
-def merge_candidates(
-    candidates
-):
-
+def merge_candidates(candidates):
     if not candidates:
         return []
 
-    candidates = sorted(
-        candidates,
-        key=lambda c:
-        c["center_x"]
-    )
-
+    candidates = sorted(candidates, key=lambda c: c["center_x"])
     merged = []
 
     for candidate in candidates:
-
-        merged_into_existing = False
-
+        merged_into = False
         for existing in merged:
-
-            distance = abs(
-                candidate["center_x"]
-                -
-                existing["center_x"]
+            distance = abs(candidate["center_x"] - existing["center_x"])
+            allowed = max(candidate["w"], existing["w"], 2) * MERGE_DISTANCE_RATIO
+            v_overlap = not (
+                candidate["y"] + candidate["h"] < existing["y"] or
+                candidate["y"] > existing["y"] + existing["h"]
             )
 
-            allowed = max(
-                candidate["w"],
-                existing["w"],
-                2
-            ) * MERGE_DISTANCE_RATIO
-
-            candidate_top = (
-                candidate["y"]
-            )
-
-            candidate_bottom = (
-                candidate["y"] +
-                candidate["h"]
-            )
-
-            existing_top = (
-                existing["y"]
-            )
-
-            existing_bottom = (
-                existing["y"] +
-                existing["h"]
-            )
-
-            vertical_overlap = not (
-                candidate_bottom <
-                existing_top
-                or
-                candidate_top >
-                existing_bottom
-            )
-
-            if (
-                distance <= allowed
-                and
-                vertical_overlap
-            ):
-
-                left = min(
-                    existing["x"],
-                    candidate["x"]
-                )
-
-                right = max(
-                    existing["x"] +
-                    existing["w"],
-                    candidate["x"] +
-                    candidate["w"]
-                )
-
-                top = min(
-                    existing["y"],
-                    candidate["y"]
-                )
-
-                bottom = max(
-                    existing["y"] +
-                    existing["h"],
-                    candidate["y"] +
-                    candidate["h"]
-                )
+            if distance <= allowed and v_overlap:
+                left = min(existing["x"], candidate["x"])
+                right = max(existing["x"] + existing["w"], candidate["x"] + candidate["w"])
+                top = min(existing["y"], candidate["y"])
+                bottom = max(existing["y"] + existing["h"], candidate["y"] + candidate["h"])
 
                 existing["x"] = left
                 existing["y"] = top
-
-                existing["w"] = (
-                    right -
-                    left
-                )
-
-                existing["h"] = (
-                    bottom -
-                    top
-                )
-
-                existing["center_x"] = (
-                    left +
-                    existing["w"] / 2
-                )
-
-                existing["area"] += (
-                    candidate["area"]
-                )
-
-                existing["pixels"] += (
-                    candidate["pixels"]
-                )
-
-                merged_into_existing = True
-
+                existing["w"] = right - left
+                existing["h"] = bottom - top
+                existing["center_x"] = left + existing["w"] / 2
+                existing["area"] += candidate["area"]
+                existing["pixels"] += candidate["pixels"]
+                merged_into = True
                 break
 
-        if not merged_into_existing:
-
-            merged.append(
-                candidate.copy()
-            )
+        if not merged_into:
+            merged.append(candidate.copy())
 
     return merged
 
 
-# ============================================================
-# REMOVE CROSS-COLOR DUPLICATES
-# ============================================================
-
-def remove_cross_color_duplicates(
-    candles
-):
-
-    candles = sorted(
-        candles,
-        key=lambda c:
-        c["center_x"]
-    )
-
+def remove_cross_color_duplicates(candles):
+    candles = sorted(candles, key=lambda c: c["center_x"])
     result = []
 
     for candle in candles:
-
-        duplicate_index = None
-
-        for i, existing in enumerate(
-            result
-        ):
-
-            distance = abs(
-                candle["center_x"]
-                -
-                existing["center_x"]
-            )
-
-            threshold = max(
-                candle["w"],
-                existing["w"],
-                2
-            ) * 0.65
-
+        dup_index = None
+        for i, existing in enumerate(result):
+            distance = abs(candle["center_x"] - existing["center_x"])
+            threshold = max(candle["w"], existing["w"], 2) * 0.65
             if distance <= threshold:
-
-                duplicate_index = i
+                dup_index = i
                 break
 
-        if duplicate_index is None:
-
-            result.append(
-                candle
-            )
-
+        if dup_index is None:
+            result.append(candle)
         else:
-
-            existing = result[
-                duplicate_index
-            ]
-
-            if (
-                candle["pixels"]
-                >
-                existing["pixels"]
-            ):
-
-                result[
-                    duplicate_index
-                ] = candle
+            existing = result[dup_index]
+            if candle["pixels"] > existing["pixels"]:
+                result[dup_index] = candle
 
     return result
 
 
-# ============================================================
-# RIGHT-SIDE DETECTION
-# ============================================================
-
-def detect_right_side(
-    chart,
-    purple_mask,
-    yellow_mask
-):
-
+def detect_right_side(chart, purple_mask, yellow_mask):
     h, w = chart.shape[:2]
+    right_start = int(w * 0.72)
 
-    right_start = int(
-        w * 0.72
-    )
+    purple_right = purple_mask[:, right_start:]
+    yellow_right = yellow_mask[:, right_start:]
 
-    purple_right = purple_mask[
-        :,
-        right_start:
-    ]
+    purple = find_candidates(purple_right, "PURPLE", w, right_side=True)
+    yellow = find_candidates(yellow_right, "YELLOW", w, right_side=True)
 
-    yellow_right = yellow_mask[
-        :,
-        right_start:
-    ]
+    for c in purple + yellow:
+        c["x"] += right_start
+        c["center_x"] += right_start
 
-    purple = find_candidates(
-        purple_right,
-        "PURPLE",
-        w,
-        right_side=True
-    )
-
-    yellow = find_candidates(
-        yellow_right,
-        "YELLOW",
-        w,
-        right_side=True
-    )
-
-    for candle in (
-        purple +
-        yellow
-    ):
-
-        candle["x"] += (
-            right_start
-        )
-
-        candle["center_x"] += (
-            right_start
-        )
-
-    return (
-        purple +
-        yellow
-    )
+    return purple + yellow
 
 
-# ============================================================
-# DETECT EXACTLY THREE NEWEST CANDLES
-# ============================================================
-
-def detect_three_candles(
-    img
-):
-
+def detect_three_candles(img):
     h, w = img.shape[:2]
 
-    purple_mask, yellow_mask = (
-        get_color_masks(
-            img
-        )
-    )
+    purple_mask, yellow_mask = get_color_masks(img)
 
-    purple = find_candidates(
-        purple_mask,
-        "PURPLE",
-        w,
-        right_side=False
-    )
+    purple = merge_candidates(find_candidates(purple_mask, "PURPLE", w))
+    yellow = merge_candidates(find_candidates(yellow_mask, "YELLOW", w))
 
-    yellow = find_candidates(
-        yellow_mask,
-        "YELLOW",
-        w,
-        right_side=False
-    )
+    candles = purple + yellow
 
-    purple = merge_candidates(
-        purple
-    )
+    candles.extend(detect_right_side(img, purple_mask, yellow_mask))
 
-    yellow = merge_candidates(
-        yellow
-    )
+    candles = remove_cross_color_duplicates(candles)
+    candles.sort(key=lambda c: c["center_x"], reverse=True)
 
-    candles = (
-        purple +
-        yellow
-    )
-
-    right_candidates = (
-        detect_right_side(
-            img,
-            purple_mask,
-            yellow_mask
-        )
-    )
-
-    candles.extend(
-        right_candidates
-    )
-
-    candles = (
-        remove_cross_color_duplicates(
-            candles
-        )
-    )
-
-    candles.sort(
-        key=lambda c:
-        c["center_x"],
-        reverse=True
-    )
-
-    return candles[
-        :REQUIRED_CANDLES
-    ]
+    return candles[:REQUIRED_CANDLES]
 
 
-# ============================================================
-# VERIFY SINGLE CANDLE
-# ============================================================
+def verify_single_candle(candle, purple_mask, yellow_mask):
+    x = int(candle["center_x"])
+    y = int(candle["y"])
+    w = max(2, int(candle["w"]))
+    h = max(2, int(candle["h"]))
 
-def verify_single_candle(
-    candle,
-    purple_mask,
-    yellow_mask
-):
+    radius = max(2, int(w * VERIFY_HORIZONTAL_RADIUS))
 
-    x = int(
-        candle["center_x"]
-    )
+    left = max(0, x - radius)
+    right = min(purple_mask.shape[1], x + radius + 1)
+    top = max(0, y - max(2, int(h * 0.25)))
+    bottom = min(purple_mask.shape[0], y + h + max(2, int(h * 0.25)))
 
-    y = int(
-        candle["y"]
-    )
+    pr = purple_mask[top:bottom, left:right]
+    yr = yellow_mask[top:bottom, left:right]
 
-    w = max(
-        2,
-        int(
-            candle["w"]
-        )
-    )
-
-    h = max(
-        2,
-        int(
-            candle["h"]
-        )
-    )
-
-    radius = max(
-        2,
-        int(
-            w *
-            VERIFY_HORIZONTAL_RADIUS
-        )
-    )
-
-    left = max(
-        0,
-        x - radius
-    )
-
-    right = min(
-        purple_mask.shape[1],
-        x + radius + 1
-    )
-
-    top = max(
-        0,
-        y - max(
-            2,
-            int(
-                h * 0.25
-            )
-        )
-    )
-
-    bottom = min(
-        purple_mask.shape[0],
-        y + h +
-        max(
-            2,
-            int(
-                h * 0.25
-            )
-        )
-    )
-
-    purple_region = purple_mask[
-        top:bottom,
-        left:right
-    ]
-
-    yellow_region = yellow_mask[
-        top:bottom,
-        left:right
-    ]
-
-    purple_pixels = int(
-        np.sum(
-            purple_region > 0
-        )
-    )
-
-    yellow_pixels = int(
-        np.sum(
-            yellow_region > 0
-        )
-    )
-
-    total_pixels = max(
-        1,
-        purple_region.shape[0] *
-        purple_region.shape[1]
-    )
+    purple_pixels = int(np.sum(pr > 0))
+    yellow_pixels = int(np.sum(yr > 0))
+    total = max(1, pr.shape[0] * pr.shape[1])
 
     if candle["color"] == "PURPLE":
-
-        own_pixels = purple_pixels
-        other_pixels = yellow_pixels
-
+        own, other = purple_pixels, yellow_pixels
     else:
+        own, other = yellow_pixels, purple_pixels
 
-        own_pixels = yellow_pixels
-        other_pixels = purple_pixels
+    density = own / total
 
-    own_density = (
-        own_pixels /
-        total_pixels
-    )
+    agrees = own >= VERIFY_MIN_PIXELS and own >= other * 1.15
 
-    color_agrees = (
-        own_pixels >= VERIFY_MIN_PIXELS
-        and
-        own_pixels >= (
-            other_pixels * 1.15
-        )
-    )
+    body_ev = min(100, (own / float(max(VERIFY_MIN_PIXELS, 1))) * 100)
+    density_ev = min(100, (density / VERIFY_MIN_DENSITY) * 100)
 
-    body_evidence = min(
-        100,
-        (
-            own_pixels /
-            float(
-                max(
-                    VERIFY_MIN_PIXELS,
-                    1
-                )
-            )
-        ) * 100
-    )
-
-    density_evidence = min(
-        100,
-        (
-            own_density /
-            VERIFY_MIN_DENSITY
-        ) * 100
-    )
-
-    score = (
-        body_evidence * 0.50
-        +
-        density_evidence * 0.25
-        +
-        (
-            100
-            if color_agrees
-            else 0
-        ) * 0.25
-    )
-
-    score = max(
-        0,
-        min(
-            100,
-            score
-        )
-    )
-
-    verified = (
-        color_agrees
-        and
-        score >=
-        VERIFY_CONFIDENCE_THRESHOLD
-    )
+    score = body_ev * 0.5 + density_ev * 0.25 + (100 if agrees else 0) * 0.25
+    score = max(0, min(100, score))
 
     return {
-
-        "verified":
-            verified,
-
-        "score":
-            score,
-
-        "own_pixels":
-            own_pixels,
-
-        "other_pixels":
-            other_pixels,
-
-        "own_density":
-            own_density,
-
-        "color_agrees":
-            color_agrees
+        "verified": agrees and score >= VERIFY_CONFIDENCE_THRESHOLD,
+        "score": score
     }
 
 
-# ============================================================
-# VERIFY THREE CANDLES
-# ============================================================
+def verify_three_candles(img, candles):
+    purple_mask, yellow_mask = get_color_masks(img)
 
-def verify_three_candles(
-    img,
-    candles
-):
-
-    purple_mask, yellow_mask = (
-        get_color_masks(
-            img
-        )
-    )
-
-    verified = []
-
-    for candle in candles:
-
-        result = verify_single_candle(
-            candle,
-            purple_mask,
-            yellow_mask
-        )
-
-        c = candle.copy()
-
-        c["verification"] = (
-            result
-        )
-
-        verified.append(
-            c
-        )
-
-    return verified
+    out = []
+    for c in candles:
+        r = verify_single_candle(c, purple_mask, yellow_mask)
+        cc = c.copy()
+        cc["verification"] = r
+        out.append(cc)
+    return out
 
 
 # ============================================================
 # GEOMETRY
 # ============================================================
 
-def safe_ratio(
-    a,
-    b
-):
-
-    return (
-        float(a) /
-        max(
-            float(b),
-            0.0001
-        )
-    )
+def safe_ratio(a, b):
+    return float(a) / max(float(b), 0.0001)
 
 
-def candle_direction(
-    candle
-):
-
-    if candle["color"] == "PURPLE":
-
-        return 1
-
-    return -1
+def candle_direction(c):
+    return 1 if c["color"] == "PURPLE" else -1
 
 
-def enrich_three_candles(
-    img,
-    candles
-):
-
-    purple_mask, yellow_mask = (
-        get_color_masks(
-            img
-        )
-    )
-
+def enrich_three_candles(img, candles):
+    purple_mask, yellow_mask = get_color_masks(img)
     h_img, w_img = img.shape[:2]
 
     enriched = []
 
     for candle in candles:
-
         c = candle.copy()
+        x = int(candle["center_x"])
+        body_top = int(candle["y"])
+        body_bottom = int(candle["y"] + candle["h"])
+        radius = max(2, int(max(candle["w"], 2) * 0.75))
+        left = max(0, x - radius)
+        right = min(w_img, x + radius + 1)
 
-        x = int(
-            candle["center_x"]
-        )
+        mask = purple_mask if candle["color"] == "PURPLE" else yellow_mask
+        region = mask[:, left:right]
+        ys, xs = np.where(region > 0)
 
-        body_top = int(
-            candle["y"]
-        )
+        visual_top = int(np.min(ys)) if len(ys) > 0 else body_top
+        visual_bottom = int(np.max(ys)) if len(ys) > 0 else body_bottom
 
-        body_bottom = int(
-            candle["y"] +
-            candle["h"]
-        )
-
-        radius = max(
-            2,
-            int(
-                max(
-                    candle["w"],
-                    2
-                ) * 0.75
-            )
-        )
-
-        left = max(
-            0,
-            x - radius
-        )
-
-        right = min(
-            w_img,
-            x + radius + 1
-        )
-
-        if candle["color"] == "PURPLE":
-
-            mask = purple_mask
-
-        else:
-
-            mask = yellow_mask
-
-        region = mask[
-            :,
-            left:right
-        ]
-
-        ys, xs = np.where(
-            region > 0
-        )
-
-        if len(ys) > 0:
-
-            visual_top = int(
-                np.min(ys)
-            )
-
-            visual_bottom = int(
-                np.max(ys)
-            )
-
-        else:
-
-            visual_top = body_top
-            visual_bottom = body_bottom
-
-        c["body_top"] = float(
-            body_top
-        )
-
-        c["body_bottom"] = float(
-            body_bottom
-        )
-
-        c["body_size"] = max(
-            1.0,
-            float(
-                candle["h"]
-            )
-        )
-
-        c["visual_top"] = float(
-            visual_top
-        )
-
-        c["visual_bottom"] = float(
-            visual_bottom
-        )
-
-        c["visual_range"] = max(
-            1.0,
-            float(
-                visual_bottom -
-                visual_top
-            )
-        )
-
-        c["upper_extension"] = max(
-            0.0,
-            float(
-                body_top -
-                visual_top
-            )
-        )
-
-        c["lower_extension"] = max(
-            0.0,
-            float(
-                visual_bottom -
-                body_bottom
-            )
-        )
-
-        c["upper_rejection_ratio"] = (
-            safe_ratio(
-                c["upper_extension"],
-                c["body_size"]
-            )
-        )
-
-        c["lower_rejection_ratio"] = (
-            safe_ratio(
-                c["lower_extension"],
-                c["body_size"]
-            )
-        )
-
-        c["body_to_range"] = (
-            safe_ratio(
-                c["body_size"],
-                c["visual_range"]
-            )
-        )
-
-        enriched.append(
-            c
-        )
+        c["body_top"] = float(body_top)
+        c["body_bottom"] = float(body_bottom)
+        c["body_size"] = max(1.0, float(candle["h"]))
+        c["visual_top"] = float(visual_top)
+        c["visual_bottom"] = float(visual_bottom)
+        c["visual_range"] = max(1.0, float(visual_bottom - visual_top))
+        c["upper_extension"] = max(0.0, float(body_top - visual_top))
+        c["lower_extension"] = max(0.0, float(visual_bottom - body_bottom))
+        c["upper_rejection_ratio"] = safe_ratio(c["upper_extension"], c["body_size"])
+        c["lower_rejection_ratio"] = safe_ratio(c["lower_extension"], c["body_size"])
+        c["body_to_range"] = safe_ratio(c["body_size"], c["visual_range"])
+        enriched.append(c)
 
     return enriched
 
 
 # ============================================================
-# THREE-CANDLE SEQUENCE
+# ANALYSIS FUNCTIONS (UNCHANGED — SAME AS BEFORE)
 # ============================================================
 
-def analyze_sequence(
-    candles
-):
+def analyze_sequence(candles):
+    d = [candle_direction(c) for c in candles]
+    if len(d) != 3:
+        return {"score": 0, "label": "INSUFFICIENT", "changes": 0}
 
-    directions = [
-        candle_direction(c)
-        for c in candles
-    ]
-
-    if len(directions) != 3:
-
-        return {
-            "score":
-                0,
-
-            "label":
-                "INSUFFICIENT",
-
-            "changes":
-                0
-        }
-
-    a, b, c = directions
-
-    changes = (
-        int(
-            a != b
-        )
-        +
-        int(
-            b != c
-        )
-    )
+    a, b, c = d
+    changes = int(a != b) + int(b != c)
 
     if a == b == c:
-
         score = float(a)
-
-        label = (
-            "3-CANDLE BULLISH"
-            if a == 1
-            else
-            "3-CANDLE BEARISH"
-        )
-
+        label = "3-CANDLE BULLISH" if a == 1 else "3-CANDLE BEARISH"
     elif a != b and b != c:
-
         score = a * 0.35
-
         label = "ALTERNATING"
-
     else:
-
         score = a * 0.65
-
         label = "MIXED"
 
-    return {
-        "score":
-            score,
-
-        "label":
-            label,
-
-        "changes":
-            changes
-    }
+    return {"score": score, "label": label, "changes": changes}
 
 
-# ============================================================
-# BODY PROGRESSION
-# ============================================================
+def analyze_body_progression(candles):
+    b1, b2, b3 = [c["body_size"] for c in candles]
+    d = candle_direction(candles[0])
+    avg_prev = (b2 + b3) / 2.0
+    acc = safe_ratio(b1, avg_prev)
 
-def analyze_body_progression(
-    candles
-):
-
-    b1 = candles[0]["body_size"]
-    b2 = candles[1]["body_size"]
-    b3 = candles[2]["body_size"]
-
-    newest_direction = (
-        candle_direction(
-            candles[0]
-        )
-    )
-
-    avg_previous = (
-        b2 + b3
-    ) / 2.0
-
-    acceleration = (
-        safe_ratio(
-            b1,
-            avg_previous
-        )
-    )
-
-    if (
-        acceleration >=
-        STRONG_BODY_RATIO
-    ):
-
-        return {
-            "score":
-                newest_direction *
-                min(
-                    1.0,
-                    acceleration / 2.0
-                ),
-
-            "state":
-                "EXPANSION"
-        }
-
-    if (
-        acceleration <=
-        EXHAUSTION_BODY_RATIO
-    ):
-
-        return {
-            "score":
-                -newest_direction *
-                0.70,
-
-            "state":
-                "DECELERATION"
-        }
-
-    return {
-        "score":
-            newest_direction *
-            0.35,
-
-        "state":
-            "STABLE"
-    }
+    if acc >= STRONG_BODY_RATIO:
+        return {"score": d * min(1.0, acc / 2.0), "state": "EXPANSION"}
+    if acc <= EXHAUSTION_BODY_RATIO:
+        return {"score": -d * 0.70, "state": "DECELERATION"}
+    return {"score": d * 0.35, "state": "STABLE"}
 
 
-# ============================================================
-# MOMENTUM
-# ============================================================
+def analyze_momentum(candles):
+    d = [candle_direction(c) for c in candles]
+    sizes = [c["body_size"] for c in candles]
 
-def analyze_momentum(
-    candles
-):
+    newest = d[0]
+    r1 = safe_ratio(sizes[0], sizes[1])
+    r2 = safe_ratio(sizes[1], sizes[2])
 
-    directions = [
-        candle_direction(c)
-        for c in candles
-    ]
+    momentum = newest * 0.55 + d[1] * 0.25 + d[2] * 0.20
+    acc = r1 - r2
 
-    sizes = [
-        c["body_size"]
-        for c in candles
-    ]
+    if d[0] == d[1] == d[2]:
+        if acc > 0.10:
+            momentum += newest * 0.25
+        elif acc < -0.20:
+            momentum -= newest * 0.30
 
-    newest = directions[0]
-
-    ratio_1 = safe_ratio(
-        sizes[0],
-        sizes[1]
-    )
-
-    ratio_2 = safe_ratio(
-        sizes[1],
-        sizes[2]
-    )
-
-    momentum = (
-        newest * 0.55
-        +
-        directions[1] * 0.25
-        +
-        directions[2] * 0.20
-    )
-
-    acceleration = (
-        ratio_1 -
-        ratio_2
-    )
-
-    if (
-        np.sign(
-            directions[0]
-        )
-        ==
-        np.sign(
-            directions[1]
-        )
-        ==
-        np.sign(
-            directions[2]
-        )
-    ):
-
-        if acceleration > 0.10:
-
-            momentum += (
-                newest * 0.25
-            )
-
-        elif acceleration < -0.20:
-
-            momentum -= (
-                newest * 0.30
-            )
-
-    return max(
-        -1.0,
-        min(
-            1.0,
-            momentum
-        )
-    )
+    return max(-1.0, min(1.0, momentum))
 
 
-# ============================================================
-# WICK / REJECTION
-# ============================================================
-
-def analyze_rejection(
-    candles
-):
-
+def analyze_rejection(candles):
     newest = candles[0]
+    upper = newest["upper_rejection_ratio"]
+    lower = newest["lower_rejection_ratio"]
 
-    upper = (
-        newest[
-            "upper_rejection_ratio"
-        ]
-    )
+    bullish = min(1.0, lower / 1.5) if lower >= WICK_REJECTION_RATIO else 0
+    bearish = min(1.0, upper / 1.5) if upper >= WICK_REJECTION_RATIO else 0
 
-    lower = (
-        newest[
-            "lower_rejection_ratio"
-        ]
-    )
-
-    if lower >= WICK_REJECTION_RATIO:
-
-        bullish = min(
-            1.0,
-            lower / 1.5
-        )
-
-    else:
-
-        bullish = 0
-
-    if upper >= WICK_REJECTION_RATIO:
-
-        bearish = min(
-            1.0,
-            upper / 1.5
-        )
-
-    else:
-
-        bearish = 0
-
-    return {
-        "bullish":
-            bullish,
-
-        "bearish":
-            bearish,
-
-        "score":
-            bullish -
-            bearish
-    }
+    return {"bullish": bullish, "bearish": bearish, "score": bullish - bearish}
 
 
-# ============================================================
-# ENGULFING
-# ============================================================
-
-def analyze_engulfing(
-    candles
-):
-
+def analyze_engulfing(candles):
     current = candles[0]
     previous = candles[1]
 
-    current_direction = (
-        candle_direction(
-            current
-        )
-    )
+    cd = candle_direction(current)
+    pd = candle_direction(previous)
+    ratio = safe_ratio(current["body_size"], previous["body_size"])
 
-    previous_direction = (
-        candle_direction(
-            previous
-        )
-    )
-
-    body_ratio = safe_ratio(
-        current["body_size"],
-        previous["body_size"]
-    )
-
-    bullish = (
-        current_direction == 1
-        and
-        previous_direction == -1
-        and
-        body_ratio >= 1.10
-    )
-
-    bearish = (
-        current_direction == -1
-        and
-        previous_direction == 1
-        and
-        body_ratio >= 1.10
-    )
+    bullish = cd == 1 and pd == -1 and ratio >= 1.10
+    bearish = cd == -1 and pd == 1 and ratio >= 1.10
 
     if bullish:
-
-        return {
-            "bullish":
-                True,
-
-            "bearish":
-                False,
-
-            "score":
-                min(
-                    1.0,
-                    body_ratio / 2
-                )
-        }
-
+        return {"bullish": True, "bearish": False, "score": min(1.0, ratio / 2)}
     if bearish:
-
-        return {
-            "bullish":
-                False,
-
-            "bearish":
-                True,
-
-            "score":
-                -min(
-                    1.0,
-                    body_ratio / 2
-                )
-        }
-
-    return {
-        "bullish":
-            False,
-
-        "bearish":
-            False,
-
-        "score":
-            0
-    }
+        return {"bullish": False, "bearish": True, "score": -min(1.0, ratio / 2)}
+    return {"bullish": False, "bearish": False, "score": 0}
 
 
-# ============================================================
-# THREE-CANDLE HH / HL / LH / LL
-# ============================================================
+def analyze_structure(candles):
+    c1, c2, c3 = candles
+    bull = 0
+    bear = 0
 
-def analyze_structure(
-    candles
-):
+    if c1["visual_top"] < c2["visual_top"]: bull += 1
+    if c1["visual_bottom"] < c2["visual_bottom"]: bull += 1
+    if c2["visual_top"] < c3["visual_top"]: bull += 1
+    if c2["visual_bottom"] < c3["visual_bottom"]: bull += 1
 
-    c1 = candles[0]
-    c2 = candles[1]
-    c3 = candles[2]
+    if c1["visual_top"] > c2["visual_top"]: bear += 1
+    if c1["visual_bottom"] > c2["visual_bottom"]: bear += 1
+    if c2["visual_top"] > c3["visual_top"]: bear += 1
+    if c2["visual_bottom"] > c3["visual_bottom"]: bear += 1
 
-    bullish_points = 0
-    bearish_points = 0
+    total = max(1, bull + bear)
+    score = (bull - bear) / float(total)
 
-    if c1["visual_top"] < c2["visual_top"]:
-        bullish_points += 1
+    label = "BULLISH HH/HL" if score > 0.20 else ("BEARISH LH/LL" if score < -0.20 else "MIXED")
 
-    if c1["visual_bottom"] < c2["visual_bottom"]:
-        bullish_points += 1
-
-    if c2["visual_top"] < c3["visual_top"]:
-        bullish_points += 1
-
-    if c2["visual_bottom"] < c3["visual_bottom"]:
-        bullish_points += 1
-
-    if c1["visual_top"] > c2["visual_top"]:
-        bearish_points += 1
-
-    if c1["visual_bottom"] > c2["visual_bottom"]:
-        bearish_points += 1
-
-    if c2["visual_top"] > c3["visual_top"]:
-        bearish_points += 1
-
-    if c2["visual_bottom"] > c3["visual_bottom"]:
-        bearish_points += 1
-
-    total = max(
-        1,
-        bullish_points +
-        bearish_points
-    )
-
-    score = (
-        bullish_points -
-        bearish_points
-    ) / float(total)
-
-    if score > 0.20:
-
-        label = "BULLISH HH/HL"
-
-    elif score < -0.20:
-
-        label = "BEARISH LH/LL"
-
-    else:
-
-        label = "MIXED"
-
-    return {
-        "bullish":
-            bullish_points,
-
-        "bearish":
-            bearish_points,
-
-        "score":
-            score,
-
-        "label":
-            label
-    }
+    return {"bullish": bull, "bearish": bear, "score": score, "label": label}
 
 
-# ============================================================
-# PULLBACK / CONTINUATION
-# ============================================================
-
-def analyze_pullback(
-    candles
-):
-
-    d1 = candle_direction(
-        candles[0]
-    )
-
-    d2 = candle_direction(
-        candles[1]
-    )
-
-    d3 = candle_direction(
-        candles[2]
-    )
+def analyze_pullback(candles):
+    d1 = candle_direction(candles[0])
+    d2 = candle_direction(candles[1])
+    d3 = candle_direction(candles[2])
 
     b1 = candles[0]["body_size"]
     b2 = candles[1]["body_size"]
     b3 = candles[2]["body_size"]
 
-    bullish_continuation = (
-        d1 == 1
-        and
-        d2 == 1
-        and
-        d3 == 1
-    )
+    if d1 == d2 == d3 == 1:
+        return {"score": 0.90, "label": "BULLISH CONTINUATION"}
+    if d1 == d2 == d3 == -1:
+        return {"score": -0.90, "label": "BEARISH CONTINUATION"}
 
-    bearish_continuation = (
-        d1 == -1
-        and
-        d2 == -1
-        and
-        d3 == -1
-    )
+    if d3 == 1 and d2 == -1 and d1 == 1:
+        q = safe_ratio(b1, max(b2, b3))
+        return {"score": 0.75 if q >= 0.90 else 0.50, "label": "BULLISH PULLBACK RECOVERY"}
 
-    bullish_pullback = (
-        d3 == 1
-        and
-        d2 == -1
-        and
-        d1 == 1
-    )
+    if d3 == -1 and d2 == 1 and d1 == -1:
+        q = safe_ratio(b1, max(b2, b3))
+        return {"score": -0.75 if q >= 0.90 else -0.50, "label": "BEARISH PULLBACK RECOVERY"}
 
-    bearish_pullback = (
-        d3 == -1
-        and
-        d2 == 1
-        and
-        d1 == -1
-    )
-
-    if bullish_continuation:
-
-        return {
-            "score":
-                0.90,
-
-            "label":
-                "BULLISH CONTINUATION"
-        }
-
-    elif bearish_continuation:
-
-        return {
-            "score":
-                -0.90,
-
-            "label":
-                "BEARISH CONTINUATION"
-        }
-
-    elif bullish_pullback:
-
-        quality = safe_ratio(
-            b1,
-            max(
-                b2,
-                b3
-            )
-        )
-
-        return {
-            "score":
-                0.75
-                if quality >= 0.90
-                else 0.50,
-
-            "label":
-                "BULLISH PULLBACK RECOVERY"
-        }
-
-    elif bearish_pullback:
-
-        quality = safe_ratio(
-            b1,
-            max(
-                b2,
-                b3
-            )
-        )
-
-        return {
-            "score":
-                -0.75
-                if quality >= 0.90
-                else -0.50,
-
-            "label":
-                "BEARISH PULLBACK RECOVERY"
-        }
-
-    return {
-        "score":
-            0,
-
-        "label":
-            "NO CLEAR CONTINUATION"
-    }
+    return {"score": 0, "label": "NO CLEAR CONTINUATION"}
 
 
-# ============================================================
-# REVERSAL
-# ============================================================
-
-def analyze_reversal(
-    candles
-):
-
-    d1 = candle_direction(
-        candles[0]
-    )
-
-    d2 = candle_direction(
-        candles[1]
-    )
-
-    d3 = candle_direction(
-        candles[2]
-    )
+def analyze_reversal(candles):
+    d1 = candle_direction(candles[0])
+    d2 = candle_direction(candles[1])
+    d3 = candle_direction(candles[2])
 
     b1 = candles[0]["body_size"]
     b3 = candles[2]["body_size"]
 
-    bullish_reversal = (
-        d3 == -1
-        and
-        d2 == 1
-        and
-        d1 == 1
+    if d3 == -1 and d2 == 1 and d1 == 1:
+        c = safe_ratio(b1, b3)
+        return {"score": min(1.0, 0.60 + c * 0.20), "label": "EARLY BULLISH REVERSAL"}
+
+    if d3 == 1 and d2 == -1 and d1 == -1:
+        c = safe_ratio(b1, b3)
+        return {"score": -min(1.0, 0.60 + c * 0.20), "label": "EARLY BEARISH REVERSAL"}
+
+    return {"score": 0, "label": "NO CLEAR REVERSAL"}
+
+
+def analyze_breakout(candles):
+    newest, previous, third = candles
+
+    nd = candle_direction(newest)
+
+    bull_break = (
+        newest["visual_top"] < previous["visual_top"] and
+        newest["visual_top"] < third["visual_top"]
     )
-
-    bearish_reversal = (
-        d3 == 1
-        and
-        d2 == -1
-        and
-        d1 == -1
+    bear_break = (
+        newest["visual_bottom"] > previous["visual_bottom"] and
+        newest["visual_bottom"] > third["visual_bottom"]
     )
-
-    if bullish_reversal:
-
-        confirmation = safe_ratio(
-            b1,
-            b3
-        )
-
-        return {
-            "score":
-                min(
-                    1.0,
-                    0.60 +
-                    confirmation * 0.20
-                ),
-
-            "label":
-                "EARLY BULLISH REVERSAL"
-        }
-
-    if bearish_reversal:
-
-        confirmation = safe_ratio(
-            b1,
-            b3
-        )
-
-        return {
-            "score":
-                -min(
-                    1.0,
-                    0.60 +
-                    confirmation * 0.20
-                ),
-
-            "label":
-                "EARLY BEARISH REVERSAL"
-        }
-
-    return {
-        "score":
-            0,
-
-        "label":
-            "NO CLEAR REVERSAL"
-    }
-
-
-# ============================================================
-# BREAKOUT PRESSURE
-# ============================================================
-
-def analyze_breakout(
-    candles
-):
-
-    newest = candles[0]
-    previous = candles[1]
-    third = candles[2]
-
-    newest_direction = (
-        candle_direction(
-            newest
-        )
-    )
-
-    bullish_break = (
-        newest["visual_top"]
-        <
-        previous["visual_top"]
-        and
-        newest["visual_top"]
-        <
-        third["visual_top"]
-    )
-
-    bearish_break = (
-        newest["visual_bottom"]
-        >
-        previous["visual_bottom"]
-        and
-        newest["visual_bottom"]
-        >
-        third["visual_bottom"]
-    )
-
-    body_ratio = safe_ratio(
-        newest["body_size"],
-        (
-            previous["body_size"] +
-            third["body_size"]
-        ) / 2
-    )
-
-    if (
-        bullish_break
-        and
-        newest_direction == 1
-        and
-        body_ratio >= BREAKOUT_RATIO
-    ):
-
-        return {
-            "score":
-                min(
-                    1.0,
-                    body_ratio / 1.5
-                ),
-
-            "label":
-                "BULLISH BREAKOUT PRESSURE"
-        }
-
-    if (
-        bearish_break
-        and
-        newest_direction == -1
-        and
-        body_ratio >= BREAKOUT_RATIO
-    ):
-
-        return {
-            "score":
-                -min(
-                    1.0,
-                    body_ratio / 1.5
-                ),
-
-            "label":
-                "BEARISH BREAKOUT PRESSURE"
-        }
-
-    return {
-        "score":
-            0,
-
-        "label":
-            "NO CONFIRMED BREAKOUT"
-    }
-
-
-# ============================================================
-# FAILED BREAKOUT
-# ============================================================
-
-def analyze_failed_breakout(
-    candles
-):
-
-    newest = candles[0]
-    previous = candles[1]
-    third = candles[2]
-
-    d1 = candle_direction(
-        newest
-    )
-
-    d2 = candle_direction(
-        previous
-    )
-
-    d3 = candle_direction(
-        third
-    )
-
-    bullish_failure = (
-        d3 == 1
-        and
-        d2 == 1
-        and
-        d1 == -1
-        and
-        newest[
-            "upper_rejection_ratio"
-        ] >= WICK_REJECTION_RATIO
-    )
-
-    bearish_failure = (
-        d3 == -1
-        and
-        d2 == -1
-        and
-        d1 == 1
-        and
-        newest[
-            "lower_rejection_ratio"
-        ] >= WICK_REJECTION_RATIO
-    )
-
-    if bullish_failure:
-
-        return {
-            "score":
-                -0.85,
-
-            "label":
-                "FAILED BULLISH BREAKOUT"
-        }
-
-    if bearish_failure:
-
-        return {
-            "score":
-                0.85,
-
-            "label":
-                "FAILED BEARISH BREAKOUT"
-        }
-
-    return {
-        "score":
-            0,
-
-        "label":
-            "NO FAILED BREAKOUT"
-    }
-
-
-# ============================================================
-# SUPPORT / RESISTANCE INTERACTION
-# ============================================================
-
-def analyze_support_resistance(
-    candles
-):
-
-    newest = candles[0]
-    previous = candles[1]
-
-    tolerance = max(
-        5,
-        previous["visual_range"] *
-        SUPPORT_RESISTANCE_TOLERANCE
-    )
-
-    bullish_rejection = (
-        newest["color"] == "PURPLE"
-        and
-        newest[
-            "lower_rejection_ratio"
-        ] >= WICK_REJECTION_RATIO
-        and
-        abs(
-            newest["visual_bottom"]
-            -
-            previous["visual_bottom"]
-        ) <= tolerance
-    )
-
-    bearish_rejection = (
-        newest["color"] == "YELLOW"
-        and
-        newest[
-            "upper_rejection_ratio"
-        ] >= WICK_REJECTION_RATIO
-        and
-        abs(
-            newest["visual_top"]
-            -
-            previous["visual_top"]
-        ) <= tolerance
-    )
-
-    if bullish_rejection:
-
-        return {
-            "score":
-                0.80,
-
-            "label":
-                "SUPPORT REJECTION"
-        }
-
-    if bearish_rejection:
-
-        return {
-            "score":
-                -0.80,
-
-            "label":
-                "RESISTANCE REJECTION"
-        }
-
-    return {
-        "score":
-            0,
-
-        "label":
-            "NO CLEAR LEVEL INTERACTION"
-    }
-
-
-# ============================================================
-# COMPRESSION / EXPANSION
-# ============================================================
-
-def analyze_compression_expansion(
-    candles
-):
-
-    b1 = candles[0]["body_size"]
-    b2 = candles[1]["body_size"]
-    b3 = candles[2]["body_size"]
-
-    newest_direction = (
-        candle_direction(
-            candles[0]
-        )
-    )
-
-    average = (
-        b2 + b3
-    ) / 2
 
     ratio = safe_ratio(
-        b1,
-        average
+        newest["body_size"],
+        (previous["body_size"] + third["body_size"]) / 2
     )
 
-    if ratio < 0.65:
-
-        return {
-            "score":
-                -newest_direction *
-                0.50,
-
-            "state":
-                "COMPRESSION"
-        }
-
-    if ratio > 1.40:
-
-        return {
-            "score":
-                newest_direction *
-                0.75,
-
-            "state":
-                "EXPANSION"
-        }
-
-    return {
-        "score":
-            newest_direction *
-            0.20,
-
-        "state":
-            "NORMAL"
-    }
+    if bull_break and nd == 1 and ratio >= BREAKOUT_RATIO:
+        return {"score": min(1.0, ratio / 1.5), "label": "BULLISH BREAKOUT PRESSURE"}
+    if bear_break and nd == -1 and ratio >= BREAKOUT_RATIO:
+        return {"score": -min(1.0, ratio / 1.5), "label": "BEARISH BREAKOUT PRESSURE"}
+    return {"score": 0, "label": "NO CONFIRMED BREAKOUT"}
 
 
-# ============================================================
-# EXHAUSTION
-# ============================================================
+def analyze_failed_breakout(candles):
+    newest, previous, third = candles
+    d1 = candle_direction(newest)
+    d2 = candle_direction(previous)
+    d3 = candle_direction(third)
 
-def analyze_exhaustion(
-    candles
-):
+    bull_fail = (
+        d3 == 1 and d2 == 1 and d1 == -1 and
+        newest["upper_rejection_ratio"] >= WICK_REJECTION_RATIO
+    )
+    bear_fail = (
+        d3 == -1 and d2 == -1 and d1 == 1 and
+        newest["lower_rejection_ratio"] >= WICK_REJECTION_RATIO
+    )
 
+    if bull_fail:
+        return {"score": -0.85, "label": "FAILED BULLISH BREAKOUT"}
+    if bear_fail:
+        return {"score": 0.85, "label": "FAILED BEARISH BREAKOUT"}
+    return {"score": 0, "label": "NO FAILED BREAKOUT"}
+
+
+def analyze_support_resistance(candles):
     newest = candles[0]
     previous = candles[1]
-    third = candles[2]
 
-    d1 = candle_direction(
-        newest
+    tol = max(5, previous["visual_range"] * SUPPORT_RESISTANCE_TOLERANCE)
+
+    bull_rej = (
+        newest["color"] == "PURPLE" and
+        newest["lower_rejection_ratio"] >= WICK_REJECTION_RATIO and
+        abs(newest["visual_bottom"] - previous["visual_bottom"]) <= tol
+    )
+    bear_rej = (
+        newest["color"] == "YELLOW" and
+        newest["upper_rejection_ratio"] >= WICK_REJECTION_RATIO and
+        abs(newest["visual_top"] - previous["visual_top"]) <= tol
     )
 
-    d2 = candle_direction(
-        previous
-    )
-
-    d3 = candle_direction(
-        third
-    )
-
-    if not (
-        d1 == d2 == d3
-    ):
-
-        return {
-            "score":
-                0,
-
-            "label":
-                "NO EXHAUSTION"
-        }
-
-    average_old = (
-        previous["body_size"] +
-        third["body_size"]
-    ) / 2
-
-    body_ratio = safe_ratio(
-        newest["body_size"],
-        average_old
-    )
-
-    wick = max(
-        newest[
-            "upper_rejection_ratio"
-        ],
-        newest[
-            "lower_rejection_ratio"
-        ]
-    )
-
-    if (
-        body_ratio <=
-        EXHAUSTION_BODY_RATIO
-        and
-        wick >=
-        WICK_REJECTION_RATIO
-    ):
-
-        return {
-            "score":
-                -d1 * 0.90,
-
-            "label":
-                "MOMENTUM EXHAUSTION"
-        }
-
-    return {
-        "score":
-            0,
-
-        "label":
-            "NO EXHAUSTION"
-    }
+    if bull_rej:
+        return {"score": 0.80, "label": "SUPPORT REJECTION"}
+    if bear_rej:
+        return {"score": -0.80, "label": "RESISTANCE REJECTION"}
+    return {"score": 0, "label": "NO CLEAR LEVEL INTERACTION"}
 
 
-# ============================================================
-# CHOPPINESS
-# ============================================================
+def analyze_compression_expansion(candles):
+    b1, b2, b3 = [c["body_size"] for c in candles]
+    nd = candle_direction(candles[0])
+    avg = (b2 + b3) / 2
+    ratio = safe_ratio(b1, avg)
 
-def analyze_choppiness(
-    candles
-):
+    if ratio < 0.65:
+        return {"score": -nd * 0.50, "state": "COMPRESSION"}
+    if ratio > 1.40:
+        return {"score": nd * 0.75, "state": "EXPANSION"}
+    return {"score": nd * 0.20, "state": "NORMAL"}
 
-    directions = [
-        candle_direction(c)
-        for c in candles
-    ]
 
-    changes = (
-        int(
-            directions[0] !=
-            directions[1]
-        )
-        +
-        int(
-            directions[1] !=
-            directions[2]
-        )
-    )
+def analyze_exhaustion(candles):
+    newest, previous, third = candles
+    d1 = candle_direction(newest)
+    d2 = candle_direction(previous)
+    d3 = candle_direction(third)
+
+    if not (d1 == d2 == d3):
+        return {"score": 0, "label": "NO EXHAUSTION"}
+
+    avg_old = (previous["body_size"] + third["body_size"]) / 2
+    ratio = safe_ratio(newest["body_size"], avg_old)
+    wick = max(newest["upper_rejection_ratio"], newest["lower_rejection_ratio"])
+
+    if ratio <= EXHAUSTION_BODY_RATIO and wick >= WICK_REJECTION_RATIO:
+        return {"score": -d1 * 0.90, "label": "MOMENTUM EXHAUSTION"}
+    return {"score": 0, "label": "NO EXHAUSTION"}
+
+
+def analyze_choppiness(candles):
+    d = [candle_direction(c) for c in candles]
+    changes = int(d[0] != d[1]) + int(d[1] != d[2])
 
     if changes == 2:
-
-        return {
-            "score":
-                0.0,
-
-            "choppy":
-                True
-        }
-
+        return {"score": 0.0, "choppy": True}
     if changes == 1:
-
-        return {
-            "score":
-                0.20,
-
-            "choppy":
-                False
-        }
-
-    return {
-        "score":
-            0.90,
-
-        "choppy":
-            False
-    }
+        return {"score": 0.20, "choppy": False}
+    return {"score": 0.90, "choppy": False}
 
 
-# ============================================================
-# BUYER / SELLER CONTROL
-# ============================================================
-
-def analyze_control(
-    candles
-):
-
+def analyze_control(candles):
     weighted = (
-        candle_direction(
-            candles[0]
-        ) * 0.55
-        +
-        candle_direction(
-            candles[1]
-        ) * 0.30
-        +
-        candle_direction(
-            candles[2]
-        ) * 0.15
+        candle_direction(candles[0]) * 0.55 +
+        candle_direction(candles[1]) * 0.30 +
+        candle_direction(candles[2]) * 0.15
     )
 
-    sizes = [
-        c["body_size"]
-        for c in candles
-    ]
+    sizes = [c["body_size"] for c in candles]
+    avg = np.mean(sizes)
+    strength = min(1.0, safe_ratio(np.max(sizes), avg) / 1.5)
 
-    average = np.mean(
-        sizes
-    )
-
-    strength = min(
-        1.0,
-        safe_ratio(
-            np.max(sizes),
-            average
-        ) / 1.5
-    )
-
-    return max(
-        -1.0,
-        min(
-            1.0,
-            weighted * strength
-        )
-    )
+    return max(-1.0, min(1.0, weighted * strength))
 
 
-# ============================================================
-# CANDLE QUALITY
-# ============================================================
-
-def analyze_candle_quality(
-    candles
-):
-
+def analyze_candle_quality(candles):
     newest = candles[0]
+    body_ratio = newest["body_to_range"]
+    rejection = max(newest["upper_rejection_ratio"], newest["lower_rejection_ratio"])
 
-    body_ratio = (
-        newest["body_to_range"]
-    )
-
-    rejection = max(
-        newest[
-            "upper_rejection_ratio"
-        ],
-        newest[
-            "lower_rejection_ratio"
-        ]
-    )
-
-    quality = (
-        body_ratio * 0.65
-        -
-        min(
-            0.50,
-            rejection * 0.20
-        )
-    )
-
-    return max(
-        0,
-        min(
-            1,
-            quality
-        )
-    )
+    q = body_ratio * 0.65 - min(0.50, rejection * 0.20)
+    return max(0, min(1, q))
 
 
-# ============================================================
-# THREE-CANDLE CONFLICT
-# ============================================================
-
-def analyze_conflict(
-    evidence_scores
-):
-
-    positive = sum(
-        max(
-            0,
-            value
-        )
-        for value in evidence_scores
-    )
-
-    negative = sum(
-        abs(
-            min(
-                0,
-                value
-            )
-        )
-        for value in evidence_scores
-    )
-
-    total = (
-        positive +
-        negative
-    )
+def analyze_conflict(evidence):
+    positive = sum(max(0, v) for v in evidence)
+    negative = sum(abs(min(0, v)) for v in evidence)
+    total = positive + negative
 
     if total <= 0:
+        return {"severity": 100, "label": "SEVERE"}
 
-        return {
-            "severity":
-                100,
-
-            "label":
-                "SEVERE"
-        }
-
-    weaker = min(
-        positive,
-        negative
-    )
-
-    stronger = max(
-        positive,
-        negative
-    )
+    weaker = min(positive, negative)
+    stronger = max(positive, negative)
 
     if stronger <= 0:
+        return {"severity": 0, "label": "NONE"}
 
-        return {
-            "severity":
-                0,
+    severity = (weaker / stronger) * 100
 
-            "label":
-                "NONE"
-        }
-
-    severity = (
-        weaker /
-        stronger
-    ) * 100
-
-    if severity >= 70:
-
-        label = "SEVERE"
-
-    elif severity >= 40:
-
-        label = "MODERATE"
-
-    else:
-
-        label = "LOW"
-
-    return {
-        "severity":
-            severity,
-
-        "label":
-            label
-    }
+    label = "SEVERE" if severity >= 70 else ("MODERATE" if severity >= 40 else "LOW")
+    return {"severity": severity, "label": label}
 
 
 # ============================================================
 # FINAL THREE-CANDLE ANALYSIS
 # ============================================================
 
-def analyze_three_candles(
-    img,
-    candles
-):
+def analyze_three_candles(img, candles):
 
     if len(candles) != 3:
-
         return {
-            "decision":
-                "NO TRADE",
-
-            "confidence":
-                0,
-
-            "reason":
-                "Exactly three candles are required.",
-
-            "buy_score":
-                0,
-
-            "sell_score":
-                0
+            "decision": "NO TRADE", "confidence": 0,
+            "reason": "Exactly three candles are required.",
+            "buy_score": 0, "sell_score": 0
         }
 
-    candles = enrich_three_candles(
-        img,
-        candles
-    )
+    candles = enrich_three_candles(img, candles)
 
-    sequence = analyze_sequence(
-        candles
-    )
-
-    progression = (
-        analyze_body_progression(
-            candles
-        )
-    )
-
-    momentum = (
-        analyze_momentum(
-            candles
-        )
-    )
-
-    rejection = (
-        analyze_rejection(
-            candles
-        )
-    )
-
-    engulfing = (
-        analyze_engulfing(
-            candles
-        )
-    )
-
-    structure = (
-        analyze_structure(
-            candles
-        )
-    )
-
-    pullback = (
-        analyze_pullback(
-            candles
-        )
-    )
-
-    reversal = (
-        analyze_reversal(
-            candles
-        )
-    )
-
-    breakout = (
-        analyze_breakout(
-            candles
-        )
-    )
-
-    failed_breakout = (
-        analyze_failed_breakout(
-            candles
-        )
-    )
-
-    support_resistance = (
-        analyze_support_resistance(
-            candles
-        )
-    )
-
-    compression = (
-        analyze_compression_expansion(
-            candles
-        )
-    )
-
-    exhaustion = (
-        analyze_exhaustion(
-            candles
-        )
-    )
-
-    choppiness = (
-        analyze_choppiness(
-            candles
-        )
-    )
-
-    control = (
-        analyze_control(
-            candles
-        )
-    )
-
-    quality = (
-        analyze_candle_quality(
-            candles
-        )
-    )
+    sequence = analyze_sequence(candles)
+    progression = analyze_body_progression(candles)
+    momentum = analyze_momentum(candles)
+    rejection = analyze_rejection(candles)
+    engulfing = analyze_engulfing(candles)
+    structure = analyze_structure(candles)
+    pullback = analyze_pullback(candles)
+    reversal = analyze_reversal(candles)
+    breakout = analyze_breakout(candles)
+    failed_breakout = analyze_failed_breakout(candles)
+    support_resistance = analyze_support_resistance(candles)
+    compression = analyze_compression_expansion(candles)
+    exhaustion = analyze_exhaustion(candles)
+    choppiness = analyze_choppiness(candles)
+    control = analyze_control(candles)
+    quality = analyze_candle_quality(candles)
 
     evidence = [
-
         sequence["score"] * 0.90,
-
         progression["score"] * 0.85,
-
         momentum * 1.00,
-
         rejection["score"] * 0.85,
-
         engulfing["score"] * 0.90,
-
         structure["score"] * 0.90,
-
         pullback["score"] * 0.80,
-
         reversal["score"] * 0.95,
-
         breakout["score"] * 0.90,
-
         failed_breakout["score"] * 0.95,
-
         support_resistance["score"] * 0.85,
-
         compression["score"] * 0.65,
-
         exhaustion["score"] * 1.00,
-
         control * 1.00,
-
-        candle_direction(
-            candles[0]
-        ) * quality * 0.75
+        candle_direction(candles[0]) * quality * 0.75
     ]
 
-    raw_score = sum(
-        evidence
-    )
+    raw = sum(evidence) / len(evidence)
+    raw += candle_direction(candles[0]) * (quality * 0.20)
+    raw = max(-1.0, min(1.0, raw))
 
-    raw_score /= len(
-        evidence
-    )
-
-    newest_direction = (
-        candle_direction(
-            candles[0]
-        )
-    )
-
-    newest_confirmation = (
-        newest_direction *
-        (
-            quality *
-            0.20
-        )
-    )
-
-    raw_score += (
-        newest_confirmation
-    )
-
-    raw_score = max(
-        -1.0,
-        min(
-            1.0,
-            raw_score
-        )
-    )
-
-    conflict = analyze_conflict(
-        evidence
-    )
+    conflict = analyze_conflict(evidence)
 
     if choppiness["choppy"]:
-
-        raw_score *= 0.45
-
-    if (
-        compression["state"]
-        ==
-        "COMPRESSION"
-    ):
-
-        raw_score *= 0.65
-
-    if (
-        exhaustion["score"] != 0
-        and
-        np.sign(
-            exhaustion["score"]
-        )
-        !=
-        np.sign(
-            raw_score
-        )
-    ):
-
-        raw_score *= 0.55
-
-    if (
-        conflict["severity"]
-        >= MAX_CONFLICT
-    ):
-
-        raw_score *= 0.45
-
-    elif (
-        conflict["severity"]
-        >= 40
-    ):
-
-        raw_score *= 0.75
+        raw *= 0.45
+    if compression["state"] == "COMPRESSION":
+        raw *= 0.65
+    if exhaustion["score"] != 0 and np.sign(exhaustion["score"]) != np.sign(raw):
+        raw *= 0.55
+    if conflict["severity"] >= MAX_CONFLICT:
+        raw *= 0.45
+    elif conflict["severity"] >= 40:
+        raw *= 0.75
 
     buy_score = 0.0
     sell_score = 0.0
 
-    if raw_score > 0:
+    if raw > 0:
+        buy_score = abs(raw) * 100
+    elif raw < 0:
+        sell_score = abs(raw) * 100
 
-        buy_score = (
-            abs(
-                raw_score
-            ) *
-            100
-        )
+    separation = abs(buy_score - sell_score)
 
-    elif raw_score < 0:
-
-        sell_score = (
-            abs(
-                raw_score
-            ) *
-            100
-        )
-
-    separation = abs(
-        buy_score -
-        sell_score
-    )
-
-    sideways = (
-        choppiness["choppy"]
-        and
-        abs(
-            raw_score
-        ) <
-        MIN_FINAL_EVIDENCE
-    )
+    sideways = choppiness["choppy"] and abs(raw) < MIN_FINAL_EVIDENCE
 
     if sideways:
-
         decision = "NO TRADE"
-
-        reason = (
-            "The three candles are too "
-            "choppy for a clean 15-second decision."
-        )
-
-    elif (
-        conflict["severity"]
-        >= MAX_CONFLICT
-        and
-        separation <
-        MIN_DIRECTION_SEPARATION
-    ):
-
+        reason = "The three candles are too choppy."
+    elif conflict["severity"] >= MAX_CONFLICT and separation < MIN_DIRECTION_SEPARATION:
         decision = "NO TRADE"
-
-        reason = (
-            "The three-candle evidence "
-            "conflicts too strongly."
-        )
-
-    elif (
-        buy_score >=
-        MIN_SIGNAL_CONFIDENCE
-        and
-        buy_score >
-        sell_score
-        and
-        separation >=
-        MIN_DIRECTION_SEPARATION
-    ):
-
+        reason = "The three-candle evidence conflicts too strongly."
+    elif buy_score >= MIN_SIGNAL_CONFIDENCE and buy_score > sell_score and separation >= MIN_DIRECTION_SEPARATION:
         decision = "BUY"
-
-        reason = (
-            "The three newest candles "
-            "show stronger bullish control "
-            "with supporting momentum and structure."
-        )
-
-    elif (
-        sell_score >=
-        MIN_SIGNAL_CONFIDENCE
-        and
-        sell_score >
-        buy_score
-        and
-        separation >=
-        MIN_DIRECTION_SEPARATION
-    ):
-
+        reason = "Bullish 3-candle structure."
+    elif sell_score >= MIN_SIGNAL_CONFIDENCE and sell_score > buy_score and separation >= MIN_DIRECTION_SEPARATION:
         decision = "SELL"
-
-        reason = (
-            "The three newest candles "
-            "show stronger bearish control "
-            "with supporting momentum and structure."
-        )
-
+        reason = "Bearish 3-candle structure."
     else:
-
         decision = "NO TRADE"
-
         if exhaustion["score"] != 0:
-
-            reason = (
-                "The three candles show "
-                "possible momentum exhaustion."
-            )
-
-        elif (
-            compression["state"]
-            ==
-            "COMPRESSION"
-        ):
-
-            reason = (
-                "The three candles are "
-                "compressed without enough confirmation."
-            )
-
+            reason = "Possible momentum exhaustion."
+        elif compression["state"] == "COMPRESSION":
+            reason = "Compressed candles."
         elif conflict["severity"] >= 40:
-
-            reason = (
-                "The three candles contain "
-                "conflicting directional evidence."
-            )
-
+            reason = "Conflicting evidence."
         else:
-
-            reason = (
-                "The three candles do not "
-                "provide enough directional separation."
-            )
+            reason = "Insufficient directional separation."
 
     if decision == "BUY":
-
         confidence = buy_score
-
     elif decision == "SELL":
-
         confidence = sell_score
-
     else:
+        confidence = min(max(buy_score, sell_score), 59)
 
-        confidence = max(
-            buy_score,
-            sell_score
-        )
-
-        confidence = min(
-            confidence,
-            59
-        )
-
-    confidence = max(
-        0,
-        min(
-            100,
-            confidence
-        )
-    )
+    confidence = max(0, min(100, confidence))
 
     return {
-
-        "decision":
-            decision,
-
-        "confidence":
-            confidence,
-
-        "reason":
-            reason,
-
-        "buy_score":
-            buy_score,
-
-        "sell_score":
-            sell_score,
-
-        "separation":
-            separation,
-
-        "conflict":
-            conflict,
-
-        "sequence":
-            sequence,
-
-        "progression":
-            progression,
-
-        "momentum":
-            momentum,
-
-        "rejection":
-            rejection,
-
-        "engulfing":
-            engulfing,
-
-        "structure":
-            structure,
-
-        "pullback":
-            pullback,
-
-        "reversal":
-            reversal,
-
-        "breakout":
-            breakout,
-
-        "failed_breakout":
-            failed_breakout,
-
-        "support_resistance":
-            support_resistance,
-
-        "compression":
-            compression,
-
-        "exhaustion":
-            exhaustion,
-
-        "choppiness":
-            choppiness,
-
-        "control":
-            control,
-
-        "candle_quality":
-            quality,
-
-        "candles_used":
-            3
+        "decision": decision,
+        "confidence": confidence,
+        "reason": reason,
+        "buy_score": buy_score,
+        "sell_score": sell_score,
+        "separation": separation,
+        "conflict": conflict,
+        "sequence": sequence,
+        "progression": progression,
+        "momentum": momentum,
+        "rejection": rejection,
+        "engulfing": engulfing,
+        "structure": structure,
+        "pullback": pullback,
+        "reversal": reversal,
+        "breakout": breakout,
+        "failed_breakout": failed_breakout,
+        "support_resistance": support_resistance,
+        "compression": compression,
+        "exhaustion": exhaustion,
+        "choppiness": choppiness,
+        "control": control,
+        "candle_quality": quality,
+        "candles_used": 3
     }
 
 
 # ============================================================
-# CREATE THREE-CANDLE DETECTION MAP
+# DETECTION MAP
 # ============================================================
 
-def create_detection_map(
-    img,
-    candles
-):
-
+def create_detection_map(img, candles):
     output = img.copy()
 
-    for number, candle in enumerate(
-        candles,
-        start=1
-    ):
+    for number, candle in enumerate(candles, start=1):
+        x = int(candle["x"])
+        y = int(candle["y"])
+        w = int(candle["w"])
+        h = int(candle["h"])
 
-        x = int(
-            candle["x"]
-        )
+        verified = candle["verification"]["verified"]
+        box_color = (0, 255, 0) if verified else (0, 0, 255)
 
-        y = int(
-            candle["y"]
-        )
+        cv2.rectangle(output, (x, y), (x + w, y + h), box_color, 2)
 
-        w = int(
-            candle["w"]
-        )
+        label_color = (255, 0, 255) if candle["color"] == "PURPLE" else (0, 255, 255)
 
-        h = int(
-            candle["h"]
-        )
-
-        verified = candle[
-            "verification"
-        ]["verified"]
-
-        if verified:
-
-            box_color = (
-                0,
-                255,
-                0
-            )
-
-        else:
-
-            box_color = (
-                0,
-                0,
-                255
-            )
-
-        cv2.rectangle(
-            output,
-            (x, y),
-            (
-                x + w,
-                y + h
-            ),
-            box_color,
-            2
-        )
-
-        if candle["color"] == "PURPLE":
-
-            label_color = (
-                255,
-                0,
-                255
-            )
-
-        else:
-
-            label_color = (
-                0,
-                255,
-                255
-            )
-
-        cv2.putText(
-            output,
-            str(number),
-            (
-                x,
-                max(
-                    25,
-                    y - 7
-                )
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.60,
-            label_color,
-            2,
-            cv2.LINE_AA
-        )
+        cv2.putText(output, str(number), (x, max(25, y - 7)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.60, label_color, 2, cv2.LINE_AA)
 
     return output
 
@@ -4034,385 +1274,147 @@ def create_detection_map(
 # TELEGRAM PHOTO HANDLER
 # ============================================================
 
-@bot.message_handler(
-    content_types=["photo"]
-)
-def handle_photo(
-    message
-):
+@bot.message_handler(content_types=["photo"])
+def handle_photo(message):
 
     start_time = time.time()
-
-    original_path = (
-        "chart_screenshot.png"
-    )
-
-    detection_path = (
-        "three_candle_map.png"
-    )
+    original_path = "chart_screenshot.png"
+    detection_path = "three_candle_map.png"
 
     try:
+        bot.send_message(message.chat.id, "🔍 Analyzing 3 candles...")
 
-        # ----------------------------------------------------
-        # ANALYZING MESSAGE
-        # ----------------------------------------------------
+        file_info = bot.get_file(message.photo[-1].file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
 
-        bot.send_message(
-            message.chat.id,
-            "🔍 Analyzing 3 candles..."
-        )
+        with open(original_path, "wb") as f:
+            f.write(downloaded_file)
 
-        # ----------------------------------------------------
-        # DOWNLOAD SCREENSHOT
-        # ----------------------------------------------------
-
-        file_info = bot.get_file(
-            message.photo[-1].file_id
-        )
-
-        downloaded_file = (
-            bot.download_file(
-                file_info.file_path
-            )
-        )
-
-        with open(
-            original_path,
-            "wb"
-        ) as f:
-
-            f.write(
-                downloaded_file
-            )
-
-        # ----------------------------------------------------
-        # LOAD IMAGE
-        # ----------------------------------------------------
-
-        img = load_image(
-            original_path
-        )
-
-        # ----------------------------------------------------
-        # DETECT EXACTLY THREE
-        # ----------------------------------------------------
-
-        three_candles = (
-            detect_three_candles(
-                img
-            )
-        )
-
-        detected_count = len(
-            three_candles
-        )
-
-        print(
-            f"Detected rightmost candles: "
-            f"{detected_count}"
-        )
+        img = load_image(original_path)
+        three_candles = detect_three_candles(img)
+        detected_count = len(three_candles)
 
         if detected_count != 3:
-
             bot.send_message(
                 message.chat.id,
-                (
-                    "⚪ **NO SIGNAL — DON'T TRADE**\n\n"
-                    f"Only {detected_count}/3 "
-                    "candles could be detected."
-                ),
+                f"⚪ **NO SIGNAL — DON'T TRADE**\n\nOnly {detected_count}/3 candles detected.",
                 parse_mode="Markdown"
             )
-
             return
 
-        # ----------------------------------------------------
-        # VERIFY ONLY THE THREE
-        # ----------------------------------------------------
+        verified_candles = verify_three_candles(img, three_candles)
+        analysis_candles = [c for c in verified_candles if c["verification"]["verified"]]
 
-        verified_candles = (
-            verify_three_candles(
-                img,
-                three_candles
-            )
-        )
-
-        analysis_candles = []
-
-        for candle in verified_candles:
-
-            if candle[
-                "verification"
-            ]["verified"]:
-
-                analysis_candles.append(
-                    candle
-                )
-
-        if len(
-            analysis_candles
-        ) != 3:
-
+        if len(analysis_candles) != 3:
             bot.send_message(
                 message.chat.id,
-                (
-                    "⚪ **NO SIGNAL — DON'T TRADE**\n\n"
-                    "The three selected candles "
-                    "could not all be verified."
-                ),
+                "⚪ **NO SIGNAL — DON'T TRADE**\n\nThe three candles could not all be verified.",
                 parse_mode="Markdown"
             )
-
             return
 
-        # ----------------------------------------------------
-        # THREE-CANDLE ENGINE
-        # ----------------------------------------------------
-
-        analysis = (
-            analyze_three_candles(
-                img,
-                analysis_candles
-            )
-        )
-
-        decision = (
-            analysis["decision"]
-        )
-
-        confidence = (
-            analysis["confidence"]
-        )
-
-        reason = (
-            analysis["reason"]
-        )
-
-        # ----------------------------------------------------
-        # SIGNAL
-        # ----------------------------------------------------
+        analysis = analyze_three_candles(img, analysis_candles)
+        decision = analysis["decision"]
+        confidence = analysis["confidence"]
+        reason = analysis["reason"]
 
         if decision == "BUY":
-
-            signal_time = (
-                get_signal_time()
-            )
-
-            entry_time = (
-                get_entry_time(
-                    signal_time
-                )
-            )
+            signal_time = get_signal_time()
+            entry_time = get_entry_time(signal_time)
 
             caption = (
-
                 "🚨 **SIGNAL ALERT**\n\n"
-
                 "💱 **Auto-Scan: ALL Deriv Pairs**\n"
-                "🏆 **Best Pair Will Be Selected Automatically**\n\n"
-
+                "🏆 **Best Pair Auto-Selected**\n\n"
                 "🟢 **BUY**\n\n"
-
-                f"🕐 **Signal Time:** "
-                f"{signal_time} 🇳🇬\n"
-
-                f"🎯 **Entry Time:** "
-                f"{entry_time} 🇳🇬\n"
-
+                f"🕐 **Signal Time:** {signal_time} 🇳🇬\n"
+                f"🎯 **Entry Time:** {entry_time} 🇳🇬\n"
                 "⏱️ **Expiry:** 15 Seconds\n"
-
-                f"💪 **Strength:** "
-                f"{confidence:.0f}%\n\n"
-
+                f"💪 **Strength:** {confidence:.0f}%\n\n"
                 f"• {reason}"
             )
 
-            bot.send_message(
-                message.chat.id,
-                caption,
-                parse_mode="Markdown"
-            )
+            bot.send_message(message.chat.id, caption, parse_mode="Markdown")
 
             try:
-
                 bot.forward_message(
                     chat_id=CHANNEL_ID,
                     from_chat_id=message.chat.id,
                     message_id=message.message_id
                 )
-
-                print(
-                    "✅ Screenshot forwarded to channel"
-                )
-
+                print("✅ Screenshot forwarded to channel")
             except Exception as e:
+                print("Screenshot forward error:", e)
 
-                print(
-                    "Screenshot forward error:",
-                    e
-                )
-
-            send_to_channel(
-                caption
-            )
+            send_to_channel(caption)
 
             threading.Thread(
                 target=execute_deriv_trade_at_entry,
-                args=(
-                    "BUY",
-                    entry_time
-                ),
+                args=("BUY", entry_time),
                 daemon=True
             ).start()
 
         elif decision == "SELL":
-
-            signal_time = (
-                get_signal_time()
-            )
-
-            entry_time = (
-                get_entry_time(
-                    signal_time
-                )
-            )
+            signal_time = get_signal_time()
+            entry_time = get_entry_time(signal_time)
 
             caption = (
-
                 "🚨 **SIGNAL ALERT**\n\n"
-
                 "💱 **Auto-Scan: ALL Deriv Pairs**\n"
-                "🏆 **Best Pair Will Be Selected Automatically**\n\n"
-
+                "🏆 **Best Pair Auto-Selected**\n\n"
                 "🔴 **SELL**\n\n"
-
-                f"🕐 **Signal Time:** "
-                f"{signal_time} 🇳🇬\n"
-
-                f"🎯 **Entry Time:** "
-                f"{entry_time} 🇳🇬\n"
-
+                f"🕐 **Signal Time:** {signal_time} 🇳🇬\n"
+                f"🎯 **Entry Time:** {entry_time} 🇳🇬\n"
                 "⏱️ **Expiry:** 15 Seconds\n"
-
-                f"💪 **Strength:** "
-                f"{confidence:.0f}%\n\n"
-
+                f"💪 **Strength:** {confidence:.0f}%\n\n"
                 f"• {reason}"
             )
 
-            bot.send_message(
-                message.chat.id,
-                caption,
-                parse_mode="Markdown"
-            )
+            bot.send_message(message.chat.id, caption, parse_mode="Markdown")
 
             try:
-
                 bot.forward_message(
                     chat_id=CHANNEL_ID,
                     from_chat_id=message.chat.id,
                     message_id=message.message_id
                 )
-
-                print(
-                    "✅ Screenshot forwarded to channel"
-                )
-
+                print("✅ Screenshot forwarded to channel")
             except Exception as e:
+                print("Screenshot forward error:", e)
 
-                print(
-                    "Screenshot forward error:",
-                    e
-                )
-
-            send_to_channel(
-                caption
-            )
+            send_to_channel(caption)
 
             threading.Thread(
                 target=execute_deriv_trade_at_entry,
-                args=(
-                    "SELL",
-                    entry_time
-                ),
+                args=("SELL", entry_time),
                 daemon=True
             ).start()
 
         else:
-
             bot.send_message(
                 message.chat.id,
-                (
-                    "⚪ **NO SIGNAL — DON'T TRADE**\n\n"
-                    f"3-candle confidence: "
-                    f"{confidence:.0f}%\n"
-                    f"• {reason}"
-                ),
+                f"⚪ **NO SIGNAL — DON'T TRADE**\n\n3-candle confidence: {confidence:.0f}%\n• {reason}",
                 parse_mode="Markdown"
             )
 
-        # ----------------------------------------------------
-        # CREATE MAP LOCAL ONLY
-        # ----------------------------------------------------
+        detection_map = create_detection_map(img, verified_candles)
+        cv2.imwrite(detection_path, detection_map)
 
-        detection_map = (
-            create_detection_map(
-                img,
-                verified_candles
-            )
-        )
-
-        cv2.imwrite(
-            detection_path,
-            detection_map
-        )
-
-        print(
-            f"✅ Processed in "
-            f"{time.time() - start_time:.2f}s"
-            f" | 3 candles used"
-            f" | Decision: {decision}"
-            f" | Confidence: "
-            f"{confidence:.1f}%"
-        )
+        print(f"✅ Processed in {time.time() - start_time:.2f}s | {decision} | {confidence:.1f}%")
 
     except Exception as e:
-
-        print(
-            "❌ ERROR:",
-            repr(e)
-        )
-
+        print("❌ ERROR:", repr(e))
         try:
-
-            bot.send_message(
-                message.chat.id,
-                f"❌ Error: {str(e)}"
-            )
-
+            bot.send_message(message.chat.id, f"❌ Error: {str(e)}")
         except Exception:
-
             pass
 
     finally:
-
-        for path in [
-            original_path,
-            detection_path
-        ]:
-
-            if os.path.exists(
-                path
-            ):
-
+        for path in [original_path, detection_path]:
+            if os.path.exists(path):
                 try:
-
-                    os.remove(
-                        path
-                    )
-
+                    os.remove(path)
                 except Exception:
-
                     pass
 
 
@@ -4420,37 +1422,21 @@ def handle_photo(
 # START COMMAND
 # ============================================================
 
-@bot.message_handler(
-    commands=["start"]
-)
-def start(
-    message
-):
-
+@bot.message_handler(commands=["start"])
+def start(message):
     bot.send_message(
-
         message.chat.id,
-
         "📊 **OTC 3-CANDLE 15s BOT**\n\n"
-
         "Send a Pocket Option screenshot.\n\n"
-
-        "The bot will detect exactly "
-        "the 3 rightmost candles.\n\n"
-
         "💱 **Deriv:** Scans ALL forex pairs\n"
         "🏆 **Picks the BEST pair** automatically\n"
         "🤖 Places DEMO trade on best pair\n"
         "🔁 Repeats for every new signal\n\n"
-
         "🟣 Purple / 🟡 Yellow detection\n"
         "🔬 Deep 3-candle analysis\n"
         "📸 Channel receives screenshot + signal\n"
-        "⏱️ 15-second expiry\n"
-        "🚫 Older candles excluded\n\n"
-
+        "⏱️ 15-second expiry\n\n"
         "⚡ **BUY / SELL / NO TRADE**",
-
         parse_mode="Markdown"
     )
 
@@ -4462,82 +1448,22 @@ def start(
 if __name__ == "__main__":
 
     try:
-
         load_all_deriv_pairs()
-
     except Exception as e:
-
-        print(
-            "❌ Deriv pairs initialization failed:",
-            repr(e)
-        )
-
+        print("❌ Deriv pairs initialization failed:", repr(e))
         raise
 
-    flask_thread = threading.Thread(
-        target=run_flask,
-        daemon=True
-    )
-
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    print(
-        "✅ Flask server started"
-    )
-
+    print("=" * 55)
+    print("📊 OTC 3-CANDLE 15s SIGNAL BOT")
+    print("✅ 3 RIGHTMOST CANDLES ONLY")
+    print("✅ CHANNEL: SCREENSHOT + SIGNAL")
+    print("✅ DERIV: ALL PAIRS SCANNED")
+    print("✅ DERIV: BEST PAIR AUTO-SELECTED")
+    print("✅ DERIV: DEMO ONLY")
+    print(f"✅ TOTAL PAIRS: {len(DERIV_ALL_PAIRS)}")
     print("=" * 55)
 
-    print(
-        "📊 OTC 3-CANDLE 15s SIGNAL BOT"
-    )
-
-    print(
-        "✅ 3 RIGHTMOST CANDLES ONLY"
-    )
-
-    print(
-        "✅ DEEP 3-CANDLE ANALYSIS"
-    )
-
-    print(
-        "✅ CHANNEL: SCREENSHOT + SIGNAL"
-    )
-
-    print(
-        "✅ NO SIGNAL: PRIVATE ONLY"
-    )
-
-    print(
-        "✅ DERIV: ALL PAIRS SCANNED"
-    )
-
-    print(
-        "✅ DERIV: BEST PAIR AUTO-SELECTED"
-    )
-
-    print(
-        "✅ DERIV: DEMO ONLY"
-    )
-
-    print(
-        "✅ DERIV: 15-SECOND CALL / PUT"
-    )
-
-    print(
-        f"✅ DERIV STAKE: ${DERIV_STAKE}"
-    )
-
-    print(
-        f"✅ TOTAL PAIRS: {len(DERIV_ALL_PAIRS)}"
-    )
-
-    print(
-        "✅ FLASK KEEP-ALIVE"
-    )
-
-    print("=" * 55)
-
-    bot.infinity_polling(
-        timeout=30,
-        long_polling_timeout=30
-    )
+    bot.infinity_polling(timeout=30, long_polling_timeout=30)
