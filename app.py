@@ -5,6 +5,8 @@ import telebot
 import time
 import requests
 import threading
+import json
+import websocket
 from flask import Flask
 from datetime import datetime, timezone, timedelta
 
@@ -54,29 +56,833 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 
 # ============================================================
+# DERIV API
+# ============================================================
+
+DERIV_API_TOKEN = os.getenv(
+    "DERIV_API_TOKEN"
+)
+
+DERIV_APP_ID = os.getenv(
+    "DERIV_APP_ID"
+)
+
+# ------------------------------------------------------------
+# REAL DERIV CURRENCY PAIR SELECTION
+#
+# Examples:
+# EURUSD
+# GBPUSD
+# USDJPY
+# EURJPY
+# GBPJPY
+#
+# The bot checks this against Deriv's active-symbol list.
+# ------------------------------------------------------------
+
+DERIV_SIGNAL_PAIR = os.getenv(
+    "DERIV_SIGNAL_PAIR"
+)
+
+DERIV_STAKE = float(
+    os.getenv(
+        "DERIV_STAKE",
+        "1"
+    )
+)
+
+DERIV_API_BASE = (
+    "https://api.derivws.com"
+)
+
+DERIV_DEMO_ONLY = True
+
+if not DERIV_API_TOKEN:
+    raise RuntimeError(
+        "DERIV_API_TOKEN environment variable is missing."
+    )
+
+if not DERIV_APP_ID:
+    raise RuntimeError(
+        "DERIV_APP_ID environment variable is missing."
+    )
+
+if not DERIV_SIGNAL_PAIR:
+    raise RuntimeError(
+        "DERIV_SIGNAL_PAIR environment variable is missing."
+    )
+
+DERIV_SIGNAL_PAIR = (
+    DERIV_SIGNAL_PAIR
+    .strip()
+    .upper()
+)
+
+if DERIV_STAKE <= 0:
+    raise RuntimeError(
+        "DERIV_STAKE must be greater than 0."
+    )
+
+
+# ============================================================
+# DERIV ACTIVE CURRENCY PAIRS
+# ============================================================
+
+DERIV_PAIR_INFO = {}
+
+
+def get_deriv_active_currency_pairs():
+
+    response = requests.get(
+        (
+            f"{DERIV_API_BASE}"
+            "/trading/v1/active_symbols"
+        ),
+        headers=deriv_headers(),
+        timeout=20
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if "errors" in data:
+
+        raise RuntimeError(
+            str(data["errors"])
+        )
+
+    symbols = data.get(
+        "active_symbols",
+        data.get(
+            "data",
+            []
+        )
+    )
+
+    if isinstance(
+        symbols,
+        dict
+    ):
+
+        symbols = [
+            symbols
+        ]
+
+    pairs = {}
+
+    for symbol in symbols:
+
+        underlying_symbol = (
+            symbol.get(
+                "underlying_symbol"
+            )
+        )
+
+        pair_name = (
+            symbol.get(
+                "underlying_symbol_name"
+            )
+        )
+
+        symbol_type = (
+            symbol.get(
+                "underlying_symbol_type"
+            )
+        )
+
+        market = (
+            symbol.get(
+                "market"
+            )
+        )
+
+        if not underlying_symbol:
+            continue
+
+        if (
+            symbol_type == "forex"
+            or
+            market == "forex"
+        ):
+
+            clean_pair = (
+                underlying_symbol
+                .replace(
+                    "frx",
+                    "",
+                    1
+                )
+                .upper()
+            )
+
+            pairs[clean_pair] = {
+                "underlying_symbol":
+                    underlying_symbol,
+
+                "underlying_symbol_name":
+                    pair_name
+                    or
+                    clean_pair,
+
+                "market":
+                    market,
+
+                "underlying_symbol_type":
+                    symbol_type
+            }
+
+    return pairs
+
+
+def load_deriv_currency_pair():
+
+    global DERIV_PAIR_INFO
+
+    print(
+        "🔎 Loading real Deriv currency pairs..."
+    )
+
+    pairs = (
+        get_deriv_active_currency_pairs()
+    )
+
+    if not pairs:
+
+        raise RuntimeError(
+            "Deriv returned no active forex currency pairs."
+        )
+
+    requested_pair = (
+        DERIV_SIGNAL_PAIR
+        .replace(
+            "/",
+            ""
+        )
+        .replace(
+            "_",
+            ""
+        )
+        .replace(
+            "-",
+            ""
+        )
+        .upper()
+    )
+
+    if requested_pair not in pairs:
+
+        available_preview = ", ".join(
+            sorted(
+                pairs.keys()
+            )[:30]
+        )
+
+        raise RuntimeError(
+            "DERIV_SIGNAL_PAIR "
+            f"'{DERIV_SIGNAL_PAIR}' "
+            "was not found in Deriv's "
+            "currently active forex pairs.\n"
+            "Available examples: "
+            f"{available_preview}"
+        )
+
+    DERIV_PAIR_INFO = (
+        pairs[requested_pair]
+    )
+
+    print(
+        "✅ Deriv real currency pair:",
+        DERIV_PAIR_INFO[
+            "underlying_symbol_name"
+        ]
+    )
+
+    print(
+        "✅ Deriv currency ID:",
+        DERIV_PAIR_INFO[
+            "underlying_symbol"
+        ]
+    )
+
+    return DERIV_PAIR_INFO
+
+
+def deriv_pair_name():
+
+    if not DERIV_PAIR_INFO:
+
+        load_deriv_currency_pair()
+
+    return DERIV_PAIR_INFO[
+        "underlying_symbol_name"
+    ]
+
+
+def deriv_pair_id():
+
+    if not DERIV_PAIR_INFO:
+
+        load_deriv_currency_pair()
+
+    return DERIV_PAIR_INFO[
+        "underlying_symbol"
+    ]
+
+
+# ============================================================
+# DERIV API HELPERS
+# ============================================================
+
+def deriv_headers():
+
+    return {
+        "Authorization":
+            f"Bearer {DERIV_API_TOKEN}",
+
+        "Deriv-App-ID":
+            DERIV_APP_ID,
+
+        "Content-Type":
+            "application/json"
+    }
+
+
+def get_deriv_demo_account():
+
+    response = requests.get(
+        (
+            f"{DERIV_API_BASE}"
+            "/trading/v1/options/accounts"
+        ),
+        headers=deriv_headers(),
+        timeout=20
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if "errors" in data:
+
+        raise RuntimeError(
+            str(data["errors"])
+        )
+
+    accounts = data.get(
+        "data",
+        []
+    )
+
+    if isinstance(
+        accounts,
+        dict
+    ):
+
+        accounts = [
+            accounts
+        ]
+
+    for account in accounts:
+
+        if (
+            account.get(
+                "account_type"
+            )
+            ==
+            "demo"
+        ):
+
+            account_id = account.get(
+                "account_id"
+            )
+
+            if account_id:
+
+                return account_id
+
+    raise RuntimeError(
+        "No Deriv demo Options account was found."
+    )
+
+
+def get_deriv_websocket_url(
+    account_id
+):
+
+    url = (
+        f"{DERIV_API_BASE}"
+        f"/trading/v1/options/accounts/"
+        f"{account_id}/otp"
+    )
+
+    response = requests.post(
+        url,
+        headers=deriv_headers(),
+        timeout=20
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if "errors" in data:
+
+        raise RuntimeError(
+            str(data["errors"])
+        )
+
+    ws_url = (
+        data
+        .get(
+            "data",
+            {}
+        )
+        .get(
+            "url"
+        )
+    )
+
+    if not ws_url:
+
+        raise RuntimeError(
+            "Deriv did not return a WebSocket URL."
+        )
+
+    if (
+        "ws/demo" not in ws_url
+    ):
+
+        raise RuntimeError(
+            "Safety check failed: "
+            "the returned Deriv WebSocket "
+            "is not the demo endpoint."
+        )
+
+    return ws_url
+
+
+def deriv_send_and_receive(
+    ws,
+    payload,
+    timeout=20
+):
+
+    ws.settimeout(
+        timeout
+    )
+
+    ws.send(
+        json.dumps(
+            payload
+        )
+    )
+
+    while True:
+
+        raw = ws.recv()
+
+        if not raw:
+
+            raise RuntimeError(
+                "Deriv WebSocket closed unexpectedly."
+            )
+
+        data = json.loads(
+            raw
+        )
+
+        if data.get(
+            "error"
+        ):
+
+            raise RuntimeError(
+                data[
+                    "error"
+                ].get(
+                    "message",
+                    str(
+                        data[
+                            "error"
+                        ]
+                    )
+                )
+            )
+
+        msg_type = data.get(
+            "msg_type"
+        )
+
+        if (
+            msg_type
+            in
+            (
+                "proposal",
+                "buy"
+            )
+        ):
+
+            return data
+
+
+# ============================================================
+# DERIV DEMO TRADE
+# ============================================================
+
+def execute_deriv_demo_trade(
+    direction
+):
+
+    if not DERIV_DEMO_ONLY:
+
+        raise RuntimeError(
+            "Safety check failed: "
+            "DERIV_DEMO_ONLY must remain True."
+        )
+
+    pair_info = (
+        load_deriv_currency_pair()
+    )
+
+    contract_type = (
+        "CALL"
+        if direction == "BUY"
+        else "PUT"
+    )
+
+    symbol_id = (
+        pair_info[
+            "underlying_symbol"
+        ]
+    )
+
+    pair_name = (
+        pair_info[
+            "underlying_symbol_name"
+        ]
+    )
+
+    account_id = (
+        get_deriv_demo_account()
+    )
+
+    print(
+        "Deriv demo account:",
+        account_id
+    )
+
+    ws_url = (
+        get_deriv_websocket_url(
+            account_id
+        )
+    )
+
+    print(
+        "Connecting to Deriv demo WebSocket..."
+    )
+
+    ws = websocket.create_connection(
+        ws_url,
+        timeout=20
+    )
+
+    try:
+
+        proposal_request = {
+
+            "proposal":
+                1,
+
+            "amount":
+                DERIV_STAKE,
+
+            "basis":
+                "stake",
+
+            "contract_type":
+                contract_type,
+
+            "currency":
+                "USD",
+
+            "duration":
+                15,
+
+            "duration_unit":
+                "s",
+
+            "underlying_symbol":
+                symbol_id
+        }
+
+        print(
+            "Requesting Deriv proposal:",
+            contract_type,
+            pair_name,
+            symbol_id,
+            "15 seconds"
+        )
+
+        proposal_response = (
+            deriv_send_and_receive(
+                ws,
+                proposal_request
+            )
+        )
+
+        proposal = (
+            proposal_response
+            .get(
+                "proposal",
+                {}
+            )
+        )
+
+        proposal_id = (
+            proposal.get(
+                "id"
+            )
+        )
+
+        ask_price = (
+            proposal.get(
+                "ask_price"
+            )
+        )
+
+        if not proposal_id:
+
+            raise RuntimeError(
+                "Deriv did not return a proposal ID."
+            )
+
+        if ask_price is None:
+
+            raise RuntimeError(
+                "Deriv did not return an ask price."
+            )
+
+        print(
+            "Deriv proposal received:",
+            proposal_id
+        )
+
+        buy_request = {
+
+            "buy":
+                proposal_id,
+
+            "price":
+                float(
+                    ask_price
+                )
+        }
+
+        buy_response = (
+            deriv_send_and_receive(
+                ws,
+                buy_request
+            )
+        )
+
+        buy_data = (
+            buy_response
+            .get(
+                "buy",
+                {}
+            )
+        )
+
+        contract_id = (
+            buy_data.get(
+                "contract_id"
+            )
+        )
+
+        if not contract_id:
+
+            raise RuntimeError(
+                "Deriv did not return a contract ID."
+            )
+
+        print(
+            "✅ DERIV DEMO TRADE EXECUTED"
+        )
+
+        print(
+            "Direction:",
+            direction
+        )
+
+        print(
+            "Contract:",
+            contract_type
+        )
+
+        print(
+            "Currency pair:",
+            pair_name
+        )
+
+        print(
+            "Deriv ID:",
+            symbol_id
+        )
+
+        print(
+            "Stake:",
+            DERIV_STAKE
+        )
+
+        print(
+            "Contract ID:",
+            contract_id
+        )
+
+        return {
+
+            "success":
+                True,
+
+            "direction":
+                direction,
+
+            "contract_type":
+                contract_type,
+
+            "pair":
+                pair_name,
+
+            "symbol":
+                symbol_id,
+
+            "stake":
+                DERIV_STAKE,
+
+            "contract_id":
+                contract_id
+        }
+
+    finally:
+
+        try:
+
+            ws.close()
+
+        except Exception:
+
+            pass
+
+
+def execute_deriv_trade_at_entry(
+    direction,
+    entry_time
+):
+
+    try:
+
+        now = datetime.now(
+            LOCAL_TZ
+        )
+
+        target = datetime.strptime(
+            entry_time,
+            "%H:%M"
+        ).replace(
+            year=now.year,
+            month=now.month,
+            day=now.day,
+            tzinfo=LOCAL_TZ
+        )
+
+        if target <= now:
+
+            target += timedelta(
+                days=1
+            )
+
+        wait_seconds = (
+            target - now
+        ).total_seconds()
+
+        if wait_seconds > 0:
+
+            print(
+                f"⏳ Waiting {wait_seconds:.1f}s "
+                f"for Deriv entry time {entry_time}"
+            )
+
+            time.sleep(
+                wait_seconds
+            )
+
+        print(
+            f"🤖 Executing Deriv DEMO "
+            f"{direction} at {entry_time}"
+        )
+
+        result = (
+            execute_deriv_demo_trade(
+                direction
+            )
+        )
+
+        print(
+            "✅ Deriv demo trade result:",
+            result
+        )
+
+    except Exception as e:
+
+        print(
+            "❌ Deriv auto-trade error:",
+            repr(e)
+        )
+
+
+# ============================================================
 # TIMEZONE
 # ============================================================
 
-LOCAL_TZ = timezone(timedelta(hours=1))
+LOCAL_TZ = timezone(
+    timedelta(
+        hours=1
+    )
+)
 
 
 def get_signal_time():
-    now = datetime.now(LOCAL_TZ)
+
+    now = datetime.now(
+        LOCAL_TZ
+    )
+
     signal_time = now.replace(
         second=0,
         microsecond=0
     )
-    return signal_time.strftime("%H:%M")
+
+    return signal_time.strftime(
+        "%H:%M"
+    )
 
 
-def get_entry_time(signal_time):
+def get_entry_time(
+    signal_time
+):
+
     return (
         datetime.strptime(
             signal_time,
             "%H:%M"
         )
-        + timedelta(minutes=1)
-    ).strftime("%H:%M")
+        +
+        timedelta(
+            minutes=1
+        )
+    ).strftime(
+        "%H:%M"
+    )
 
 
 # ============================================================
@@ -140,7 +946,7 @@ VERIFY_CONFIDENCE_THRESHOLD = 65
 
 REQUIRED_CANDLES = 3
 
-MIN_SIGNAL_CONFIDENCE = 40
+MIN_SIGNAL_CONFIDENCE = 20
 
 MIN_DIRECTION_SEPARATION = 10
 
@@ -163,7 +969,9 @@ SUPPORT_RESISTANCE_TOLERANCE = 0.50
 # SEND TEXT TO TELEGRAM CHANNEL
 # ============================================================
 
-def send_to_channel(message):
+def send_to_channel(
+    message
+):
 
     try:
 
@@ -173,7 +981,9 @@ def send_to_channel(message):
             parse_mode="Markdown"
         )
 
-        print("✅ Signal sent to channel")
+        print(
+            "✅ Signal sent to channel"
+        )
 
     except Exception as e:
 
@@ -187,9 +997,13 @@ def send_to_channel(message):
 # LOAD IMAGE
 # ============================================================
 
-def load_image(path):
+def load_image(
+    path
+):
 
-    img = cv2.imread(path)
+    img = cv2.imread(
+        path
+    )
 
     if img is None:
 
@@ -206,8 +1020,12 @@ def load_image(path):
         img = cv2.resize(
             img,
             (
-                int(w * scale),
-                int(h * scale)
+                int(
+                    w * scale
+                ),
+                int(
+                    h * scale
+                )
             ),
             interpolation=cv2.INTER_CUBIC
         )
@@ -219,7 +1037,9 @@ def load_image(path):
 # COLOR MASKS
 # ============================================================
 
-def get_color_masks(img):
+def get_color_masks(
+    img
+):
 
     hsv = cv2.cvtColor(
         img,
@@ -262,33 +1082,65 @@ def get_color_masks(img):
         yellow_upper
     )
 
-    b, g, r = cv2.split(img)
+    b, g, r = cv2.split(
+        img
+    )
 
     purple_dominance = (
 
-        (r.astype(np.int16) >
-         g.astype(np.int16) *
-         PURPLE_DOMINANCE_RATIO)
+        (
+            r.astype(
+                np.int16
+            )
+            >
+            g.astype(
+                np.int16
+            )
+            *
+            PURPLE_DOMINANCE_RATIO
+        )
 
         &
 
-        (b.astype(np.int16) >
-         g.astype(np.int16) *
-         PURPLE_DOMINANCE_RATIO)
+        (
+            b.astype(
+                np.int16
+            )
+            >
+            g.astype(
+                np.int16
+            )
+            *
+            PURPLE_DOMINANCE_RATIO
+        )
 
         &
 
-        (r.astype(np.int16) > 70)
+        (
+            r.astype(
+                np.int16
+            )
+            >
+            70
+        )
 
         &
 
-        (b.astype(np.int16) > 70)
+        (
+            b.astype(
+                np.int16
+            )
+            >
+            70
+        )
     )
 
     purple_dominance_mask = (
         purple_dominance.astype(
             np.uint8
-        ) * 255
+        )
+        *
+        255
     )
 
     purple = cv2.bitwise_and(
@@ -298,29 +1150,59 @@ def get_color_masks(img):
 
     yellow_dominance = (
 
-        (r.astype(np.int16) >
-         b.astype(np.int16) *
-         YELLOW_DOMINANCE_RATIO)
+        (
+            r.astype(
+                np.int16
+            )
+            >
+            b.astype(
+                np.int16
+            )
+            *
+            YELLOW_DOMINANCE_RATIO
+        )
 
         &
 
-        (g.astype(np.int16) >
-         b.astype(np.int16) *
-         YELLOW_DOMINANCE_RATIO)
+        (
+            g.astype(
+                np.int16
+            )
+            >
+            b.astype(
+                np.int16
+            )
+            *
+            YELLOW_DOMINANCE_RATIO
+        )
 
         &
 
-        (r.astype(np.int16) > 80)
+        (
+            r.astype(
+                np.int16
+            )
+            >
+            80
+        )
 
         &
 
-        (g.astype(np.int16) > 70)
+        (
+            g.astype(
+                np.int16
+            )
+            >
+            70
+        )
     )
 
     yellow_dominance_mask = (
         yellow_dominance.astype(
             np.uint8
-        ) * 255
+        )
+        *
+        255
     )
 
     yellow = cv2.bitwise_and(
@@ -328,7 +1210,10 @@ def get_color_masks(img):
         yellow_dominance_mask
     )
 
-    return purple, yellow
+    return (
+        purple,
+        yellow
+    )
 
 
 # ============================================================
@@ -467,7 +1352,9 @@ def find_candidates(
 # MERGE SAME-COLOR PIECES
 # ============================================================
 
-def merge_candidates(candidates):
+def merge_candidates(
+    candidates
+):
 
     if not candidates:
         return []
@@ -498,14 +1385,18 @@ def merge_candidates(candidates):
                 2
             ) * MERGE_DISTANCE_RATIO
 
-            candidate_top = candidate["y"]
+            candidate_top = (
+                candidate["y"]
+            )
 
             candidate_bottom = (
                 candidate["y"] +
                 candidate["h"]
             )
 
-            existing_top = existing["y"]
+            existing_top = (
+                existing["y"]
+            )
 
             existing_bottom = (
                 existing["y"] +
@@ -593,7 +1484,9 @@ def merge_candidates(candidates):
 # REMOVE CROSS-COLOR DUPLICATES
 # ============================================================
 
-def remove_cross_color_duplicates(candles):
+def remove_cross_color_duplicates(
+    candles
+):
 
     candles = sorted(
         candles,
@@ -698,7 +1591,9 @@ def detect_right_side(
         yellow
     ):
 
-        candle["x"] += right_start
+        candle["x"] += (
+            right_start
+        )
 
         candle["center_x"] += (
             right_start
@@ -714,12 +1609,16 @@ def detect_right_side(
 # DETECT EXACTLY THREE NEWEST CANDLES
 # ============================================================
 
-def detect_three_candles(img):
+def detect_three_candles(
+    img
+):
 
     h, w = img.shape[:2]
 
     purple_mask, yellow_mask = (
-        get_color_masks(img)
+        get_color_masks(
+            img
+        )
     )
 
     purple = find_candidates(
@@ -798,12 +1697,16 @@ def verify_single_candle(
 
     w = max(
         2,
-        int(candle["w"])
+        int(
+            candle["w"]
+        )
     )
 
     h = max(
         2,
-        int(candle["h"])
+        int(
+            candle["h"]
+        )
     )
 
     radius = max(
@@ -828,7 +1731,9 @@ def verify_single_candle(
         0,
         y - max(
             2,
-            int(h * 0.25)
+            int(
+                h * 0.25
+            )
         )
     )
 
@@ -837,7 +1742,9 @@ def verify_single_candle(
         y + h +
         max(
             2,
-            int(h * 0.25)
+            int(
+                h * 0.25
+            )
         )
     )
 
@@ -942,12 +1849,23 @@ def verify_single_candle(
 
     return {
 
-        "verified": verified,
-        "score": score,
-        "own_pixels": own_pixels,
-        "other_pixels": other_pixels,
-        "own_density": own_density,
-        "color_agrees": color_agrees
+        "verified":
+            verified,
+
+        "score":
+            score,
+
+        "own_pixels":
+            own_pixels,
+
+        "other_pixels":
+            other_pixels,
+
+        "own_density":
+            own_density,
+
+        "color_agrees":
+            color_agrees
     }
 
 
@@ -961,7 +1879,9 @@ def verify_three_candles(
 ):
 
     purple_mask, yellow_mask = (
-        get_color_masks(img)
+        get_color_masks(
+            img
+        )
     )
 
     verified = []
@@ -976,9 +1896,13 @@ def verify_three_candles(
 
         c = candle.copy()
 
-        c["verification"] = result
+        c["verification"] = (
+            result
+        )
 
-        verified.append(c)
+        verified.append(
+            c
+        )
 
     return verified
 
@@ -987,7 +1911,10 @@ def verify_three_candles(
 # GEOMETRY
 # ============================================================
 
-def safe_ratio(a, b):
+def safe_ratio(
+    a,
+    b
+):
 
     return (
         float(a) /
@@ -998,9 +1925,12 @@ def safe_ratio(a, b):
     )
 
 
-def candle_direction(candle):
+def candle_direction(
+    candle
+):
 
     if candle["color"] == "PURPLE":
+
         return 1
 
     return -1
@@ -1012,7 +1942,9 @@ def enrich_three_candles(
 ):
 
     purple_mask, yellow_mask = (
-        get_color_masks(img)
+        get_color_masks(
+            img
+        )
     )
 
     h_img, w_img = img.shape[:2]
@@ -1098,7 +2030,9 @@ def enrich_three_candles(
 
         c["body_size"] = max(
             1.0,
-            float(candle["h"])
+            float(
+                candle["h"]
+            )
         )
 
         c["visual_top"] = float(
@@ -1154,7 +2088,9 @@ def enrich_three_candles(
             )
         )
 
-        enriched.append(c)
+        enriched.append(
+            c
+        )
 
     return enriched
 
@@ -1163,7 +2099,9 @@ def enrich_three_candles(
 # THREE-CANDLE SEQUENCE
 # ============================================================
 
-def analyze_sequence(candles):
+def analyze_sequence(
+    candles
+):
 
     directions = [
         candle_direction(c)
@@ -1173,16 +2111,26 @@ def analyze_sequence(candles):
     if len(directions) != 3:
 
         return {
-            "score": 0,
-            "label": "INSUFFICIENT",
-            "changes": 0
+            "score":
+                0,
+
+            "label":
+                "INSUFFICIENT",
+
+            "changes":
+                0
         }
 
     a, b, c = directions
 
     changes = (
-        int(a != b) +
-        int(b != c)
+        int(
+            a != b
+        )
+        +
+        int(
+            b != c
+        )
     )
 
     if a == b == c:
@@ -1199,17 +2147,24 @@ def analyze_sequence(candles):
     elif a != b and b != c:
 
         score = a * 0.35
+
         label = "ALTERNATING"
 
     else:
 
         score = a * 0.65
+
         label = "MIXED"
 
     return {
-        "score": score,
-        "label": label,
-        "changes": changes
+        "score":
+            score,
+
+        "label":
+            label,
+
+        "changes":
+            changes
     }
 
 
@@ -1217,7 +2172,9 @@ def analyze_sequence(candles):
 # BODY PROGRESSION
 # ============================================================
 
-def analyze_body_progression(candles):
+def analyze_body_progression(
+    candles
+):
 
     b1 = candles[0]["body_size"]
     b2 = candles[1]["body_size"]
@@ -1252,6 +2209,7 @@ def analyze_body_progression(candles):
                     1.0,
                     acceleration / 2.0
                 ),
+
             "state":
                 "EXPANSION"
         }
@@ -1265,6 +2223,7 @@ def analyze_body_progression(candles):
             "score":
                 -newest_direction *
                 0.70,
+
             "state":
                 "DECELERATION"
         }
@@ -1273,6 +2232,7 @@ def analyze_body_progression(candles):
         "score":
             newest_direction *
             0.35,
+
         "state":
             "STABLE"
     }
@@ -1282,7 +2242,9 @@ def analyze_body_progression(candles):
 # MOMENTUM
 # ============================================================
 
-def analyze_momentum(candles):
+def analyze_momentum(
+    candles
+):
 
     directions = [
         candle_direction(c)
@@ -1320,11 +2282,17 @@ def analyze_momentum(candles):
     )
 
     if (
-        np.sign(directions[0])
+        np.sign(
+            directions[0]
+        )
         ==
-        np.sign(directions[1])
+        np.sign(
+            directions[1]
+        )
         ==
-        np.sign(directions[2])
+        np.sign(
+            directions[2]
+        )
     ):
 
         if acceleration > 0.10:
@@ -1352,7 +2320,9 @@ def analyze_momentum(candles):
 # WICK / REJECTION
 # ============================================================
 
-def analyze_rejection(candles):
+def analyze_rejection(
+    candles
+):
 
     newest = candles[0]
 
@@ -1393,8 +2363,10 @@ def analyze_rejection(candles):
     return {
         "bullish":
             bullish,
+
         "bearish":
             bearish,
+
         "score":
             bullish -
             bearish
@@ -1405,17 +2377,23 @@ def analyze_rejection(candles):
 # ENGULFING
 # ============================================================
 
-def analyze_engulfing(candles):
+def analyze_engulfing(
+    candles
+):
 
     current = candles[0]
     previous = candles[1]
 
     current_direction = (
-        candle_direction(current)
+        candle_direction(
+            current
+        )
     )
 
     previous_direction = (
-        candle_direction(previous)
+        candle_direction(
+            previous
+        )
     )
 
     body_ratio = safe_ratio(
@@ -1442,8 +2420,12 @@ def analyze_engulfing(candles):
     if bullish:
 
         return {
-            "bullish": True,
-            "bearish": False,
+            "bullish":
+                True,
+
+            "bearish":
+                False,
+
             "score":
                 min(
                     1.0,
@@ -1454,8 +2436,12 @@ def analyze_engulfing(candles):
     if bearish:
 
         return {
-            "bullish": False,
-            "bearish": True,
+            "bullish":
+                False,
+
+            "bearish":
+                True,
+
             "score":
                 -min(
                     1.0,
@@ -1464,9 +2450,14 @@ def analyze_engulfing(candles):
         }
 
     return {
-        "bullish": False,
-        "bearish": False,
-        "score": 0
+        "bullish":
+            False,
+
+        "bearish":
+            False,
+
+        "score":
+            0
     }
 
 
@@ -1474,7 +2465,9 @@ def analyze_engulfing(candles):
 # THREE-CANDLE HH / HL / LH / LL
 # ============================================================
 
-def analyze_structure(candles):
+def analyze_structure(
+    candles
+):
 
     c1 = candles[0]
     c2 = candles[1]
@@ -1519,21 +2512,27 @@ def analyze_structure(candles):
     ) / float(total)
 
     if score > 0.20:
+
         label = "BULLISH HH/HL"
 
     elif score < -0.20:
+
         label = "BEARISH LH/LL"
 
     else:
+
         label = "MIXED"
 
     return {
         "bullish":
             bullish_points,
+
         "bearish":
             bearish_points,
+
         "score":
             score,
+
         "label":
             label
     }
@@ -1543,11 +2542,21 @@ def analyze_structure(candles):
 # PULLBACK / CONTINUATION
 # ============================================================
 
-def analyze_pullback(candles):
+def analyze_pullback(
+    candles
+):
 
-    d1 = candle_direction(candles[0])
-    d2 = candle_direction(candles[1])
-    d3 = candle_direction(candles[2])
+    d1 = candle_direction(
+        candles[0]
+    )
+
+    d2 = candle_direction(
+        candles[1]
+    )
+
+    d3 = candle_direction(
+        candles[2]
+    )
 
     b1 = candles[0]["body_size"]
     b2 = candles[1]["body_size"]
@@ -1588,7 +2597,9 @@ def analyze_pullback(candles):
     if bullish_continuation:
 
         return {
-            "score": 0.90,
+            "score":
+                0.90,
+
             "label":
                 "BULLISH CONTINUATION"
         }
@@ -1596,7 +2607,9 @@ def analyze_pullback(candles):
     elif bearish_continuation:
 
         return {
-            "score": -0.90,
+            "score":
+                -0.90,
+
             "label":
                 "BEARISH CONTINUATION"
         }
@@ -1605,7 +2618,10 @@ def analyze_pullback(candles):
 
         quality = safe_ratio(
             b1,
-            max(b2, b3)
+            max(
+                b2,
+                b3
+            )
         )
 
         return {
@@ -1613,6 +2629,7 @@ def analyze_pullback(candles):
                 0.75
                 if quality >= 0.90
                 else 0.50,
+
             "label":
                 "BULLISH PULLBACK RECOVERY"
         }
@@ -1621,7 +2638,10 @@ def analyze_pullback(candles):
 
         quality = safe_ratio(
             b1,
-            max(b2, b3)
+            max(
+                b2,
+                b3
+            )
         )
 
         return {
@@ -1629,13 +2649,17 @@ def analyze_pullback(candles):
                 -0.75
                 if quality >= 0.90
                 else -0.50,
+
             "label":
                 "BEARISH PULLBACK RECOVERY"
         }
 
     return {
-        "score": 0,
-        "label": "NO CLEAR CONTINUATION"
+        "score":
+            0,
+
+        "label":
+            "NO CLEAR CONTINUATION"
     }
 
 
@@ -1643,11 +2667,21 @@ def analyze_pullback(candles):
 # REVERSAL
 # ============================================================
 
-def analyze_reversal(candles):
+def analyze_reversal(
+    candles
+):
 
-    d1 = candle_direction(candles[0])
-    d2 = candle_direction(candles[1])
-    d3 = candle_direction(candles[2])
+    d1 = candle_direction(
+        candles[0]
+    )
+
+    d2 = candle_direction(
+        candles[1]
+    )
+
+    d3 = candle_direction(
+        candles[2]
+    )
 
     b1 = candles[0]["body_size"]
     b3 = candles[2]["body_size"]
@@ -1682,6 +2716,7 @@ def analyze_reversal(candles):
                     0.60 +
                     confirmation * 0.20
                 ),
+
             "label":
                 "EARLY BULLISH REVERSAL"
         }
@@ -1700,13 +2735,17 @@ def analyze_reversal(candles):
                     0.60 +
                     confirmation * 0.20
                 ),
+
             "label":
                 "EARLY BEARISH REVERSAL"
         }
 
     return {
-        "score": 0,
-        "label": "NO CLEAR REVERSAL"
+        "score":
+            0,
+
+        "label":
+            "NO CLEAR REVERSAL"
     }
 
 
@@ -1714,14 +2753,18 @@ def analyze_reversal(candles):
 # BREAKOUT PRESSURE
 # ============================================================
 
-def analyze_breakout(candles):
+def analyze_breakout(
+    candles
+):
 
     newest = candles[0]
     previous = candles[1]
     third = candles[2]
 
     newest_direction = (
-        candle_direction(newest)
+        candle_direction(
+            newest
+        )
     )
 
     bullish_break = (
@@ -1766,6 +2809,7 @@ def analyze_breakout(candles):
                     1.0,
                     body_ratio / 1.5
                 ),
+
             "label":
                 "BULLISH BREAKOUT PRESSURE"
         }
@@ -1784,13 +2828,17 @@ def analyze_breakout(candles):
                     1.0,
                     body_ratio / 1.5
                 ),
+
             "label":
                 "BEARISH BREAKOUT PRESSURE"
         }
 
     return {
-        "score": 0,
-        "label": "NO CONFIRMED BREAKOUT"
+        "score":
+            0,
+
+        "label":
+            "NO CONFIRMED BREAKOUT"
     }
 
 
@@ -1798,15 +2846,25 @@ def analyze_breakout(candles):
 # FAILED BREAKOUT
 # ============================================================
 
-def analyze_failed_breakout(candles):
+def analyze_failed_breakout(
+    candles
+):
 
     newest = candles[0]
     previous = candles[1]
     third = candles[2]
 
-    d1 = candle_direction(newest)
-    d2 = candle_direction(previous)
-    d3 = candle_direction(third)
+    d1 = candle_direction(
+        newest
+    )
+
+    d2 = candle_direction(
+        previous
+    )
+
+    d3 = candle_direction(
+        third
+    )
 
     bullish_failure = (
         d3 == 1
@@ -1835,7 +2893,9 @@ def analyze_failed_breakout(candles):
     if bullish_failure:
 
         return {
-            "score": -0.85,
+            "score":
+                -0.85,
+
             "label":
                 "FAILED BULLISH BREAKOUT"
         }
@@ -1843,14 +2903,19 @@ def analyze_failed_breakout(candles):
     if bearish_failure:
 
         return {
-            "score": 0.85,
+            "score":
+                0.85,
+
             "label":
                 "FAILED BEARISH BREAKOUT"
         }
 
     return {
-        "score": 0,
-        "label": "NO FAILED BREAKOUT"
+        "score":
+            0,
+
+        "label":
+            "NO FAILED BREAKOUT"
     }
 
 
@@ -1858,7 +2923,9 @@ def analyze_failed_breakout(candles):
 # SUPPORT / RESISTANCE INTERACTION
 # ============================================================
 
-def analyze_support_resistance(candles):
+def analyze_support_resistance(
+    candles
+):
 
     newest = candles[0]
     previous = candles[1]
@@ -1900,7 +2967,9 @@ def analyze_support_resistance(candles):
     if bullish_rejection:
 
         return {
-            "score": 0.80,
+            "score":
+                0.80,
+
             "label":
                 "SUPPORT REJECTION"
         }
@@ -1908,13 +2977,17 @@ def analyze_support_resistance(candles):
     if bearish_rejection:
 
         return {
-            "score": -0.80,
+            "score":
+                -0.80,
+
             "label":
                 "RESISTANCE REJECTION"
         }
 
     return {
-        "score": 0,
+        "score":
+            0,
+
         "label":
             "NO CLEAR LEVEL INTERACTION"
     }
@@ -1924,7 +2997,9 @@ def analyze_support_resistance(candles):
 # COMPRESSION / EXPANSION
 # ============================================================
 
-def analyze_compression_expansion(candles):
+def analyze_compression_expansion(
+    candles
+):
 
     b1 = candles[0]["body_size"]
     b2 = candles[1]["body_size"]
@@ -1949,7 +3024,9 @@ def analyze_compression_expansion(candles):
 
         return {
             "score":
-                -newest_direction * 0.50,
+                -newest_direction *
+                0.50,
+
             "state":
                 "COMPRESSION"
         }
@@ -1958,14 +3035,18 @@ def analyze_compression_expansion(candles):
 
         return {
             "score":
-                newest_direction * 0.75,
+                newest_direction *
+                0.75,
+
             "state":
                 "EXPANSION"
         }
 
     return {
         "score":
-            newest_direction * 0.20,
+            newest_direction *
+            0.20,
+
         "state":
             "NORMAL"
     }
@@ -1975,23 +3056,36 @@ def analyze_compression_expansion(candles):
 # EXHAUSTION
 # ============================================================
 
-def analyze_exhaustion(candles):
+def analyze_exhaustion(
+    candles
+):
 
     newest = candles[0]
     previous = candles[1]
     third = candles[2]
 
-    d1 = candle_direction(newest)
-    d2 = candle_direction(previous)
-    d3 = candle_direction(third)
+    d1 = candle_direction(
+        newest
+    )
+
+    d2 = candle_direction(
+        previous
+    )
+
+    d3 = candle_direction(
+        third
+    )
 
     if not (
         d1 == d2 == d3
     ):
 
         return {
-            "score": 0,
-            "label": "NO EXHAUSTION"
+            "score":
+                0,
+
+            "label":
+                "NO EXHAUSTION"
         }
 
     average_old = (
@@ -2024,13 +3118,17 @@ def analyze_exhaustion(candles):
         return {
             "score":
                 -d1 * 0.90,
+
             "label":
                 "MOMENTUM EXHAUSTION"
         }
 
     return {
-        "score": 0,
-        "label": "NO EXHAUSTION"
+        "score":
+            0,
+
+        "label":
+            "NO EXHAUSTION"
     }
 
 
@@ -2038,7 +3136,9 @@ def analyze_exhaustion(candles):
 # CHOPPINESS
 # ============================================================
 
-def analyze_choppiness(candles):
+def analyze_choppiness(
+    candles
+):
 
     directions = [
         candle_direction(c)
@@ -2060,20 +3160,29 @@ def analyze_choppiness(candles):
     if changes == 2:
 
         return {
-            "score": 0.0,
-            "choppy": True
+            "score":
+                0.0,
+
+            "choppy":
+                True
         }
 
     if changes == 1:
 
         return {
-            "score": 0.20,
-            "choppy": False
+            "score":
+                0.20,
+
+            "choppy":
+                False
         }
 
     return {
-        "score": 0.90,
-        "choppy": False
+        "score":
+            0.90,
+
+        "choppy":
+            False
     }
 
 
@@ -2081,7 +3190,9 @@ def analyze_choppiness(candles):
 # BUYER / SELLER CONTROL
 # ============================================================
 
-def analyze_control(candles):
+def analyze_control(
+    candles
+):
 
     weighted = (
         candle_direction(
@@ -2127,7 +3238,9 @@ def analyze_control(candles):
 # CANDLE QUALITY
 # ============================================================
 
-def analyze_candle_quality(candles):
+def analyze_candle_quality(
+    candles
+):
 
     newest = candles[0]
 
@@ -2196,8 +3309,11 @@ def analyze_conflict(
     if total <= 0:
 
         return {
-            "severity": 100,
-            "label": "SEVERE"
+            "severity":
+                100,
+
+            "label":
+                "SEVERE"
         }
 
     weaker = min(
@@ -2213,8 +3329,11 @@ def analyze_conflict(
     if stronger <= 0:
 
         return {
-            "severity": 0,
-            "label": "NONE"
+            "severity":
+                0,
+
+            "label":
+                "NONE"
         }
 
     severity = (
@@ -2223,17 +3342,21 @@ def analyze_conflict(
     ) * 100
 
     if severity >= 70:
+
         label = "SEVERE"
 
     elif severity >= 40:
+
         label = "MODERATE"
 
     else:
+
         label = "LOW"
 
     return {
         "severity":
             severity,
+
         "label":
             label
     }
@@ -2253,11 +3376,18 @@ def analyze_three_candles(
         return {
             "decision":
                 "NO TRADE",
-            "confidence": 0,
+
+            "confidence":
+                0,
+
             "reason":
                 "Exactly three candles are required.",
-            "buy_score": 0,
-            "sell_score": 0
+
+            "buy_score":
+                0,
+
+            "sell_score":
+                0
         }
 
     candles = enrich_three_candles(
@@ -2433,6 +3563,7 @@ def analyze_three_candles(
     )
 
     if choppiness["choppy"]:
+
         raw_score *= 0.45
 
     if (
@@ -2440,6 +3571,7 @@ def analyze_three_candles(
         ==
         "COMPRESSION"
     ):
+
         raw_score *= 0.65
 
     if (
@@ -2453,18 +3585,21 @@ def analyze_three_candles(
             raw_score
         )
     ):
+
         raw_score *= 0.55
 
     if (
         conflict["severity"]
         >= MAX_CONFLICT
     ):
+
         raw_score *= 0.45
 
     elif (
         conflict["severity"]
         >= 40
     ):
+
         raw_score *= 0.75
 
     buy_score = 0.0
@@ -2473,14 +3608,18 @@ def analyze_three_candles(
     if raw_score > 0:
 
         buy_score = (
-            abs(raw_score) *
+            abs(
+                raw_score
+            ) *
             100
         )
 
     elif raw_score < 0:
 
         sell_score = (
-            abs(raw_score) *
+            abs(
+                raw_score
+            ) *
             100
         )
 
@@ -2492,7 +3631,9 @@ def analyze_three_candles(
     sideways = (
         choppiness["choppy"]
         and
-        abs(raw_score) <
+        abs(
+            raw_score
+        ) <
         MIN_FINAL_EVIDENCE
     )
 
@@ -2804,7 +3945,9 @@ def create_detection_map(
 @bot.message_handler(
     content_types=["photo"]
 )
-def handle_photo(message):
+def handle_photo(
+    message
+):
 
     start_time = time.time()
 
@@ -2956,8 +4099,11 @@ def handle_photo(message):
         # ----------------------------------------------------
         # BUY SIGNAL
         #
-        # - Private chat gets the text signal
-        # - Channel gets the screenshot forwarded + text
+        # Pocket Option:
+        #   Screenshot remains the visual input.
+        #
+        # Deriv:
+        #   Uses the separately configured real Deriv pair.
         # ----------------------------------------------------
 
         if decision == "BUY":
@@ -2972,9 +4118,16 @@ def handle_photo(message):
                 )
             )
 
+            pair_name = (
+                deriv_pair_name()
+            )
+
             caption = (
 
                 "🚨 **SIGNAL ALERT**\n\n"
+
+                f"💱 **Deriv Pair:** "
+                f"**{pair_name}**\n\n"
 
                 "🟢 **BUY**\n\n"
 
@@ -2992,32 +4145,62 @@ def handle_photo(message):
                 f"• {reason}"
             )
 
-            # Private chat (text)
+            # ------------------------------------------------
+            # PRIVATE CHAT
+            # ------------------------------------------------
+
             bot.send_message(
                 message.chat.id,
                 caption,
                 parse_mode="Markdown"
             )
 
-            # Channel (forward original screenshot)
+            # ------------------------------------------------
+            # CHANNEL - ORIGINAL SCREENSHOT
+            # ------------------------------------------------
+
             try:
+
                 bot.forward_message(
                     chat_id=CHANNEL_ID,
                     from_chat_id=message.chat.id,
                     message_id=message.message_id
                 )
-                print("✅ Screenshot forwarded to channel")
-            except Exception as e:
-                print("Screenshot forward error:", e)
 
-            # Channel (text signal)
-            send_to_channel(caption)
+                print(
+                    "✅ Screenshot forwarded to channel"
+                )
+
+            except Exception as e:
+
+                print(
+                    "Screenshot forward error:",
+                    e
+                )
+
+            # ------------------------------------------------
+            # CHANNEL - SIGNAL
+            # ------------------------------------------------
+
+            send_to_channel(
+                caption
+            )
+
+            # ------------------------------------------------
+            # DERIV DEMO AUTO TRADE
+            # ------------------------------------------------
+
+            threading.Thread(
+                target=execute_deriv_trade_at_entry,
+                args=(
+                    "BUY",
+                    entry_time
+                ),
+                daemon=True
+            ).start()
 
         # ----------------------------------------------------
         # SELL SIGNAL
-        #
-        # - Private chat gets the text signal
-        # - Channel gets the screenshot forwarded + text
         # ----------------------------------------------------
 
         elif decision == "SELL":
@@ -3032,9 +4215,16 @@ def handle_photo(message):
                 )
             )
 
+            pair_name = (
+                deriv_pair_name()
+            )
+
             caption = (
 
                 "🚨 **SIGNAL ALERT**\n\n"
+
+                f"💱 **Deriv Pair:** "
+                f"**{pair_name}**\n\n"
 
                 "🔴 **SELL**\n\n"
 
@@ -3052,31 +4242,64 @@ def handle_photo(message):
                 f"• {reason}"
             )
 
-            # Private chat (text)
+            # ------------------------------------------------
+            # PRIVATE CHAT
+            # ------------------------------------------------
+
             bot.send_message(
                 message.chat.id,
                 caption,
                 parse_mode="Markdown"
             )
 
-            # Channel (forward original screenshot)
+            # ------------------------------------------------
+            # CHANNEL - ORIGINAL SCREENSHOT
+            # ------------------------------------------------
+
             try:
+
                 bot.forward_message(
                     chat_id=CHANNEL_ID,
                     from_chat_id=message.chat.id,
                     message_id=message.message_id
                 )
-                print("✅ Screenshot forwarded to channel")
-            except Exception as e:
-                print("Screenshot forward error:", e)
 
-            # Channel (text signal)
-            send_to_channel(caption)
+                print(
+                    "✅ Screenshot forwarded to channel"
+                )
+
+            except Exception as e:
+
+                print(
+                    "Screenshot forward error:",
+                    e
+                )
+
+            # ------------------------------------------------
+            # CHANNEL - SIGNAL
+            # ------------------------------------------------
+
+            send_to_channel(
+                caption
+            )
+
+            # ------------------------------------------------
+            # DERIV DEMO AUTO TRADE
+            # ------------------------------------------------
+
+            threading.Thread(
+                target=execute_deriv_trade_at_entry,
+                args=(
+                    "SELL",
+                    entry_time
+                ),
+                daemon=True
+            ).start()
 
         # ----------------------------------------------------
         # NO SIGNAL
         #
-        # Private chat only — NOT sent to channel.
+        # Private chat only.
         # ----------------------------------------------------
 
         else:
@@ -3093,7 +4316,7 @@ def handle_photo(message):
             )
 
         # ----------------------------------------------------
-        # CREATE MAP IN BACKGROUND / LOCAL ONLY
+        # CREATE MAP LOCAL ONLY
         # ----------------------------------------------------
 
         detection_map = (
@@ -3184,7 +4407,9 @@ def handle_photo(message):
             detection_path
         ]:
 
-            if os.path.exists(path):
+            if os.path.exists(
+                path
+            ):
 
                 try:
 
@@ -3204,7 +4429,9 @@ def handle_photo(message):
 @bot.message_handler(
     commands=["start"]
 )
-def start(message):
+def start(
+    message
+):
 
     bot.send_message(
 
@@ -3212,7 +4439,7 @@ def start(message):
 
         "📊 **OTC 3-CANDLE 15s BOT**\n\n"
 
-        "Send a screenshot.\n\n"
+        "Send a Pocket Option screenshot.\n\n"
 
         "The bot will detect exactly "
         "the 3 rightmost candles and "
@@ -3223,6 +4450,8 @@ def start(message):
         "🔬 Deep 3-candle analysis\n"
         "📸 Channel receives screenshot + signal\n"
         "⏱️ 15-second test\n"
+        "🤖 Deriv demo auto trading\n"
+        "💱 Deriv real currency pair from API\n"
         "🚫 Older candles excluded\n\n"
 
         "⚡ **BUY / SELL / NO TRADE**",
@@ -3236,6 +4465,23 @@ def start(message):
 # ============================================================
 
 if __name__ == "__main__":
+
+    # --------------------------------------------------------
+    # LOAD REAL DERIV PAIR BEFORE BOT STARTS
+    # --------------------------------------------------------
+
+    try:
+
+        load_deriv_currency_pair()
+
+    except Exception as e:
+
+        print(
+            "❌ Deriv currency-pair initialization failed:",
+            repr(e)
+        )
+
+        raise
 
     flask_thread = threading.Thread(
         target=run_flask,
@@ -3284,6 +4530,32 @@ if __name__ == "__main__":
 
     print(
         "✅ SIGNALS SENT TO CHANNEL"
+    )
+
+    print(
+        "✅ DERIV: DEMO AUTO TRADING ONLY"
+    )
+
+    print(
+        "✅ DERIV: 15-SECOND CALL / PUT"
+    )
+
+    print(
+        "✅ DERIV PAIR:",
+        deriv_pair_name()
+    )
+
+    print(
+        "✅ DERIV CURRENCY ID:",
+        deriv_pair_id()
+    )
+
+    print(
+        f"✅ DERIV STAKE: ${DERIV_STAKE}"
+    )
+
+    print(
+        "✅ MINIMUM SIGNAL CONFIDENCE: 20%"
     )
 
     print(
