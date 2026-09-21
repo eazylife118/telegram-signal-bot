@@ -30,7 +30,6 @@ def ping():
 
 def run_flask():
     port = int(os.getenv("PORT", 10000))
-
     app.run(
         host="0.0.0.0",
         port=port,
@@ -68,9 +67,21 @@ DERIV_APP_ID = os.getenv(
     "DERIV_APP_ID"
 )
 
+# ------------------------------------------------------------
+# REAL DERIV CURRENCY PAIR SELECTION
+#
+# Examples:
+# EURUSD
+# GBPUSD
+# USDJPY
+# EURJPY
+# GBPJPY
+#
+# The bot checks this against Deriv's active-symbol list.
+# ------------------------------------------------------------
+
 DERIV_SIGNAL_PAIR = os.getenv(
-    "DERIV_SIGNAL_PAIR",
-    "EURUSD"
+    "DERIV_SIGNAL_PAIR"
 )
 
 DERIV_STAKE = float(
@@ -84,8 +95,6 @@ DERIV_API_BASE = (
     "https://api.derivws.com"
 )
 
-# SAFETY:
-# Demo trading only.
 DERIV_DEMO_ONLY = True
 
 if not DERIV_API_TOKEN:
@@ -98,6 +107,17 @@ if not DERIV_APP_ID:
         "DERIV_APP_ID environment variable is missing."
     )
 
+if not DERIV_SIGNAL_PAIR:
+    raise RuntimeError(
+        "DERIV_SIGNAL_PAIR environment variable is missing."
+    )
+
+DERIV_SIGNAL_PAIR = (
+    DERIV_SIGNAL_PAIR
+    .strip()
+    .upper()
+)
+
 if DERIV_STAKE <= 0:
     raise RuntimeError(
         "DERIV_STAKE must be greater than 0."
@@ -109,20 +129,6 @@ if DERIV_STAKE <= 0:
 # ============================================================
 
 DERIV_PAIR_INFO = {}
-
-
-def deriv_headers():
-
-    return {
-        "Authorization":
-            f"Bearer {DERIV_API_TOKEN}",
-
-        "Deriv-App-ID":
-            DERIV_APP_ID,
-
-        "Content-Type":
-            "application/json"
-    }
 
 
 def get_deriv_active_currency_pairs():
@@ -211,7 +217,6 @@ def get_deriv_active_currency_pairs():
             )
 
             pairs[clean_pair] = {
-
                 "underlying_symbol":
                     underlying_symbol,
 
@@ -326,8 +331,22 @@ def deriv_pair_id():
 
 
 # ============================================================
-# DERIV ACCOUNT
+# DERIV API HELPERS
 # ============================================================
+
+def deriv_headers():
+
+    return {
+        "Authorization":
+            f"Bearer {DERIV_API_TOKEN}",
+
+        "Deriv-App-ID":
+            DERIV_APP_ID,
+
+        "Content-Type":
+            "application/json"
+    }
+
 
 def get_deriv_demo_account():
 
@@ -386,10 +405,6 @@ def get_deriv_demo_account():
         "No Deriv demo Options account was found."
     )
 
-
-# ============================================================
-# DERIV WEBSOCKET
-# ============================================================
 
 def get_deriv_websocket_url(
     account_id
@@ -4083,6 +4098,12 @@ def handle_photo(
 
         # ----------------------------------------------------
         # BUY SIGNAL
+        #
+        # Pocket Option:
+        #   Screenshot remains the visual input.
+        #
+        # Deriv:
+        #   Uses the separately configured real Deriv pair.
         # ----------------------------------------------------
 
         if decision == "BUY":
@@ -4277,6 +4298,8 @@ def handle_photo(
 
         # ----------------------------------------------------
         # NO SIGNAL
+        #
+        # Private chat only.
         # ----------------------------------------------------
 
         else:
