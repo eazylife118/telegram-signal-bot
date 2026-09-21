@@ -56,7 +56,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 
 # ============================================================
-# DERIV API (WEBSOCKET)
+# DERIV API (WEBSOCKET — CORRECTED URL)
 # ============================================================
 
 DERIV_API_TOKEN = os.getenv("DERIV_API_TOKEN")
@@ -64,8 +64,9 @@ DERIV_APP_ID = os.getenv("DERIV_APP_ID")
 DERIV_STAKE = float(os.getenv("DERIV_STAKE", "1"))
 DERIV_DURATION = int(os.getenv("DERIV_DURATION", "15"))
 
+# CORRECT Deriv WebSocket endpoint
 DERIV_WS_URL = (
-    f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
+    f"wss://ws.binaryws.com/websockets/v3?app_id={DERIV_APP_ID}"
 )
 
 DERIV_DEMO_ONLY = True
@@ -318,7 +319,6 @@ def execute_deriv_demo_trade(direction):
     try:
         deriv_authorize(ws)
 
-        # Fresh proposal for the chosen pair
         deriv_ws_send(ws, {
             "proposal": 1,
             "amount": DERIV_STAKE,
@@ -795,7 +795,7 @@ def enrich_three_candles(img, candles):
 
 
 # ============================================================
-# ANALYSIS FUNCTIONS (UNCHANGED — SAME AS BEFORE)
+# ANALYSIS FUNCTIONS
 # ============================================================
 
 def analyze_sequence(candles):
