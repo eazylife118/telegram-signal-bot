@@ -67,23 +67,6 @@ DERIV_APP_ID = os.getenv(
     "DERIV_APP_ID"
 )
 
-# ------------------------------------------------------------
-# REAL DERIV CURRENCY PAIR SELECTION
-#
-# Examples:
-# EURUSD
-# GBPUSD
-# USDJPY
-# EURJPY
-# GBPJPY
-#
-# The bot checks this against Deriv's active-symbol list.
-# ------------------------------------------------------------
-
-DERIV_SIGNAL_PAIR = os.getenv(
-    "DERIV_SIGNAL_PAIR"
-)
-
 DERIV_STAKE = float(
     os.getenv(
         "DERIV_STAKE",
@@ -107,17 +90,6 @@ if not DERIV_APP_ID:
         "DERIV_APP_ID environment variable is missing."
     )
 
-if not DERIV_SIGNAL_PAIR:
-    raise RuntimeError(
-        "DERIV_SIGNAL_PAIR environment variable is missing."
-    )
-
-DERIV_SIGNAL_PAIR = (
-    DERIV_SIGNAL_PAIR
-    .strip()
-    .upper()
-)
-
 if DERIV_STAKE <= 0:
     raise RuntimeError(
         "DERIV_STAKE must be greater than 0."
@@ -128,7 +100,7 @@ if DERIV_STAKE <= 0:
 # DERIV ACTIVE CURRENCY PAIRS
 # ============================================================
 
-DERIV_PAIR_INFO = {}
+DERIV_ALL_PAIRS = {}
 
 
 def get_deriv_active_currency_pairs():
@@ -235,99 +207,29 @@ def get_deriv_active_currency_pairs():
     return pairs
 
 
-def load_deriv_currency_pair():
+def load_all_deriv_pairs():
 
-    global DERIV_PAIR_INFO
+    global DERIV_ALL_PAIRS
 
     print(
-        "🔎 Loading real Deriv currency pairs..."
+        "🔎 Loading ALL Deriv forex pairs..."
     )
 
-    pairs = (
+    DERIV_ALL_PAIRS = (
         get_deriv_active_currency_pairs()
     )
 
-    if not pairs:
+    if not DERIV_ALL_PAIRS:
 
         raise RuntimeError(
-            "Deriv returned no active forex currency pairs."
+            "Deriv returned no active forex pairs."
         )
-
-    requested_pair = (
-        DERIV_SIGNAL_PAIR
-        .replace(
-            "/",
-            ""
-        )
-        .replace(
-            "_",
-            ""
-        )
-        .replace(
-            "-",
-            ""
-        )
-        .upper()
-    )
-
-    if requested_pair not in pairs:
-
-        available_preview = ", ".join(
-            sorted(
-                pairs.keys()
-            )[:30]
-        )
-
-        raise RuntimeError(
-            "DERIV_SIGNAL_PAIR "
-            f"'{DERIV_SIGNAL_PAIR}' "
-            "was not found in Deriv's "
-            "currently active forex pairs.\n"
-            "Available examples: "
-            f"{available_preview}"
-        )
-
-    DERIV_PAIR_INFO = (
-        pairs[requested_pair]
-    )
 
     print(
-        "✅ Deriv real currency pair:",
-        DERIV_PAIR_INFO[
-            "underlying_symbol_name"
-        ]
+        f"✅ Loaded {len(DERIV_ALL_PAIRS)} Deriv forex pairs."
     )
 
-    print(
-        "✅ Deriv currency ID:",
-        DERIV_PAIR_INFO[
-            "underlying_symbol"
-        ]
-    )
-
-    return DERIV_PAIR_INFO
-
-
-def deriv_pair_name():
-
-    if not DERIV_PAIR_INFO:
-
-        load_deriv_currency_pair()
-
-    return DERIV_PAIR_INFO[
-        "underlying_symbol_name"
-    ]
-
-
-def deriv_pair_id():
-
-    if not DERIV_PAIR_INFO:
-
-        load_deriv_currency_pair()
-
-    return DERIV_PAIR_INFO[
-        "underlying_symbol"
-    ]
+    return DERIV_ALL_PAIRS
 
 
 # ============================================================
@@ -526,7 +428,222 @@ def deriv_send_and_receive(
 
 
 # ============================================================
-# DERIV DEMO TRADE
+# DERIV PROPOSAL SCANNER — FIND BEST PAIR
+# ============================================================
+
+def get_proposal_for_pair(
+    ws,
+    pair_info
+):
+
+    proposal_request = {
+
+        "proposal":
+            1,
+
+        "amount":
+            DERIV_STAKE,
+
+        "basis":
+            "stake",
+
+        "contract_type":
+            "CALL",
+
+        "currency":
+            "USD",
+
+        "duration":
+            15,
+
+        "duration_unit":
+            "s",
+
+        "underlying_symbol":
+            pair_info[
+                "underlying_symbol"
+            ]
+    }
+
+    try:
+
+        ws.settimeout(
+            15
+        )
+
+        ws.send(
+            json.dumps(
+                proposal_request
+            )
+        )
+
+        while True:
+
+            raw = ws.recv()
+
+            if not raw:
+                return None
+
+            data = json.loads(
+                raw
+            )
+
+            if data.get(
+                "error"
+            ):
+                return None
+
+            if data.get(
+                "msg_type"
+            ) == "proposal":
+
+                proposal = data.get(
+                    "proposal",
+                    {}
+                )
+
+                payout = proposal.get(
+                    "payout"
+                )
+
+                ask_price = proposal.get(
+                    "ask_price"
+                )
+
+                if (
+                    payout
+                    and
+                    ask_price
+                    and
+                    ask_price > 0
+                ):
+
+                    profit_ratio = (
+                        (payout - ask_price)
+                        /
+                        ask_price
+                    )
+
+                    return {
+
+                        "pair":
+                            pair_info[
+                                "underlying_symbol_name"
+                            ],
+
+                        "symbol":
+                            pair_info[
+                                "underlying_symbol"
+                            ],
+
+                        "proposal_id":
+                            proposal.get(
+                                "id"
+                            ),
+
+                        "ask_price":
+                            ask_price,
+
+                        "payout":
+                            payout,
+
+                        "profit_ratio":
+                            profit_ratio,
+
+                        "contract_type":
+                            "CALL"
+                    }
+
+    except Exception:
+
+        return None
+
+
+def scan_best_pair(
+    account_id,
+    ws_url
+):
+
+    print(
+        "🔍 Scanning ALL Deriv pairs for best payout..."
+    )
+
+    best = None
+
+    pairs_to_scan = list(
+        DERIV_ALL_PAIRS.values()
+    )
+
+    print(
+        f"📊 Total pairs to scan: {len(pairs_to_scan)}"
+    )
+
+    ws = websocket.create_connection(
+        ws_url,
+        timeout=20
+    )
+
+    try:
+
+        for index, pair_info in enumerate(
+            pairs_to_scan,
+            start=1
+        ):
+
+            try:
+
+                result = get_proposal_for_pair(
+                    ws,
+                    pair_info
+                )
+
+                if not result:
+                    continue
+
+                if (
+                    best is None
+                    or
+                    result["profit_ratio"]
+                    >
+                    best["profit_ratio"]
+                ):
+
+                    best = result
+
+                    print(
+                        f"🏆 New best: "
+                        f"{result['pair']} "
+                        f"({result['profit_ratio']*100:.2f}% payout)"
+                    )
+
+            except Exception as e:
+
+                continue
+
+    finally:
+
+        try:
+            ws.close()
+        except Exception:
+            pass
+
+    if not best:
+
+        raise RuntimeError(
+            "No valid Deriv proposal found across all pairs."
+        )
+
+    print(
+        f"✅ BEST PAIR FOUND: "
+        f"{best['pair']} — "
+        f"{best['profit_ratio']*100:.2f}% payout"
+    )
+
+    return best
+
+
+# ============================================================
+# DERIV DEMO TRADE (BEST PAIR)
 # ============================================================
 
 def execute_deriv_demo_trade(
@@ -540,27 +657,9 @@ def execute_deriv_demo_trade(
             "DERIV_DEMO_ONLY must remain True."
         )
 
-    pair_info = (
-        load_deriv_currency_pair()
-    )
+    if not DERIV_ALL_PAIRS:
 
-    contract_type = (
-        "CALL"
-        if direction == "BUY"
-        else "PUT"
-    )
-
-    symbol_id = (
-        pair_info[
-            "underlying_symbol"
-        ]
-    )
-
-    pair_name = (
-        pair_info[
-            "underlying_symbol_name"
-        ]
-    )
+        load_all_deriv_pairs()
 
     account_id = (
         get_deriv_demo_account()
@@ -577,8 +676,15 @@ def execute_deriv_demo_trade(
         )
     )
 
-    print(
-        "Connecting to Deriv demo WebSocket..."
+    best = scan_best_pair(
+        account_id,
+        ws_url
+    )
+
+    contract_type = (
+        "CALL"
+        if direction == "BUY"
+        else "PUT"
     )
 
     ws = websocket.create_connection(
@@ -612,16 +718,8 @@ def execute_deriv_demo_trade(
                 "s",
 
             "underlying_symbol":
-                symbol_id
+                best["symbol"]
         }
-
-        print(
-            "Requesting Deriv proposal:",
-            contract_type,
-            pair_name,
-            symbol_id,
-            "15 seconds"
-        )
 
         proposal_response = (
             deriv_send_and_receive(
@@ -655,17 +753,6 @@ def execute_deriv_demo_trade(
             raise RuntimeError(
                 "Deriv did not return a proposal ID."
             )
-
-        if ask_price is None:
-
-            raise RuntimeError(
-                "Deriv did not return an ask price."
-            )
-
-        print(
-            "Deriv proposal received:",
-            proposal_id
-        )
 
         buy_request = {
 
@@ -706,7 +793,7 @@ def execute_deriv_demo_trade(
             )
 
         print(
-            "✅ DERIV DEMO TRADE EXECUTED"
+            "✅ DERIV DEMO TRADE EXECUTED (BEST PAIR)"
         )
 
         print(
@@ -720,13 +807,18 @@ def execute_deriv_demo_trade(
         )
 
         print(
-            "Currency pair:",
-            pair_name
+            "Best Pair:",
+            best["pair"]
         )
 
         print(
-            "Deriv ID:",
-            symbol_id
+            "Symbol:",
+            best["symbol"]
+        )
+
+        print(
+            f"Payout Ratio: "
+            f"{best['profit_ratio']*100:.2f}%"
         )
 
         print(
@@ -751,10 +843,13 @@ def execute_deriv_demo_trade(
                 contract_type,
 
             "pair":
-                pair_name,
+                best["pair"],
 
             "symbol":
-                symbol_id,
+                best["symbol"],
+
+            "payout_ratio":
+                best["profit_ratio"],
 
             "stake":
                 DERIV_STAKE,
@@ -766,11 +861,8 @@ def execute_deriv_demo_trade(
     finally:
 
         try:
-
             ws.close()
-
         except Exception:
-
             pass
 
 
@@ -4097,13 +4189,7 @@ def handle_photo(
         )
 
         # ----------------------------------------------------
-        # BUY SIGNAL
-        #
-        # Pocket Option:
-        #   Screenshot remains the visual input.
-        #
-        # Deriv:
-        #   Uses the separately configured real Deriv pair.
+        # SIGNAL
         # ----------------------------------------------------
 
         if decision == "BUY":
@@ -4118,16 +4204,12 @@ def handle_photo(
                 )
             )
 
-            pair_name = (
-                deriv_pair_name()
-            )
-
             caption = (
 
                 "🚨 **SIGNAL ALERT**\n\n"
 
-                f"💱 **Deriv Pair:** "
-                f"**{pair_name}**\n\n"
+                "💱 **Auto-Scan: ALL Deriv Pairs**\n"
+                "🏆 **Best Pair Will Be Selected Automatically**\n\n"
 
                 "🟢 **BUY**\n\n"
 
@@ -4145,19 +4227,11 @@ def handle_photo(
                 f"• {reason}"
             )
 
-            # ------------------------------------------------
-            # PRIVATE CHAT
-            # ------------------------------------------------
-
             bot.send_message(
                 message.chat.id,
                 caption,
                 parse_mode="Markdown"
             )
-
-            # ------------------------------------------------
-            # CHANNEL - ORIGINAL SCREENSHOT
-            # ------------------------------------------------
 
             try:
 
@@ -4178,17 +4252,9 @@ def handle_photo(
                     e
                 )
 
-            # ------------------------------------------------
-            # CHANNEL - SIGNAL
-            # ------------------------------------------------
-
             send_to_channel(
                 caption
             )
-
-            # ------------------------------------------------
-            # DERIV DEMO AUTO TRADE
-            # ------------------------------------------------
 
             threading.Thread(
                 target=execute_deriv_trade_at_entry,
@@ -4198,10 +4264,6 @@ def handle_photo(
                 ),
                 daemon=True
             ).start()
-
-        # ----------------------------------------------------
-        # SELL SIGNAL
-        # ----------------------------------------------------
 
         elif decision == "SELL":
 
@@ -4215,16 +4277,12 @@ def handle_photo(
                 )
             )
 
-            pair_name = (
-                deriv_pair_name()
-            )
-
             caption = (
 
                 "🚨 **SIGNAL ALERT**\n\n"
 
-                f"💱 **Deriv Pair:** "
-                f"**{pair_name}**\n\n"
+                "💱 **Auto-Scan: ALL Deriv Pairs**\n"
+                "🏆 **Best Pair Will Be Selected Automatically**\n\n"
 
                 "🔴 **SELL**\n\n"
 
@@ -4242,19 +4300,11 @@ def handle_photo(
                 f"• {reason}"
             )
 
-            # ------------------------------------------------
-            # PRIVATE CHAT
-            # ------------------------------------------------
-
             bot.send_message(
                 message.chat.id,
                 caption,
                 parse_mode="Markdown"
             )
-
-            # ------------------------------------------------
-            # CHANNEL - ORIGINAL SCREENSHOT
-            # ------------------------------------------------
 
             try:
 
@@ -4275,17 +4325,9 @@ def handle_photo(
                     e
                 )
 
-            # ------------------------------------------------
-            # CHANNEL - SIGNAL
-            # ------------------------------------------------
-
             send_to_channel(
                 caption
             )
-
-            # ------------------------------------------------
-            # DERIV DEMO AUTO TRADE
-            # ------------------------------------------------
 
             threading.Thread(
                 target=execute_deriv_trade_at_entry,
@@ -4295,12 +4337,6 @@ def handle_photo(
                 ),
                 daemon=True
             ).start()
-
-        # ----------------------------------------------------
-        # NO SIGNAL
-        #
-        # Private chat only.
-        # ----------------------------------------------------
 
         else:
 
@@ -4338,48 +4374,6 @@ def handle_photo(
             f" | Decision: {decision}"
             f" | Confidence: "
             f"{confidence:.1f}%"
-        )
-
-        print(
-            "Candle sequence:",
-            [
-                c["color"]
-                for c in analysis_candles
-            ]
-        )
-
-        print(
-            "Sequence:",
-            analysis["sequence"]["label"]
-        )
-
-        print(
-            "Structure:",
-            analysis["structure"]["label"]
-        )
-
-        print(
-            "Momentum:",
-            round(
-                analysis["momentum"],
-                3
-            )
-        )
-
-        print(
-            "Control:",
-            round(
-                analysis["control"],
-                3
-            )
-        )
-
-        print(
-            "Conflict:",
-            round(
-                analysis["conflict"]["severity"],
-                1
-            )
         )
 
     except Exception as e:
@@ -4442,16 +4436,17 @@ def start(
         "Send a Pocket Option screenshot.\n\n"
 
         "The bot will detect exactly "
-        "the 3 rightmost candles and "
-        "use ONLY those 3 candles "
-        "for analysis.\n\n"
+        "the 3 rightmost candles.\n\n"
+
+        "💱 **Deriv:** Scans ALL forex pairs\n"
+        "🏆 **Picks the BEST pair** automatically\n"
+        "🤖 Places DEMO trade on best pair\n"
+        "🔁 Repeats for every new signal\n\n"
 
         "🟣 Purple / 🟡 Yellow detection\n"
         "🔬 Deep 3-candle analysis\n"
         "📸 Channel receives screenshot + signal\n"
-        "⏱️ 15-second test\n"
-        "🤖 Deriv demo auto trading\n"
-        "💱 Deriv real currency pair from API\n"
+        "⏱️ 15-second expiry\n"
         "🚫 Older candles excluded\n\n"
 
         "⚡ **BUY / SELL / NO TRADE**",
@@ -4466,18 +4461,14 @@ def start(
 
 if __name__ == "__main__":
 
-    # --------------------------------------------------------
-    # LOAD REAL DERIV PAIR BEFORE BOT STARTS
-    # --------------------------------------------------------
-
     try:
 
-        load_deriv_currency_pair()
+        load_all_deriv_pairs()
 
     except Exception as e:
 
         print(
-            "❌ Deriv currency-pair initialization failed:",
+            "❌ Deriv pairs initialization failed:",
             repr(e)
         )
 
@@ -4501,23 +4492,11 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ EXACTLY 3 RIGHTMOST CANDLES"
-    )
-
-    print(
-        "✅ OLDER CANDLES EXCLUDED"
-    )
-
-    print(
-        "✅ PURPLE / YELLOW DETECTION"
+        "✅ 3 RIGHTMOST CANDLES ONLY"
     )
 
     print(
         "✅ DEEP 3-CANDLE ANALYSIS"
-    )
-
-    print(
-        "✅ 15-SECOND TEST"
     )
 
     print(
@@ -4529,11 +4508,15 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ SIGNALS SENT TO CHANNEL"
+        "✅ DERIV: ALL PAIRS SCANNED"
     )
 
     print(
-        "✅ DERIV: DEMO AUTO TRADING ONLY"
+        "✅ DERIV: BEST PAIR AUTO-SELECTED"
+    )
+
+    print(
+        "✅ DERIV: DEMO ONLY"
     )
 
     print(
@@ -4541,21 +4524,11 @@ if __name__ == "__main__":
     )
 
     print(
-        "✅ DERIV PAIR:",
-        deriv_pair_name()
-    )
-
-    print(
-        "✅ DERIV CURRENCY ID:",
-        deriv_pair_id()
-    )
-
-    print(
         f"✅ DERIV STAKE: ${DERIV_STAKE}"
     )
 
     print(
-        "✅ MINIMUM SIGNAL CONFIDENCE: 20%"
+        f"✅ TOTAL PAIRS: {len(DERIV_ALL_PAIRS)}"
     )
 
     print(
